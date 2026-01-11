@@ -490,7 +490,8 @@ resource "aws_iam_role_policy" "ssm_access" {
         Effect = "Allow"
         Action = [
           "ssm:GetParameter",
-          "ssm:GetParameters"
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
         ]
         Resource = "arn:aws:ssm:*:${local.account_id}:parameter/*"
       }
