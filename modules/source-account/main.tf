@@ -248,6 +248,12 @@ resource "aws_iam_role_policy" "secrets_access" {
           "secretsmanager:DescribeSecret"
         ]
         Resource = "arn:aws:secretsmanager:*:${local.account_id}:secret:*"
+      },
+      {
+        Sid      = "SecretsManagerList"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:ListSecrets"]
+        Resource = "*"
       }
     ]
   })
