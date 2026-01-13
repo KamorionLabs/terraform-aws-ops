@@ -169,6 +169,19 @@ resource "aws_iam_role_policy" "efs_access" {
           "backup:ListRecoveryPointsByResource"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "BackupPassRole"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/*"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "backup.amazonaws.com"
+          }
+        }
       }
     ]
   })
