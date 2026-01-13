@@ -1,0 +1,353 @@
+{
+  "Comment": "Compares Security Groups between Source and Destination environments. Reads states from DynamoDB and produces comparison report. New format: project/env/category/check_type",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Instance",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Environment",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.SourceStateKey",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.DestinationStateKey",
+              "IsPresent": true
+            }
+          ],
+          "Next": "PrepareStateKeys"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, Instance, Environment, SourceStateKey, and DestinationStateKey are required"
+    },
+
+    "PrepareStateKeys": {
+      "Type": "Pass",
+      "Comment": "Parse state keys for Source and Destination. Format: domain#target|check_type",
+      "Parameters": {
+        "Input.$": "$",
+        "SourceParts.$": "States.StringSplit($.SourceStateKey, '|')",
+        "DestinationParts.$": "States.StringSplit($.DestinationStateKey, '|')"
+      },
+      "Next": "ExtractSourceKeys"
+    },
+
+    "ExtractSourceKeys": {
+      "Type": "Pass",
+      "Comment": "Extract pk and sk from Source state key",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "SourcePk.$": "States.ArrayGetItem($.SourceParts, 0)",
+        "SourceCheckType.$": "States.ArrayGetItem($.SourceParts, 1)",
+        "DestinationParts.$": "$.DestinationParts"
+      },
+      "Next": "ExtractDestinationKeys"
+    },
+
+    "ExtractDestinationKeys": {
+      "Type": "Pass",
+      "Comment": "Extract pk and sk from Destination state key",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "SourcePk.$": "$.SourcePk",
+        "SourceSk.$": "States.Format('check:{}:current', $.SourceCheckType)",
+        "DestinationPk.$": "States.ArrayGetItem($.DestinationParts, 0)",
+        "DestinationCheckType.$": "States.ArrayGetItem($.DestinationParts, 1)"
+      },
+      "Next": "PrepareDestinationSk"
+    },
+
+    "PrepareDestinationSk": {
+      "Type": "Pass",
+      "Comment": "Prepare Destination sk",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "SourcePk.$": "$.SourcePk",
+        "SourceSk.$": "$.SourceSk",
+        "DestinationPk.$": "$.DestinationPk",
+        "DestinationSk.$": "States.Format('check:{}:current', $.DestinationCheckType)"
+      },
+      "Next": "ParallelFetchStates"
+    },
+
+    "ParallelFetchStates": {
+      "Type": "Parallel",
+      "Comment": "Fetch Source and Destination states in parallel from DynamoDB",
+      "Branches": [
+        {
+          "StartAt": "GetSourceState",
+          "States": {
+            "GetSourceState": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.SourcePk"
+                  },
+                  "sk": {
+                    "S.$": "$.SourceSk"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "source",
+                "itemData.$": "$.Item"
+              },
+              "ResultPath": "$.SourceState",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.SourceState",
+                  "Next": "SourceStateFailed"
+                }
+              ]
+            },
+            "SourceStateFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "SourceState": {
+                  "source": "source",
+                  "itemData": false,
+                  "error": "Failed to fetch Source state"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GetDestinationState",
+          "States": {
+            "GetDestinationState": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.DestinationPk"
+                  },
+                  "sk": {
+                    "S.$": "$.DestinationSk"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "destination",
+                "itemData.$": "$.Item"
+              },
+              "ResultPath": "$.DestinationState",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.DestinationState",
+                  "Next": "DestinationStateFailed"
+                }
+              ]
+            },
+            "DestinationStateFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "DestinationState": {
+                  "source": "destination",
+                  "itemData": false,
+                  "error": "Failed to fetch Destination state"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ParallelResults",
+      "Next": "ProcessComparison",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ParallelError",
+          "Next": "ComparisonFailed"
+        }
+      ]
+    },
+
+    "ComparisonFailed": {
+      "Type": "Pass",
+      "Comment": "Handle parallel fetch failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg-compare",
+        "payload": {
+          "status": "error",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFound": false,
+            "destinationFound": false
+          },
+          "issues": ["Failed to fetch states for comparison"],
+          "timestamp.$": "$$.State.EnteredTime"
+        },
+        "updated_by": "step-function:net-sg-compare"
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "ProcessComparison": {
+      "Type": "Task",
+      "Comment": "Process and compare Source vs Destination Security Group states",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CompareSecurityGroupsLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "SourceState.$": "$.ParallelResults[0]",
+          "DestinationState.$": "$.ParallelResults[1]"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.CompareResult",
+      "Next": "PrepareComparisonPayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CompareError",
+          "Next": "ProcessComparisonFailed"
+        }
+      ]
+    },
+
+    "ProcessComparisonFailed": {
+      "Type": "Pass",
+      "Comment": "Handle comparison processing failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg-compare",
+        "payload": {
+          "status": "error",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFound": true,
+            "destinationFound": true
+          },
+          "issues": ["Failed to process comparison"],
+          "timestamp.$": "$$.State.EnteredTime"
+        },
+        "updated_by": "step-function:net-sg-compare"
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "PrepareComparisonPayload": {
+      "Type": "Pass",
+      "Comment": "Prepare comparison payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg-compare",
+        "payload.$": "$.CompareResult.payload",
+        "updated_by": "step-function:net-sg-compare"
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "SaveComparisonState": {
+      "Type": "Task",
+      "Comment": "Save comparison state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "error": "Failed to save comparison state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,290 @@
+{
+  "Comment": "Compares SSM Parameter Store between Source and Destination environments. New format: project/sourceEnv/destEnv",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.SourceEnv",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.DestinationEnv",
+              "IsPresent": true
+            }
+          ],
+          "Next": "FetchBothStates"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, SourceEnv, and DestinationEnv are required"
+    },
+
+    "FetchBothStates": {
+      "Type": "Parallel",
+      "Comment": "Fetch Source and Destination states in parallel from DynamoDB",
+      "Branches": [
+        {
+          "StartAt": "FetchSourceState",
+          "States": {
+            "FetchSourceState": {
+              "Type": "Task",
+              "Comment": "Fetch Source state from DynamoDB",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "States.Format('{}#{}', $.Project, $.SourceEnv)"
+                  },
+                  "sk": {
+                    "S": "check:config:ssm:current"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "source",
+                "itemData.$": "$.Item",
+                "item.$": "$.Item"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.SourceError",
+                  "Next": "SourceFetchFailed"
+                }
+              ]
+            },
+            "SourceFetchFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "source": "source",
+                "itemData": null,
+                "error.$": "$.SourceError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchDestinationState",
+          "States": {
+            "FetchDestinationState": {
+              "Type": "Task",
+              "Comment": "Fetch Destination state from DynamoDB",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "States.Format('{}#{}', $.Project, $.DestinationEnv)"
+                  },
+                  "sk": {
+                    "S": "check:config:ssm:current"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "destination",
+                "itemData.$": "$.Item",
+                "item.$": "$.Item"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.DestinationError",
+                  "Next": "DestinationFetchFailed"
+                }
+              ]
+            },
+            "DestinationFetchFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "source": "destination",
+                "itemData": null,
+                "error.$": "$.DestinationError.Error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "CompareStates",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchFailed"
+        }
+      ]
+    },
+
+    "FetchFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchFailed",
+        "message.$": "States.Format('Failed to fetch states: {}', $.FetchError.Error)",
+        "project.$": "$.Project",
+        "sourceEnv.$": "$.SourceEnv",
+        "destinationEnv.$": "$.DestinationEnv"
+      },
+      "End": true
+    },
+
+    "CompareStates": {
+      "Type": "Task",
+      "Comment": "Compare Source and Destination SSM states using Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CompareSsmLambdaArn}",
+        "Payload": {
+          "project.$": "$.Project",
+          "sourceEnv.$": "$.SourceEnv",
+          "destinationEnv.$": "$.DestinationEnv",
+          "instance.$": "$.Instance",
+          "environment.$": "$.Environment",
+          "source_state.$": "$.FetchResults[0]",
+          "destination_state.$": "$.FetchResults[1]"
+        }
+      },
+      "ResultSelector": {
+        "comparison.$": "$.Payload"
+      },
+      "ResultPath": "$.ComparisonResult",
+      "Next": "PrepareComparisonPayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CompareError",
+          "Next": "CompareFailed"
+        }
+      ]
+    },
+
+    "CompareFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "CompareFailed",
+        "message.$": "States.Format('Failed to compare states: {}', $.CompareError.Error)",
+        "project.$": "$.Project",
+        "sourceEnv.$": "$.SourceEnv",
+        "destinationEnv.$": "$.DestinationEnv"
+      },
+      "End": true
+    },
+
+    "PrepareComparisonPayload": {
+      "Type": "Pass",
+      "Comment": "Prepare comparison payload for DynamoDB with new format",
+      "Parameters": {
+        "project.$": "$.Project",
+        "env.$": "States.Format('comparison:{}:{}', $.SourceEnv, $.DestinationEnv)",
+        "category": "config",
+        "check_type": "ssm",
+        "payload.$": "$.ComparisonResult.comparison.payload",
+        "metadata": {
+          "instance.$": "$.Instance",
+          "environment.$": "$.Environment",
+          "sourceEnv.$": "$.SourceEnv",
+          "destinationEnv.$": "$.DestinationEnv"
+        },
+        "updated_by": "step-function:config-ssm-compare"
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "SaveComparisonState": {
+      "Type": "Task",
+      "Comment": "Save comparison result to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveFailed"
+        }
+      ]
+    },
+
+    "SaveFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveFailed",
+        "message.$": "States.Format('Failed to save comparison: {}', $.SaveError.Error)",
+        "project.$": "$.project",
+        "env.$": "$.env"
+      },
+      "End": true
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful comparison result",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "config",
+        "check_type": "ssm",
+        "result": {
+          "comparison_status.$": "$.payload.status",
+          "summary.$": "$.payload.summary"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}
