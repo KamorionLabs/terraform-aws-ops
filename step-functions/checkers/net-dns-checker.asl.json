@@ -1,0 +1,478 @@
+{
+  "Comment": "DNS Checker - Modular architecture. Fetches domains from tfvars (optional), resolves DNS, validates Route53. New modular architecture.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters: Project, Env required. Either TfvarsSource or TestDomains required.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.TfvarsSource", "IsPresent": true}
+          ],
+          "Next": "PrepareInputWithTfvars"
+        },
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.TestDomains", "IsPresent": true}
+          ],
+          "Next": "PrepareInputDirect"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env required. Either TfvarsSource or TestDomains required."
+    },
+
+    "PrepareInputWithTfvars": {
+      "Type": "Pass",
+      "Comment": "Prepare input for tfvars mode",
+      "Parameters": {
+        "Input.$": "States.JsonMerge(States.StringToJson('{\"Country\":null,\"Environment\":null,\"Instance\":null,\"HostedZoneId\":null,\"CrossAccountRoleArn\":null,\"DomainKeys\":null,\"Source\":null}'), $, false)",
+        "Mode": "tfvars"
+      },
+      "Next": "FetchCloudFrontTfvars"
+    },
+
+    "PrepareInputDirect": {
+      "Type": "Pass",
+      "Comment": "Prepare input for direct TestDomains mode",
+      "Parameters": {
+        "Input.$": "States.JsonMerge(States.StringToJson('{\"Country\":null,\"Environment\":null,\"Instance\":null,\"HostedZoneId\":null,\"CrossAccountRoleArn\":null,\"Source\":null,\"TfvarsSource\":null}'), $, false)",
+        "Mode": "direct"
+      },
+      "Next": "PrepareDomainListDirect"
+    },
+
+    "FetchCloudFrontTfvars": {
+      "Type": "Task",
+      "Comment": "Fetch managed_domains from CloudFront tfvars via Azure DevOps",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchAdoFileLambdaArn}",
+        "Payload": {
+          "Repository.$": "$.Input.TfvarsSource.repository",
+          "Path.$": "$.Input.TfvarsSource.cloudfront",
+          "Project.$": "$.Input.TfvarsSource.project",
+          "Branch.$": "$.Input.TfvarsSource.branch",
+          "Parse": "hcl",
+          "BlockName": "managed_domains"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "block.$": "$.Payload.block",
+        "error.$": "$.Payload.error"
+      },
+      "ResultPath": "$.CloudFrontTfvars",
+      "Next": "CheckCloudFrontTfvarsResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CloudFrontTfvarsError",
+          "Next": "CloudFrontTfvarsFailed"
+        }
+      ]
+    },
+
+    "CheckCloudFrontTfvarsResult": {
+      "Type": "Choice",
+      "Comment": "Check if CloudFront tfvars fetch succeeded",
+      "Choices": [
+        {
+          "Variable": "$.CloudFrontTfvars.statusCode",
+          "NumericEquals": 200,
+          "Next": "CheckForEksTfvars"
+        }
+      ],
+      "Default": "CloudFrontTfvarsFailed"
+    },
+
+    "CloudFrontTfvarsFailed": {
+      "Type": "Pass",
+      "Comment": "Handle CloudFront tfvars failure - continue with empty",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Mode.$": "$.Mode",
+        "CloudFrontTfvars": {
+          "statusCode": 500,
+          "block": {},
+          "error": "Failed to fetch CloudFront tfvars"
+        }
+      },
+      "Next": "CheckForEksTfvars"
+    },
+
+    "CheckForEksTfvars": {
+      "Type": "Choice",
+      "Comment": "Check if EKS tfvars path is provided",
+      "Choices": [
+        {
+          "Variable": "$.Input.TfvarsSource.eks",
+          "IsPresent": true,
+          "Next": "FetchEksTfvars"
+        }
+      ],
+      "Default": "PrepareDomainListFromTfvars"
+    },
+
+    "FetchEksTfvars": {
+      "Type": "Task",
+      "Comment": "Fetch managed_api_domains from EKS tfvars via Azure DevOps",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchAdoFileLambdaArn}",
+        "Payload": {
+          "Repository.$": "$.Input.TfvarsSource.repository",
+          "Path.$": "$.Input.TfvarsSource.eks",
+          "Project.$": "$.Input.TfvarsSource.project",
+          "Branch.$": "$.Input.TfvarsSource.branch",
+          "Parse": "hcl",
+          "BlockName": "managed_api_domains"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "block.$": "$.Payload.block",
+        "error.$": "$.Payload.error"
+      },
+      "ResultPath": "$.EksTfvars",
+      "Next": "PrepareDomainListFromTfvars",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EksTfvarsError",
+          "Next": "EksTfvarsFailed"
+        }
+      ]
+    },
+
+    "EksTfvarsFailed": {
+      "Type": "Pass",
+      "Comment": "Handle EKS tfvars failure - continue without API domains",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Mode.$": "$.Mode",
+        "CloudFrontTfvars.$": "$.CloudFrontTfvars",
+        "EksTfvars": {
+          "statusCode": 500,
+          "block": {},
+          "error": "Failed to fetch EKS tfvars"
+        }
+      },
+      "Next": "PrepareDomainListFromTfvars"
+    },
+
+    "PrepareDomainListFromTfvars": {
+      "Type": "Task",
+      "Comment": "Prepare domain list from tfvars data",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${PrepareDnsDomainsLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "Country.$": "$.Input.Country",
+          "DomainKeys.$": "$.Input.DomainKeys",
+          "ManagedDomains.$": "$.CloudFrontTfvars.block",
+          "ManagedApiDomains.$": "$.EksTfvars.block"
+        }
+      },
+      "ResultSelector": {
+        "domains.$": "$.Payload.domains",
+        "count.$": "$.Payload.count"
+      },
+      "ResultPath": "$.DomainList",
+      "Next": "ResolveDns",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PrepareError",
+          "Next": "PrepareDomainsFailed"
+        }
+      ]
+    },
+
+    "PrepareDomainListDirect": {
+      "Type": "Pass",
+      "Comment": "Prepare domain list from direct TestDomains",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Mode.$": "$.Mode",
+        "DomainList": {
+          "domains.$": "$.Input.TestDomains",
+          "count.$": "States.ArrayLength($.Input.TestDomains)"
+        }
+      },
+      "Next": "ResolveDns"
+    },
+
+    "PrepareDomainsFailed": {
+      "Type": "Pass",
+      "Comment": "Handle domain preparation failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "dns",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "resolved": 0,
+            "failed": 0
+          },
+          "domains": [],
+          "issues": ["Failed to prepare domain list from tfvars"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-dns-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ResolveDns": {
+      "Type": "Task",
+      "Comment": "Perform DNS resolution for all domains",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ResolveDnsLambdaArn}",
+        "Payload": {
+          "Domains.$": "$.DomainList.domains"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "resolutions.$": "$.Payload.resolutions",
+        "summary.$": "$.Payload.summary",
+        "error.$": "$.Payload.error"
+      },
+      "ResultPath": "$.ResolutionResult",
+      "Next": "CheckResolutionResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ResolutionError",
+          "Next": "ResolutionFailed"
+        }
+      ]
+    },
+
+    "CheckResolutionResult": {
+      "Type": "Choice",
+      "Comment": "Check if DNS resolution succeeded",
+      "Choices": [
+        {
+          "Variable": "$.ResolutionResult.statusCode",
+          "NumericEquals": 200,
+          "Next": "ProcessDns"
+        }
+      ],
+      "Default": "ResolutionFailed"
+    },
+
+    "ResolutionFailed": {
+      "Type": "Pass",
+      "Comment": "Handle DNS resolution failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "dns",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "resolved": 0,
+            "failed": 0
+          },
+          "domains": [],
+          "issues": ["Failed to resolve DNS"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-dns-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ProcessDns": {
+      "Type": "Task",
+      "Comment": "Process DNS results, query Route53, calculate status",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessDnsLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "Country.$": "$.Input.Country",
+          "Source.$": "$.Input.Source",
+          "Resolutions.$": "$.ResolutionResult.resolutions",
+          "HostedZoneId.$": "$.Input.HostedZoneId",
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn",
+          "TfvarsSource.$": "$.Input.TfvarsSource"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+
+    "ProcessFailed": {
+      "Type": "Pass",
+      "Comment": "Handle process failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "dns",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "resolved": 0,
+            "failed": 0
+          },
+          "domains": [],
+          "issues": ["Failed to process DNS results"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-dns-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare final payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "dns",
+        "payload.$": "$.ProcessResult.payload",
+        "updated_by": "step-function:net-dns-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

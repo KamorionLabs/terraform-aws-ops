@@ -1,0 +1,910 @@
+{
+  "Comment": "Fetches K8s Ingress v2 and LoadBalancer Service status from EKS cluster and stores in DynamoDB. Uses Project#Env as pk for Dashborion integration.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ClusterName",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Namespace",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, ClusterName, and Namespace are required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account with assumed credentials)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ClusterAccessFailed",
+        "message.$": "States.Format('Failed to access cluster {}: {}', $.ClusterName, $.ClusterError.Error)",
+        "project.$": "$.Project",
+        "env.$": "$.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Comment": "Verify cluster is ACTIVE before querying ingresses",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "BuildApiPaths"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "critical",
+        "error": "ClusterNotActive",
+        "message.$": "States.Format('Cluster {} is not ACTIVE (status: {})', $.ClusterName, $.ClusterInfo.Status)",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "cluster_status.$": "$.ClusterInfo.Status"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "BuildApiPaths": {
+      "Type": "Pass",
+      "Comment": "Build the API paths for listing ingresses, services, and targetgroupbindings",
+      "Parameters": {
+        "Input.$": "$",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "IngressPath.$": "States.Format('/apis/networking.k8s.io/v1/namespaces/{}/ingresses', $.Namespace)",
+        "ServicePath.$": "States.Format('/api/v1/namespaces/{}/services', $.Namespace)",
+        "TgbPath.$": "States.Format('/apis/elbv2.k8s.aws/v1beta1/namespaces/{}/targetgroupbindings', $.Namespace)"
+      },
+      "Next": "FetchResourcesChoice"
+    },
+
+    "FetchResourcesChoice": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account and TGB enablement",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Input.CrossAccountRoleArn",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Input.EnableTargetGroupBindings",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Input.EnableTargetGroupBindings",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "FetchResourcesCrossAccountWithTgb"
+        },
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchResourcesCrossAccount"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.Input.EnableTargetGroupBindings",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Input.EnableTargetGroupBindings",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "FetchResourcesWithTgb"
+        }
+      ],
+      "Default": "FetchResources"
+    },
+
+    "FetchResources": {
+      "Type": "Parallel",
+      "Comment": "Fetch ingresses and services in parallel (same account, no TGB)",
+      "Branches": [
+        {
+          "StartAt": "FetchIngresses",
+          "States": {
+            "FetchIngresses": {
+              "Type": "Task",
+              "Comment": "Fetch ingresses from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.IngressPath"
+              },
+              "ResultSelector": {
+                "type": "ingresses",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchIngressesFailed"
+                }
+              ]
+            },
+            "FetchIngressesFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "ingresses",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchServices",
+          "States": {
+            "FetchServices": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicePath"
+              },
+              "ResultSelector": {
+                "type": "services",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchServicesFailed"
+                }
+              ]
+            },
+            "FetchServicesFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "services",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "SkipTargetGroupBindings",
+          "States": {
+            "SkipTargetGroupBindings": {
+              "Type": "Pass",
+              "Comment": "Return empty TGB array when TGB check is disabled",
+              "Parameters": {
+                "type": "targetgroupbindings",
+                "items": [],
+                "skipped": true
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessIngresses",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesWithTgb": {
+      "Type": "Parallel",
+      "Comment": "Fetch ingresses, services, and TGBs in parallel (same account)",
+      "Branches": [
+        {
+          "StartAt": "FetchIngressesWithTgb",
+          "States": {
+            "FetchIngressesWithTgb": {
+              "Type": "Task",
+              "Comment": "Fetch ingresses from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.IngressPath"
+              },
+              "ResultSelector": {
+                "type": "ingresses",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchIngressesWithTgbFailed"
+                }
+              ]
+            },
+            "FetchIngressesWithTgbFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "ingresses",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchServicesWithTgb",
+          "States": {
+            "FetchServicesWithTgb": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicePath"
+              },
+              "ResultSelector": {
+                "type": "services",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchServicesWithTgbFailed"
+                }
+              ]
+            },
+            "FetchServicesWithTgbFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "services",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchTargetGroupBindings",
+          "States": {
+            "FetchTargetGroupBindings": {
+              "Type": "Task",
+              "Comment": "Fetch TargetGroupBindings from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.TgbPath"
+              },
+              "ResultSelector": {
+                "type": "targetgroupbindings",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchTargetGroupBindingsFailed"
+                }
+              ]
+            },
+            "FetchTargetGroupBindingsFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "targetgroupbindings",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessIngresses",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesCrossAccount": {
+      "Type": "Parallel",
+      "Comment": "Fetch ingresses and services in parallel (cross-account, no TGB)",
+      "Branches": [
+        {
+          "StartAt": "FetchIngressesCrossAccount",
+          "States": {
+            "FetchIngressesCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch ingresses from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.IngressPath"
+              },
+              "ResultSelector": {
+                "type": "ingresses",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchIngressesCrossAccountFailed"
+                }
+              ]
+            },
+            "FetchIngressesCrossAccountFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "ingresses",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchServicesCrossAccount",
+          "States": {
+            "FetchServicesCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicePath"
+              },
+              "ResultSelector": {
+                "type": "services",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchServicesCrossAccountFailed"
+                }
+              ]
+            },
+            "FetchServicesCrossAccountFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "services",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "SkipTargetGroupBindingsCrossAccount",
+          "States": {
+            "SkipTargetGroupBindingsCrossAccount": {
+              "Type": "Pass",
+              "Comment": "Return empty TGB array when TGB check is disabled (cross-account)",
+              "Parameters": {
+                "type": "targetgroupbindings",
+                "items": [],
+                "skipped": true
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessIngresses",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesCrossAccountWithTgb": {
+      "Type": "Parallel",
+      "Comment": "Fetch ingresses, services, and TGBs in parallel (cross-account)",
+      "Branches": [
+        {
+          "StartAt": "FetchIngressesCrossAccountWithTgb",
+          "States": {
+            "FetchIngressesCrossAccountWithTgb": {
+              "Type": "Task",
+              "Comment": "Fetch ingresses from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.IngressPath"
+              },
+              "ResultSelector": {
+                "type": "ingresses",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchIngressesCrossAccountWithTgbFailed"
+                }
+              ]
+            },
+            "FetchIngressesCrossAccountWithTgbFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "ingresses",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchServicesCrossAccountWithTgb",
+          "States": {
+            "FetchServicesCrossAccountWithTgb": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicePath"
+              },
+              "ResultSelector": {
+                "type": "services",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchServicesCrossAccountWithTgbFailed"
+                }
+              ]
+            },
+            "FetchServicesCrossAccountWithTgbFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "services",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchTargetGroupBindingsCrossAccount",
+          "States": {
+            "FetchTargetGroupBindingsCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch TargetGroupBindings from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.TgbPath"
+              },
+              "ResultSelector": {
+                "type": "targetgroupbindings",
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.FetchError",
+                  "Next": "FetchTargetGroupBindingsCrossAccountFailed"
+                }
+              ]
+            },
+            "FetchTargetGroupBindingsCrossAccountFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "targetgroupbindings",
+                "items": [],
+                "error.$": "$.FetchError.Error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessIngresses",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchResourcesFailed",
+        "message.$": "States.Format('Failed to fetch resources from namespace {}: {}', $.Input.Namespace, $.FetchError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "ProcessIngresses": {
+      "Type": "Task",
+      "Comment": "Process ingress, service, and targetgroupbinding data. Set IncludeALBHealth=true in input to enrich with target health data.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessIngressLambdaArn}",
+        "Payload": {
+          "ingresses.$": "$.FetchResults[0].items",
+          "services.$": "$.FetchResults[1].items",
+          "targetgroupbindings.$": "$.FetchResults[2].items",
+          "namespace.$": "$.Input.Namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "project.$": "$.Input.Project",
+          "env.$": "$.Input.Env",
+          "input.$": "$.Input"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "source.$": "$.Payload.source",
+        "namespace.$": "$.Payload.namespace",
+        "summary.$": "$.Payload.summary",
+        "ingresses.$": "$.Payload.ingresses",
+        "targetGroupBindings.$": "$.Payload.targetGroupBindings",
+        "sftpService.$": "$.Payload.sftpService",
+        "allRules.$": "$.Payload.allRules",
+        "issues.$": "$.Payload.issues",
+        "timestamp.$": "$.Payload.timestamp"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessIngressesFailed"
+        }
+      ]
+    },
+
+    "ProcessIngressesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ProcessIngressesFailed",
+        "message.$": "States.Format('Failed to process ingresses: {}', $.ProcessError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB state save",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "k8s", "check_type": "ingress",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "source.$": "$.ProcessedResult.source",
+          "namespace.$": "$.ProcessedResult.namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version",
+          "summary.$": "$.ProcessedResult.summary",
+          "ingresses.$": "$.ProcessedResult.ingresses",
+          "targetGroupBindings.$": "$.ProcessedResult.targetGroupBindings",
+          "sftpService.$": "$.ProcessedResult.sftpService",
+          "allRules.$": "$.ProcessedResult.allRules",
+          "issues.$": "$.ProcessedResult.issues",
+          "timestamp.$": "$.ProcessedResult.timestamp"
+        },
+        "updated_by": "step-function:k8s-ingress-status-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save processed state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateError": {
+      "Type": "Task",
+      "Comment": "Save error state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload": {
+          "project.$": "$.project",
+          "env.$": "$.env",
+          "category": "k8s", "check_type": "ingress",
+          "payload": {
+            "status.$": "$.status",
+            "error.$": "$.error",
+            "message.$": "$.message"
+          },
+          "updated_by": "step-function:k8s-ingress-status-checker"
+        }
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatErrorResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveErrorFailed",
+          "Next": "FinalError"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveStateFailed",
+        "message.$": "States.Format('Failed to save state: {}', $.SaveError.Error)",
+        "project.$": "$.project",
+        "env.$": "$.env"
+      },
+      "Next": "FinalError"
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result for output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s", "check_type": "ingress",
+        "result": {
+          "status.$": "$.payload.status",
+          "summary.$": "$.payload.summary",
+          "issues_count.$": "States.ArrayLength($.payload.issues)"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FormatErrorResult": {
+      "Type": "Pass",
+      "Comment": "Format error result for output",
+      "Parameters": {
+        "status": "error",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s", "check_type": "ingress",
+        "error": {
+          "type.$": "$.error",
+          "message.$": "$.message"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FinalError": {
+      "Type": "Fail",
+      "Error": "StateMachineExecutionFailed",
+      "Cause": "Failed to execute k8s-ingress check and save error state"
+    }
+  }
+}

@@ -1,0 +1,334 @@
+{
+  "Comment": "Checks readiness of MRO instance infrastructure (EKS, RDS, EFS, pods). New format: project/env/category/check_type",
+  "StartAt": "InitializeState",
+  "States": {
+    "InitializeState": {
+      "Type": "Pass",
+      "Parameters": {
+        "Input.$": "$",
+        "Results": {
+          "checks": {}
+        }
+      },
+      "Next": "ParallelChecks"
+    },
+
+    "ParallelChecks": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "CheckEksCluster",
+          "States": {
+            "CheckEksCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+              "Parameters": {
+                "Name.$": "$.Input.EksClusterName"
+              },
+              "ResultSelector": {
+                "check_type": "eks",
+                "status.$": "$.Cluster.Status",
+                "cluster_name.$": "$.Cluster.Name",
+                "endpoint.$": "$.Cluster.Endpoint",
+                "version.$": "$.Cluster.Version",
+                "platform_version.$": "$.Cluster.PlatformVersion"
+              },
+              "ResultPath": "$.EksResult",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.EksResult",
+                  "Next": "EksCheckFailed"
+                }
+              ]
+            },
+            "EksCheckFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "EksResult": {
+                  "check_type": "eks",
+                  "status": "error",
+                  "available": false,
+                  "error.$": "$.EksResult.Error"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CheckRdsCluster",
+          "States": {
+            "CheckRdsCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+              "Parameters": {
+                "DbClusterIdentifier.$": "$.Input.RdsClusterIdentifier"
+              },
+              "ResultSelector": {
+                "check_type": "rds",
+                "status.$": "$.DbClusters[0].Status",
+                "cluster_identifier.$": "$.DbClusters[0].DbClusterIdentifier",
+                "endpoint.$": "$.DbClusters[0].Endpoint",
+                "reader_endpoint.$": "$.DbClusters[0].ReaderEndpoint",
+                "engine.$": "$.DbClusters[0].Engine",
+                "engine_version.$": "$.DbClusters[0].EngineVersion"
+              },
+              "ResultPath": "$.RdsResult",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.RdsResult",
+                  "Next": "RdsCheckFailed"
+                }
+              ]
+            },
+            "RdsCheckFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "RdsResult": {
+                  "check_type": "rds",
+                  "status": "error",
+                  "available": false,
+                  "error.$": "$.RdsResult.Error"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CheckEfsFileSystem",
+          "States": {
+            "CheckEfsFileSystem": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.Input.EfsFileSystemId"
+              },
+              "ResultSelector": {
+                "check_type": "efs",
+                "status.$": "$.FileSystems[0].LifeCycleState",
+                "filesystem_id.$": "$.FileSystems[0].FileSystemId",
+                "size_bytes.$": "$.FileSystems[0].SizeInBytes.Value",
+                "performance_mode.$": "$.FileSystems[0].PerformanceMode"
+              },
+              "ResultPath": "$.EfsResult",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.EfsResult",
+                  "Next": "EfsCheckFailed"
+                }
+              ]
+            },
+            "EfsCheckFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "EfsResult": {
+                  "check_type": "efs",
+                  "status": "error",
+                  "available": false,
+                  "error.$": "$.EfsResult.Error"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ParallelResults",
+      "Next": "GetEksClusterForPodCheck",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ParallelError",
+          "Next": "AggregateResults"
+        }
+      ]
+    },
+
+    "GetEksClusterForPodCheck": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.Input.EksClusterName"
+      },
+      "ResultPath": "$.EksClusterInfo",
+      "Next": "CheckPods",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EksClusterError",
+          "Next": "AggregateResults"
+        }
+      ]
+    },
+
+    "CheckPods": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.EksClusterInfo.Cluster.Name",
+        "CertificateAuthority.$": "$.EksClusterInfo.Cluster.CertificateAuthority.Data",
+        "Endpoint.$": "$.EksClusterInfo.Cluster.Endpoint",
+        "Method": "GET",
+        "Path.$": "States.Format('/api/v1/namespaces/{}/pods', $.Input.Namespace)"
+      },
+      "ResultSelector": {
+        "check_type": "pods",
+        "namespace.$": "$.Input.Namespace",
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResult",
+      "Next": "ProcessPodsResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PodsError",
+          "Next": "AggregateResults"
+        }
+      ]
+    },
+
+    "ProcessPodsResult": {
+      "Type": "Pass",
+      "Comment": "Process pod results to count ready/running pods",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "ParallelResults.$": "$.ParallelResults",
+        "EksClusterInfo.$": "$.EksClusterInfo",
+        "PodsResult": {
+          "check_type": "pods",
+          "namespace.$": "$.PodsResult.namespace",
+          "total_pods.$": "States.ArrayLength($.PodsResult.items)",
+          "available": true,
+          "status": "ok"
+        }
+      },
+      "Next": "AggregateResults"
+    },
+
+    "AggregateResults": {
+      "Type": "Pass",
+      "Comment": "Aggregate all check results and determine overall status",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "infra",
+        "check_type": "readiness",
+        "instance.$": "$.Input.Instance",
+        "environment.$": "$.Input.Environment",
+        "payload": {
+          "checks": {
+            "eks.$": "$.ParallelResults[0].EksResult",
+            "rds.$": "$.ParallelResults[1].RdsResult",
+            "efs.$": "$.ParallelResults[2].EfsResult",
+            "pods.$": "$.PodsResult"
+          }
+        },
+        "updated_by": "step-function:readiness-checker"
+      },
+      "Next": "DetermineOverallStatus"
+    },
+
+    "DetermineOverallStatus": {
+      "Type": "Choice",
+      "Comment": "Determine overall readiness status based on check results",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.payload.checks.eks.available",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.payload.checks.rds.available",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.payload.checks.efs.available",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "SetStatusReady"
+        }
+      ],
+      "Default": "SetStatusNotReady"
+    },
+
+    "SetStatusReady": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload": {
+          "status": "ok",
+          "overall_status": "ready",
+          "ready": true,
+          "instance.$": "$.instance",
+          "environment.$": "$.environment",
+          "checks.$": "$.payload.checks"
+        },
+        "updated_by.$": "$.updated_by"
+      },
+      "Next": "SaveState"
+    },
+
+    "SetStatusNotReady": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload": {
+          "status": "critical",
+          "overall_status": "not_ready",
+          "ready": false,
+          "instance.$": "$.instance",
+          "environment.$": "$.environment",
+          "checks.$": "$.payload.checks"
+        },
+        "updated_by.$": "$.updated_by"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "End": true,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Failed",
+        "Error": "Failed to save state to DynamoDB",
+        "Details.$": "$.SaveError"
+      },
+      "End": true
+    }
+  }
+}

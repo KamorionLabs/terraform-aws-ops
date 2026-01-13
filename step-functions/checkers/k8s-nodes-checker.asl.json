@@ -1,0 +1,697 @@
+{
+  "Comment": "Fetches Kubernetes nodes from EKS cluster and stores in DynamoDB. Nodes are cluster-wide, stored with _cluster#clusterName as pk.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "Variable": "$.ClusterName",
+          "IsPresent": true,
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameter: ClusterName is required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ClusterAccessFailed",
+        "message.$": "States.Format('Failed to access cluster {}: {}', $.ClusterName, $.ClusterError.Error)",
+        "cluster_name.$": "$.ClusterName"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Comment": "Verify cluster is ACTIVE before querying nodes",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "PrepareInput"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "critical",
+        "error": "ClusterNotActive",
+        "message.$": "States.Format('Cluster {} is not ACTIVE (status: {})', $.ClusterName, $.ClusterInfo.Status)",
+        "cluster_name.$": "$.ClusterName",
+        "cluster_status.$": "$.ClusterInfo.Status"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareInput": {
+      "Type": "Pass",
+      "Comment": "Prepare input for subsequent steps",
+      "Parameters": {
+        "Input.$": "$",
+        "ClusterInfo.$": "$.ClusterInfo"
+      },
+      "Next": "FetchNodesChoice"
+    },
+
+    "FetchNodesChoice": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchNodesCrossAccount"
+        }
+      ],
+      "Default": "FetchNodes"
+    },
+
+    "FetchNodes": {
+      "Type": "Task",
+      "Comment": "Fetch nodes from K8s API (same account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path": "/api/v1/nodes"
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.NodesResponse",
+      "Next": "CheckIncludeEC2",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchNodesError",
+          "Next": "FetchNodesFailed"
+        }
+      ]
+    },
+
+    "FetchNodesCrossAccount": {
+      "Type": "Task",
+      "Comment": "Fetch nodes from K8s API (cross-account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path": "/api/v1/nodes"
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.NodesResponse",
+      "Next": "CheckIncludeEC2",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchNodesError",
+          "Next": "FetchNodesFailed"
+        }
+      ]
+    },
+
+    "FetchNodesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchNodesFailed",
+        "message.$": "States.Format('Failed to fetch nodes: {}', $.FetchNodesError.Error)",
+        "cluster_name.$": "$.Input.ClusterName"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckIncludeEC2": {
+      "Type": "Choice",
+      "Comment": "Check if EC2 enrichment is requested",
+      "Choices": [
+        {
+          "Variable": "$.Input.IncludeEC2",
+          "BooleanEquals": true,
+          "Next": "CheckEC2CrossAccount"
+        }
+      ],
+      "Default": "ProcessNodes"
+    },
+
+    "CheckEC2CrossAccount": {
+      "Type": "Choice",
+      "Comment": "Route EC2 fetch based on cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchEC2DataCrossAccount"
+        }
+      ],
+      "Default": "FetchEC2Data"
+    },
+
+    "FetchEC2Data": {
+      "Type": "Parallel",
+      "Comment": "Fetch EC2 instances and status checks in parallel (same account)",
+      "Branches": [
+        {
+          "StartAt": "FetchEC2Instances",
+          "States": {
+            "FetchEC2Instances": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+              "Parameters": {
+                "Filters": [
+                  {
+                    "Name.$": "States.Format('tag:kubernetes.io/cluster/{}', $.ClusterInfo.ClusterName)",
+                    "Values": ["owned", "shared"]
+                  },
+                  {
+                    "Name": "instance-state-name",
+                    "Values": ["running", "pending", "stopping", "stopped"]
+                  }
+                ]
+              },
+              "ResultSelector": {
+                "Reservations.$": "$.Reservations"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EC2InstancesError"
+                }
+              ]
+            },
+            "EC2InstancesError": {
+              "Type": "Pass",
+              "Parameters": {
+                "Reservations": [],
+                "Error.$": "$.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchEC2Status",
+          "States": {
+            "FetchEC2Status": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstanceStatus",
+              "Parameters": {
+                "IncludeAllInstances": true
+              },
+              "ResultSelector": {
+                "InstanceStatuses.$": "$.InstanceStatuses"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EC2StatusError"
+                }
+              ]
+            },
+            "EC2StatusError": {
+              "Type": "Pass",
+              "Parameters": {
+                "InstanceStatuses": [],
+                "Error.$": "$.Error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.EC2Results",
+      "Next": "PrepareEC2Data"
+    },
+
+    "FetchEC2DataCrossAccount": {
+      "Type": "Parallel",
+      "Comment": "Fetch EC2 instances and status checks in parallel (cross-account)",
+      "Branches": [
+        {
+          "StartAt": "FetchEC2InstancesCrossAccount",
+          "States": {
+            "FetchEC2InstancesCrossAccount": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "Filters": [
+                  {
+                    "Name.$": "States.Format('tag:kubernetes.io/cluster/{}', $.ClusterInfo.ClusterName)",
+                    "Values": ["owned", "shared"]
+                  },
+                  {
+                    "Name": "instance-state-name",
+                    "Values": ["running", "pending", "stopping", "stopped"]
+                  }
+                ]
+              },
+              "ResultSelector": {
+                "Reservations.$": "$.Reservations"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EC2InstancesErrorCrossAccount"
+                }
+              ]
+            },
+            "EC2InstancesErrorCrossAccount": {
+              "Type": "Pass",
+              "Parameters": {
+                "Reservations": [],
+                "Error.$": "$.Error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchEC2StatusCrossAccount",
+          "States": {
+            "FetchEC2StatusCrossAccount": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstanceStatus",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "IncludeAllInstances": true
+              },
+              "ResultSelector": {
+                "InstanceStatuses.$": "$.InstanceStatuses"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EC2StatusErrorCrossAccount"
+                }
+              ]
+            },
+            "EC2StatusErrorCrossAccount": {
+              "Type": "Pass",
+              "Parameters": {
+                "InstanceStatuses": [],
+                "Error.$": "$.Error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.EC2Results",
+      "Next": "PrepareEC2Data"
+    },
+
+    "PrepareEC2Data": {
+      "Type": "Pass",
+      "Comment": "Prepare EC2 data for Lambda",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "NodesResponse.$": "$.NodesResponse",
+        "EC2Data": {
+          "EC2Data": {
+            "Reservations.$": "$.EC2Results[0].Reservations"
+          },
+          "EC2StatusData": {
+            "InstanceStatuses.$": "$.EC2Results[1].InstanceStatuses"
+          }
+        }
+      },
+      "Next": "ProcessNodesWithEC2"
+    },
+
+    "ProcessNodesWithEC2": {
+      "Type": "Task",
+      "Comment": "Process nodes data with EC2 enrichment",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessNodesLambdaArn}",
+        "Payload": {
+          "nodes.$": "$.NodesResponse.items",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version",
+          "ec2_data.$": "$.EC2Data"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "summary.$": "$.Payload.summary",
+        "nodes.$": "$.Payload.nodes",
+        "issues.$": "$.Payload.issues",
+        "healthy.$": "$.Payload.healthy",
+        "timestamp.$": "$.Payload.timestamp",
+        "cluster_name.$": "$.Payload.cluster_name",
+        "cluster_version.$": "$.Payload.cluster_version",
+        "ec2_enriched.$": "$.Payload.ec2_enriched"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayloadEC2",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessNodesError",
+          "Next": "ProcessNodesFailed"
+        }
+      ]
+    },
+
+    "PrepareStatePayloadEC2": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB with EC2 data",
+      "Parameters": {
+        "project": "_cluster",
+        "env.$": "$.ClusterInfo.ClusterName",
+        "category": "k8s",
+        "check_type": "nodes",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "cluster_name.$": "$.ProcessedResult.cluster_name",
+          "cluster_version.$": "$.ProcessedResult.cluster_version",
+          "summary.$": "$.ProcessedResult.summary",
+          "nodes.$": "$.ProcessedResult.nodes",
+          "issues.$": "$.ProcessedResult.issues",
+          "healthy.$": "$.ProcessedResult.healthy",
+          "timestamp.$": "$.ProcessedResult.timestamp",
+          "ec2_enriched.$": "$.ProcessedResult.ec2_enriched"
+        },
+        "updated_by": "step-function:k8s-nodes-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ProcessNodes": {
+      "Type": "Task",
+      "Comment": "Process nodes data using Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessNodesLambdaArn}",
+        "Payload": {
+          "nodes.$": "$.NodesResponse.items",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "summary.$": "$.Payload.summary",
+        "nodes.$": "$.Payload.nodes",
+        "issues.$": "$.Payload.issues",
+        "healthy.$": "$.Payload.healthy",
+        "timestamp.$": "$.Payload.timestamp",
+        "cluster_name.$": "$.Payload.cluster_name",
+        "cluster_version.$": "$.Payload.cluster_version"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessNodesError",
+          "Next": "ProcessNodesFailed"
+        }
+      ]
+    },
+
+    "ProcessNodesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ProcessNodesFailed",
+        "message.$": "States.Format('Failed to process nodes: {}', $.ProcessNodesError.Error)",
+        "cluster_name.$": "$.Input.ClusterName"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB - nodes are cluster-wide so pk is _cluster#clusterName",
+      "Parameters": {
+        "project": "_cluster",
+        "env.$": "$.ClusterInfo.ClusterName",
+        "category": "k8s",
+        "check_type": "nodes",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "cluster_name.$": "$.ProcessedResult.cluster_name",
+          "cluster_version.$": "$.ProcessedResult.cluster_version",
+          "summary.$": "$.ProcessedResult.summary",
+          "nodes.$": "$.ProcessedResult.nodes",
+          "issues.$": "$.ProcessedResult.issues",
+          "healthy.$": "$.ProcessedResult.healthy",
+          "timestamp.$": "$.ProcessedResult.timestamp"
+        },
+        "updated_by": "step-function:k8s-nodes-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save processed state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateError": {
+      "Type": "Task",
+      "Comment": "Save error state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload": {
+          "project": "_cluster",
+          "env.$": "$.cluster_name",
+          "category": "k8s",
+          "check_type": "nodes",
+          "payload": {
+            "status.$": "$.status",
+            "error.$": "$.error",
+            "message.$": "$.message",
+            "healthy": false
+          },
+          "updated_by": "step-function:k8s-nodes-checker"
+        }
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatErrorResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveErrorFailed",
+          "Next": "FinalError"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveStateFailed",
+        "message.$": "States.Format('Failed to save state: {}', $.SaveError.Error)",
+        "cluster_name.$": "$.env"
+      },
+      "Next": "FinalError"
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result for output",
+      "Parameters": {
+        "status": "success",
+        "project": "_cluster",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "nodes",
+        "result": {
+          "status.$": "$.payload.status",
+          "healthy.$": "$.payload.healthy",
+          "summary.$": "$.payload.summary",
+          "issues_count.$": "States.ArrayLength($.payload.issues)"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FormatErrorResult": {
+      "Type": "Pass",
+      "Comment": "Format error result for output",
+      "Parameters": {
+        "status": "error",
+        "project": "_cluster",
+        "env.$": "$.cluster_name",
+        "category": "k8s",
+        "check_type": "nodes",
+        "error": {
+          "type.$": "$.status",
+          "message.$": "$.message"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FinalError": {
+      "Type": "Fail",
+      "Error": "StateMachineExecutionFailed",
+      "Cause": "Failed to execute k8s-nodes check and save error state"
+    }
+  }
+}

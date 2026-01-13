@@ -1,0 +1,522 @@
+{
+  "Comment": "Fetches K8s PVC and PV status from EKS cluster. Uses Project#Env as pk for Dashborion. v3",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ClusterName",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Namespace",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, ClusterName, and Namespace are required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account with assumed credentials)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ClusterAccessFailed",
+        "message.$": "States.Format('Failed to access cluster {}: {}', $.ClusterName, $.ClusterError.Error)",
+        "project.$": "$.Project",
+        "env.$": "$.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Comment": "Verify cluster is ACTIVE before querying resources",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "PrepareApiPaths"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "critical",
+        "error": "ClusterNotActive",
+        "message.$": "States.Format('Cluster {} is not ACTIVE (status: {})', $.ClusterName, $.ClusterInfo.Status)",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "cluster_status.$": "$.ClusterInfo.Status"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareApiPaths": {
+      "Type": "Pass",
+      "Comment": "Build API paths for PVC and PV listing",
+      "Parameters": {
+        "Input.$": "$",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "PvcPath.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.Namespace)",
+        "PvPath": "/api/v1/persistentvolumes"
+      },
+      "Next": "FetchResourcesChoice"
+    },
+
+    "FetchResourcesChoice": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchResourcesCrossAccount"
+        }
+      ],
+      "Default": "FetchResources"
+    },
+
+    "FetchResources": {
+      "Type": "Parallel",
+      "Comment": "Fetch PVCs and PVs in parallel (same account)",
+      "Branches": [
+        {
+          "StartAt": "FetchPVCs",
+          "States": {
+            "FetchPVCs": {
+              "Type": "Task",
+              "Comment": "Fetch PVCs from namespace",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.PvcPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchPVs",
+          "States": {
+            "FetchPVs": {
+              "Type": "Task",
+              "Comment": "Fetch all PVs (cluster-wide)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.PvPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultSelector": {
+        "pvcs.$": "$[0].items",
+        "pvs.$": "$[1].items"
+      },
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessPVCData",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesCrossAccount": {
+      "Type": "Parallel",
+      "Comment": "Fetch PVCs and PVs in parallel (cross-account)",
+      "Branches": [
+        {
+          "StartAt": "FetchPVCsCrossAccount",
+          "States": {
+            "FetchPVCsCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch PVCs from namespace (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.PvcPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchPVsCrossAccount",
+          "States": {
+            "FetchPVsCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch all PVs (cluster-wide, cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.PvPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultSelector": {
+        "pvcs.$": "$[0].items",
+        "pvs.$": "$[1].items"
+      },
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessPVCData",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchResourcesFailed"
+        }
+      ]
+    },
+
+    "FetchResourcesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchResourcesFailed",
+        "message.$": "States.Format('Failed to fetch PVC/PV data from namespace {}: {}', $.Input.Namespace, $.FetchError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "ProcessPVCData": {
+      "Type": "Task",
+      "Comment": "Process PVC and PV data using Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessPvcLambdaArn}",
+        "Payload": {
+          "pvcs.$": "$.FetchResults.pvcs",
+          "pvs.$": "$.FetchResults.pvs",
+          "namespace.$": "$.Input.Namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "project.$": "$.Input.Project",
+          "env.$": "$.Input.Env"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "source.$": "$.Payload.source",
+        "namespace.$": "$.Payload.namespace",
+        "summary.$": "$.Payload.summary",
+        "pvcs.$": "$.Payload.pvcs",
+        "persistentVolumes.$": "$.Payload.persistentVolumes",
+        "issues.$": "$.Payload.issues",
+        "healthy.$": "$.Payload.healthy",
+        "timestamp.$": "$.Payload.timestamp"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessPVCFailed"
+        }
+      ]
+    },
+
+    "ProcessPVCFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ProcessPVCFailed",
+        "message.$": "States.Format('Failed to process PVC/PV data: {}', $.ProcessError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB state save - pk is project#env, sk is check:k8s:pvc:current",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "k8s",
+        "check_type": "pvc",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "source.$": "$.ProcessedResult.source",
+          "namespace.$": "$.ProcessedResult.namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version",
+          "summary.$": "$.ProcessedResult.summary",
+          "pvcs.$": "$.ProcessedResult.pvcs",
+          "persistentVolumes.$": "$.ProcessedResult.persistentVolumes",
+          "issues.$": "$.ProcessedResult.issues",
+          "healthy.$": "$.ProcessedResult.healthy",
+          "timestamp.$": "$.ProcessedResult.timestamp"
+        },
+        "updated_by": "step-function:k8s-pvc-status-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save processed state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateError": {
+      "Type": "Task",
+      "Comment": "Save error state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload": {
+          "project.$": "$.project",
+          "env.$": "$.env",
+          "category": "k8s",
+          "check_type": "pvc",
+          "payload": {
+            "status.$": "$.status",
+            "error.$": "$.error",
+            "message.$": "$.message",
+            "healthy": false
+          },
+          "updated_by": "step-function:k8s-pvc-status-checker"
+        }
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatErrorResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveErrorFailed",
+          "Next": "FinalError"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveStateFailed",
+        "message.$": "States.Format('Failed to save state: {}', $.SaveError.Error)",
+        "project.$": "$.project",
+        "env.$": "$.env"
+      },
+      "Next": "FinalError"
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result for output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "pvc",
+        "result": {
+          "status.$": "$.payload.status",
+          "healthy.$": "$.payload.healthy",
+          "summary.$": "$.payload.summary",
+          "issues_count.$": "States.ArrayLength($.payload.issues)"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FormatErrorResult": {
+      "Type": "Pass",
+      "Comment": "Format error result for output",
+      "Parameters": {
+        "status": "error",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "pvc",
+        "error": {
+          "type.$": "$.status",
+          "message.$": "$.message"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FinalError": {
+      "Type": "Fail",
+      "Error": "StateMachineExecutionFailed",
+      "Cause": "Failed to execute k8s-pvc check and save error state"
+    }
+  }
+}

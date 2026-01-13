@@ -1,0 +1,366 @@
+{
+  "Comment": "EC2/K8s Nodes Health Checker - Checks EC2 instance status, K8s node conditions, and Karpenter state",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.ClusterName", "IsPresent": true}
+          ],
+          "Next": "GetClusterInfo"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, and ClusterName are required"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Fail",
+      "Error": "ClusterAccessFailed",
+      "Cause": "Failed to access EKS cluster"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "FetchDataInParallel"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Fail",
+      "Error": "ClusterNotActive",
+      "Cause": "EKS cluster is not in ACTIVE state"
+    },
+
+    "FetchDataInParallel": {
+      "Type": "Parallel",
+      "Comment": "Fetch EC2, K8s nodes, and Karpenter data in parallel",
+      "Branches": [
+        {
+          "StartAt": "FetchEC2Instances",
+          "States": {
+            "FetchEC2Instances": {
+              "Type": "Task",
+              "Comment": "Get EC2 instances for this cluster",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstances",
+              "Credentials": {
+                "RoleArn.$": "$.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "Filters": [
+                  {
+                    "Name": "tag:kubernetes.io/cluster/${ClusterName}",
+                    "Values.$": "States.Array('owned', 'shared')"
+                  },
+                  {
+                    "Name": "instance-state-name",
+                    "Values": ["running", "pending", "stopping", "stopped"]
+                  }
+                ]
+              },
+              "ResultSelector": {
+                "Reservations.$": "$.Reservations"
+              },
+              "ResultPath": "$.EC2Data",
+              "Next": "FetchEC2StatusChecks",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.EC2Error",
+                  "Next": "EC2FetchFailed"
+                }
+              ]
+            },
+            "FetchEC2StatusChecks": {
+              "Type": "Task",
+              "Comment": "Get EC2 instance status checks",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeInstanceStatus",
+              "Credentials": {
+                "RoleArn.$": "$.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "IncludeAllInstances": true,
+                "Filters": [
+                  {
+                    "Name": "instance-state-name",
+                    "Values": ["running", "pending", "stopping", "stopped"]
+                  }
+                ]
+              },
+              "ResultSelector": {
+                "InstanceStatuses.$": "$.InstanceStatuses"
+              },
+              "ResultPath": "$.EC2StatusData",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.EC2StatusError",
+                  "Next": "EC2StatusFetchFailed"
+                }
+              ]
+            },
+            "EC2FetchFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "EC2Data": {"Reservations": []},
+                "EC2Error.$": "$.EC2Error"
+              },
+              "End": true
+            },
+            "EC2StatusFetchFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "EC2Data.$": "$.EC2Data",
+                "EC2StatusData": {"InstanceStatuses": []},
+                "EC2StatusError.$": "$.EC2StatusError"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchK8sNodes",
+          "States": {
+            "FetchK8sNodes": {
+              "Type": "Task",
+              "Comment": "Get K8s nodes",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path": "/api/v1/nodes"
+              },
+              "ResultSelector": {
+                "Nodes.$": "$.ResponseBody.items"
+              },
+              "ResultPath": "$.K8sNodes",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.K8sNodesError",
+                  "Next": "K8sNodesFetchFailed"
+                }
+              ]
+            },
+            "K8sNodesFetchFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "K8sNodes": {"Nodes": []},
+                "K8sNodesError.$": "$.K8sNodesError"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CheckKarpenterEnabled",
+          "States": {
+            "CheckKarpenterEnabled": {
+              "Type": "Choice",
+              "Comment": "Check if Karpenter checks should be included",
+              "Choices": [
+                {
+                  "Variable": "$.IncludeKarpenter",
+                  "BooleanEquals": false,
+                  "Next": "SkipKarpenter"
+                }
+              ],
+              "Default": "FetchKarpenterNodePools"
+            },
+            "SkipKarpenter": {
+              "Type": "Pass",
+              "Parameters": {
+                "KarpenterNodePools": {"NodePools": []},
+                "KarpenterNodeClaims": {"NodeClaims": []},
+                "KarpenterSkipped": true
+              },
+              "End": true
+            },
+            "FetchKarpenterNodePools": {
+              "Type": "Task",
+              "Comment": "Get Karpenter NodePools",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path": "/apis/karpenter.sh/v1/nodepools"
+              },
+              "ResultSelector": {
+                "NodePools.$": "$.ResponseBody.items"
+              },
+              "ResultPath": "$.KarpenterNodePools",
+              "Next": "FetchKarpenterNodeClaims",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.KarpenterNodePoolsError",
+                  "Next": "KarpenterNotFound"
+                }
+              ]
+            },
+            "FetchKarpenterNodeClaims": {
+              "Type": "Task",
+              "Comment": "Get Karpenter NodeClaims",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path": "/apis/karpenter.sh/v1/nodeclaims"
+              },
+              "ResultSelector": {
+                "NodeClaims.$": "$.ResponseBody.items"
+              },
+              "ResultPath": "$.KarpenterNodeClaims",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.KarpenterNodeClaimsError",
+                  "Next": "KarpenterNodeClaimsFailed"
+                }
+              ]
+            },
+            "KarpenterNotFound": {
+              "Type": "Pass",
+              "Comment": "Karpenter not installed or no access",
+              "Parameters": {
+                "KarpenterNodePools": {"NodePools": []},
+                "KarpenterNodeClaims": {"NodeClaims": []},
+                "KarpenterNotInstalled": true
+              },
+              "End": true
+            },
+            "KarpenterNodeClaimsFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "KarpenterNodePools.$": "$.KarpenterNodePools",
+                "KarpenterNodeClaims": {"NodeClaims": []},
+                "KarpenterNodeClaimsError.$": "$.KarpenterNodeClaimsError"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ParallelResults",
+      "Next": "ProcessEC2Nodes"
+    },
+
+    "ProcessEC2Nodes": {
+      "Type": "Task",
+      "Comment": "Process and correlate EC2/K8s/Karpenter data",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessEC2NodesLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Project",
+          "Env.$": "$.Env",
+          "ClusterName.$": "$.ClusterInfo.ClusterName",
+          "EC2Data.$": "$.ParallelResults[0]",
+          "K8sNodes.$": "$.ParallelResults[1]",
+          "KarpenterData.$": "$.ParallelResults[2]"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "body.$": "$.Payload.body"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "FormatResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessingFailed"
+        }
+      ]
+    },
+
+    "ProcessingFailed": {
+      "Type": "Fail",
+      "Error": "ProcessingFailed",
+      "Cause": "Failed to process EC2/K8s node data"
+    },
+
+    "FormatResult": {
+      "Type": "Pass",
+      "Comment": "Format final result",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "cluster.$": "$.ClusterInfo.ClusterName",
+        "result.$": "States.StringToJson($.ProcessResult.body)"
+      },
+      "End": true
+    }
+  }
+}

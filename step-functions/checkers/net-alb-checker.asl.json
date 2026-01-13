@@ -1,0 +1,973 @@
+{
+  "Comment": "Fetches ALB health state and stores in DynamoDB. New format: project/env/category/check_type",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Instance",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Environment",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckInputType"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, Instance, and Environment are required"
+    },
+
+    "CheckInputType": {
+      "Type": "Choice",
+      "Comment": "Check if LoadBalancerArns or LoadBalancerTags are provided",
+      "Choices": [
+        {
+          "Variable": "$.LoadBalancerArns",
+          "IsPresent": true,
+          "Next": "CheckCrossAccountRole"
+        },
+        {
+          "Variable": "$.LoadBalancerTags",
+          "IsPresent": true,
+          "Next": "CheckCrossAccountRole"
+        }
+      ],
+      "Default": "NoLoadBalancersSpecified"
+    },
+
+    "NoLoadBalancersSpecified": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Either LoadBalancerArns or LoadBalancerTags must be provided"
+    },
+
+    "CheckCrossAccountRole": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role is specified",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "PrepareInput"
+        }
+      ],
+      "Default": "PrepareInputSameAccount"
+    },
+
+    "PrepareInput": {
+      "Type": "Pass",
+      "Comment": "Prepare input for cross-account access",
+      "Parameters": {
+        "Input.$": "$",
+        "UseCrossAccount": true
+      },
+      "Next": "DescribeLoadBalancersWithRole"
+    },
+
+    "PrepareInputSameAccount": {
+      "Type": "Pass",
+      "Comment": "Prepare input for same account access",
+      "Parameters": {
+        "Input.$": "$",
+        "UseCrossAccount": false
+      },
+      "Next": "CheckLoadBalancerArnsPresent"
+    },
+
+    "CheckLoadBalancerArnsPresent": {
+      "Type": "Choice",
+      "Comment": "Check if LoadBalancerArns is provided for same account",
+      "Choices": [
+        {
+          "Variable": "$.Input.LoadBalancerArns",
+          "IsPresent": true,
+          "Next": "DescribeLoadBalancersByArn"
+        }
+      ],
+      "Default": "DescribeLoadBalancersByTags"
+    },
+
+    "DescribeLoadBalancersWithRole": {
+      "Type": "Choice",
+      "Comment": "Check which method to use for cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.LoadBalancerArns",
+          "IsPresent": true,
+          "Next": "DescribeLoadBalancersByArnWithRole"
+        }
+      ],
+      "Default": "DescribeLoadBalancersByTagsWithRole"
+    },
+
+    "DescribeLoadBalancersByArn": {
+      "Type": "Task",
+      "Comment": "Describe load balancers by ARN (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeLoadBalancers",
+      "Parameters": {
+        "LoadBalancerArns.$": "$.Input.LoadBalancerArns"
+      },
+      "ResultSelector": {
+        "LoadBalancers.$": "$.LoadBalancers"
+      },
+      "ResultPath": "$.DescribeResult",
+      "Next": "MapProcessLoadBalancers",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DescribeError",
+          "Next": "DescribeLoadBalancersFailed"
+        }
+      ]
+    },
+
+    "DescribeLoadBalancersByArnWithRole": {
+      "Type": "Task",
+      "Comment": "Describe load balancers by ARN (cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeLoadBalancers",
+      "Parameters": {
+        "LoadBalancerArns.$": "$.Input.LoadBalancerArns"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "LoadBalancers.$": "$.LoadBalancers"
+      },
+      "ResultPath": "$.DescribeResult",
+      "Next": "MapProcessLoadBalancersWithRole",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DescribeError",
+          "Next": "DescribeLoadBalancersFailed"
+        }
+      ]
+    },
+
+    "DescribeLoadBalancersByTags": {
+      "Type": "Task",
+      "Comment": "Filter ALBs by tags using Lambda (same account) - returns full LB objects",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FilterALBByTagsLambdaArn}",
+        "Payload": {
+          "LoadBalancerTags.$": "$.Input.LoadBalancerTags"
+        }
+      },
+      "ResultSelector": {
+        "LoadBalancers.$": "$.Payload.LoadBalancers",
+        "totalScanned.$": "$.Payload.totalScanned",
+        "matchCount.$": "$.Payload.matchCount"
+      },
+      "ResultPath": "$.FilterResult",
+      "Next": "CheckFilteredArns",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FilterError",
+          "Next": "DescribeLoadBalancersFailed"
+        }
+      ]
+    },
+
+    "CheckFilteredArns": {
+      "Type": "Choice",
+      "Comment": "Check if any ALBs matched the tags (same account)",
+      "Choices": [
+        {
+          "Variable": "$.FilterResult.matchCount",
+          "NumericGreaterThan": 0,
+          "Next": "UseFilteredArns"
+        }
+      ],
+      "Default": "NoMatchingLoadBalancersSameAccount"
+    },
+
+    "UseFilteredArns": {
+      "Type": "Pass",
+      "Comment": "Use pre-fetched LoadBalancer objects directly (skip DescribeLoadBalancers)",
+      "Parameters": {
+        "Input": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "LoadBalancerTags.$": "$.Input.LoadBalancerTags"
+        },
+        "UseCrossAccount": false,
+        "FilterStats": {
+          "totalScanned.$": "$.FilterResult.totalScanned",
+          "matchCount.$": "$.FilterResult.matchCount"
+        },
+        "DescribeResult": {
+          "LoadBalancers.$": "$.FilterResult.LoadBalancers"
+        }
+      },
+      "Next": "MapProcessLoadBalancers"
+    },
+
+    "NoMatchingLoadBalancersSameAccount": {
+      "Type": "Pass",
+      "Comment": "No ALBs matched the specified tags (same account)",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload": {
+          "status": "ok",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "active": 0,
+            "healthy": 0,
+            "totalTargets": 0,
+            "healthyTargets": 0
+          },
+          "loadBalancers": [],
+          "issues": [],
+          "healthy": true,
+          "filterInfo": {
+            "totalScanned.$": "$.FilterResult.totalScanned",
+            "matchCount": 0,
+            "tagsUsed.$": "$.Input.LoadBalancerTags"
+          }
+        },
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "DescribeLoadBalancersByTagsWithRole": {
+      "Type": "Task",
+      "Comment": "Filter ALBs by tags using Lambda (cross-account) - returns full LB objects",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FilterALBByTagsLambdaArn}",
+        "Payload": {
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn",
+          "LoadBalancerTags.$": "$.Input.LoadBalancerTags"
+        }
+      },
+      "ResultSelector": {
+        "LoadBalancers.$": "$.Payload.LoadBalancers",
+        "totalScanned.$": "$.Payload.totalScanned",
+        "matchCount.$": "$.Payload.matchCount"
+      },
+      "ResultPath": "$.FilterResult",
+      "Next": "CheckFilteredArnsWithRole",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FilterError",
+          "Next": "DescribeLoadBalancersFailed"
+        }
+      ]
+    },
+
+    "CheckFilteredArnsWithRole": {
+      "Type": "Choice",
+      "Comment": "Check if any ALBs matched the tags",
+      "Choices": [
+        {
+          "Variable": "$.FilterResult.matchCount",
+          "NumericGreaterThan": 0,
+          "Next": "UseFilteredArnsWithRole"
+        }
+      ],
+      "Default": "NoMatchingLoadBalancers"
+    },
+
+    "UseFilteredArnsWithRole": {
+      "Type": "Pass",
+      "Comment": "Use pre-fetched LoadBalancer objects directly (skip DescribeLoadBalancers)",
+      "Parameters": {
+        "Input": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "LoadBalancerTags.$": "$.Input.LoadBalancerTags",
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn"
+        },
+        "UseCrossAccount": true,
+        "FilterStats": {
+          "totalScanned.$": "$.FilterResult.totalScanned",
+          "matchCount.$": "$.FilterResult.matchCount"
+        },
+        "DescribeResult": {
+          "LoadBalancers.$": "$.FilterResult.LoadBalancers"
+        }
+      },
+      "Next": "MapProcessLoadBalancersWithRole"
+    },
+
+    "NoMatchingLoadBalancers": {
+      "Type": "Pass",
+      "Comment": "No ALBs matched the specified tags",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload": {
+          "status": "ok",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "active": 0,
+            "healthy": 0,
+            "totalTargets": 0,
+            "healthyTargets": 0
+          },
+          "loadBalancers": [],
+          "issues": [],
+          "healthy": true,
+          "filterInfo": {
+            "totalScanned.$": "$.FilterResult.totalScanned",
+            "matchCount": 0,
+            "tagsUsed.$": "$.Input.LoadBalancerTags"
+          }
+        },
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "DescribeLoadBalancersFailed": {
+      "Type": "Pass",
+      "Comment": "Handle describe load balancers failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "active": 0,
+            "healthy": 0,
+            "totalTargets": 0,
+            "healthyTargets": 0
+          },
+          "loadBalancers": [],
+          "issues": ["Failed to describe load balancers"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "MapProcessLoadBalancers": {
+      "Type": "Map",
+      "Comment": "Process each load balancer in parallel (same account)",
+      "ItemsPath": "$.DescribeResult.LoadBalancers",
+      "MaxConcurrency": 5,
+      "ItemSelector": {
+        "LoadBalancer.$": "$$.Map.Item.Value",
+        "Input.$": "$.Input"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "DescribeListeners",
+        "States": {
+          "DescribeListeners": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeListeners",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn"
+            },
+            "ResultSelector": {
+              "Listeners.$": "$.Listeners"
+            },
+            "ResultPath": "$.ListenersResult",
+            "Next": "DescribeTargetGroups",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.ListenersError",
+                "Next": "ListenersFailed"
+              }
+            ]
+          },
+          "ListenersFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancer.$": "$.LoadBalancer",
+              "ListenersResult": {
+                "Listeners": []
+              },
+              "ListenersError.$": "$.ListenersError"
+            },
+            "Next": "DescribeTargetGroups"
+          },
+          "DescribeTargetGroups": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeTargetGroups",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn"
+            },
+            "ResultSelector": {
+              "TargetGroups.$": "$.TargetGroups"
+            },
+            "ResultPath": "$.TargetGroupsResult",
+            "Next": "MapDescribeTargetHealth",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.TargetGroupsError",
+                "Next": "TargetGroupsFailed"
+              }
+            ]
+          },
+          "TargetGroupsFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancer.$": "$.LoadBalancer",
+              "ListenersResult.$": "$.ListenersResult",
+              "TargetGroupsResult": {
+                "TargetGroups": []
+              },
+              "TargetGroupsError.$": "$.TargetGroupsError"
+            },
+            "Next": "FormatLoadBalancerResult"
+          },
+          "MapDescribeTargetHealth": {
+            "Type": "Map",
+            "ItemsPath": "$.TargetGroupsResult.TargetGroups",
+            "MaxConcurrency": 10,
+            "ItemSelector": {
+              "TargetGroup.$": "$$.Map.Item.Value"
+            },
+            "ItemProcessor": {
+              "ProcessorConfig": {
+                "Mode": "INLINE"
+              },
+              "StartAt": "DescribeTargetHealth",
+              "States": {
+                "DescribeTargetHealth": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeTargetHealth",
+                  "Parameters": {
+                    "TargetGroupArn.$": "$.TargetGroup.TargetGroupArn"
+                  },
+                  "ResultSelector": {
+                    "TargetHealthDescriptions.$": "$.TargetHealthDescriptions"
+                  },
+                  "ResultPath": "$.HealthResult",
+                  "Next": "FormatTargetGroupResult",
+                  "Catch": [
+                    {
+                      "ErrorEquals": ["States.ALL"],
+                      "ResultPath": "$.HealthError",
+                      "Next": "TargetHealthFailed"
+                    }
+                  ]
+                },
+                "TargetHealthFailed": {
+                  "Type": "Pass",
+                  "Parameters": {
+                    "TargetGroup.$": "$.TargetGroup",
+                    "HealthResult": {
+                      "TargetHealthDescriptions": []
+                    },
+                    "HealthError.$": "$.HealthError"
+                  },
+                  "Next": "FormatTargetGroupResult"
+                },
+                "FormatTargetGroupResult": {
+                  "Type": "Pass",
+                  "Comment": "Format target group result. Note: HealthCheckPath removed as it doesn't exist for TCP/UDP target groups",
+                  "Parameters": {
+                    "TargetGroupArn.$": "$.TargetGroup.TargetGroupArn",
+                    "TargetGroupName.$": "$.TargetGroup.TargetGroupName",
+                    "Protocol.$": "$.TargetGroup.Protocol",
+                    "Port.$": "$.TargetGroup.Port",
+                    "TargetType.$": "$.TargetGroup.TargetType",
+                    "HealthCheckProtocol.$": "$.TargetGroup.HealthCheckProtocol",
+                    "HealthCheckIntervalSeconds.$": "$.TargetGroup.HealthCheckIntervalSeconds",
+                    "HealthCheckTimeoutSeconds.$": "$.TargetGroup.HealthCheckTimeoutSeconds",
+                    "HealthyThresholdCount.$": "$.TargetGroup.HealthyThresholdCount",
+                    "UnhealthyThresholdCount.$": "$.TargetGroup.UnhealthyThresholdCount",
+                    "TargetHealthDescriptions.$": "$.HealthResult.TargetHealthDescriptions"
+                  },
+                  "End": true
+                }
+              }
+            },
+            "ResultPath": "$.TargetHealthResults",
+            "Next": "FormatLoadBalancerResult"
+          },
+          "FormatLoadBalancerResult": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn",
+              "LoadBalancerName.$": "$.LoadBalancer.LoadBalancerName",
+              "DnsName.$": "$.LoadBalancer.DnsName",
+              "Scheme.$": "$.LoadBalancer.Scheme",
+              "VpcId.$": "$.LoadBalancer.VpcId",
+              "State.$": "$.LoadBalancer.State",
+              "Type.$": "$.LoadBalancer.Type",
+              "IpAddressType.$": "$.LoadBalancer.IpAddressType",
+              "SecurityGroups.$": "$.LoadBalancer.SecurityGroups",
+              "AvailabilityZones.$": "$.LoadBalancer.AvailabilityZones",
+              "Listeners.$": "$.ListenersResult.Listeners",
+              "TargetGroups.$": "$.TargetHealthResults"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.ProcessedLoadBalancers",
+      "Next": "CheckLoadBalancerTags",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MapError",
+          "Next": "MapProcessFailed"
+        }
+      ]
+    },
+
+    "MapProcessLoadBalancersWithRole": {
+      "Type": "Map",
+      "Comment": "Process each load balancer in parallel (cross-account)",
+      "ItemsPath": "$.DescribeResult.LoadBalancers",
+      "MaxConcurrency": 5,
+      "ItemSelector": {
+        "LoadBalancer.$": "$$.Map.Item.Value",
+        "Input.$": "$.Input"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "DescribeListenersWithRole",
+        "States": {
+          "DescribeListenersWithRole": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeListeners",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.Input.CrossAccountRoleArn"
+            },
+            "ResultSelector": {
+              "Listeners.$": "$.Listeners"
+            },
+            "ResultPath": "$.ListenersResult",
+            "Next": "DescribeTargetGroupsWithRole",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.ListenersError",
+                "Next": "ListenersFailedWithRole"
+              }
+            ]
+          },
+          "ListenersFailedWithRole": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancer.$": "$.LoadBalancer",
+              "Input.$": "$.Input",
+              "ListenersResult": {
+                "Listeners": []
+              },
+              "ListenersError.$": "$.ListenersError"
+            },
+            "Next": "DescribeTargetGroupsWithRole"
+          },
+          "DescribeTargetGroupsWithRole": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeTargetGroups",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.Input.CrossAccountRoleArn"
+            },
+            "ResultSelector": {
+              "TargetGroups.$": "$.TargetGroups"
+            },
+            "ResultPath": "$.TargetGroupsResult",
+            "Next": "MapDescribeTargetHealthWithRole",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.TargetGroupsError",
+                "Next": "TargetGroupsFailedWithRole"
+              }
+            ]
+          },
+          "TargetGroupsFailedWithRole": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancer.$": "$.LoadBalancer",
+              "ListenersResult.$": "$.ListenersResult",
+              "TargetGroupsResult": {
+                "TargetGroups": []
+              },
+              "TargetGroupsError.$": "$.TargetGroupsError"
+            },
+            "Next": "FormatLoadBalancerResultWithRole"
+          },
+          "MapDescribeTargetHealthWithRole": {
+            "Type": "Map",
+            "ItemsPath": "$.TargetGroupsResult.TargetGroups",
+            "MaxConcurrency": 10,
+            "ItemSelector": {
+              "TargetGroup.$": "$$.Map.Item.Value",
+              "Input.$": "$.Input"
+            },
+            "ItemProcessor": {
+              "ProcessorConfig": {
+                "Mode": "INLINE"
+              },
+              "StartAt": "DescribeTargetHealthWithRole",
+              "States": {
+                "DescribeTargetHealthWithRole": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::aws-sdk:elasticloadbalancingv2:describeTargetHealth",
+                  "Parameters": {
+                    "TargetGroupArn.$": "$.TargetGroup.TargetGroupArn"
+                  },
+                  "Credentials": {
+                    "RoleArn.$": "$.Input.CrossAccountRoleArn"
+                  },
+                  "ResultSelector": {
+                    "TargetHealthDescriptions.$": "$.TargetHealthDescriptions"
+                  },
+                  "ResultPath": "$.HealthResult",
+                  "Next": "FormatTargetGroupResultWithRole",
+                  "Catch": [
+                    {
+                      "ErrorEquals": ["States.ALL"],
+                      "ResultPath": "$.HealthError",
+                      "Next": "TargetHealthFailedWithRole"
+                    }
+                  ]
+                },
+                "TargetHealthFailedWithRole": {
+                  "Type": "Pass",
+                  "Parameters": {
+                    "TargetGroup.$": "$.TargetGroup",
+                    "HealthResult": {
+                      "TargetHealthDescriptions": []
+                    },
+                    "HealthError.$": "$.HealthError"
+                  },
+                  "Next": "FormatTargetGroupResultWithRole"
+                },
+                "FormatTargetGroupResultWithRole": {
+                  "Type": "Pass",
+                  "Comment": "Format target group result. Note: HealthCheckPath removed as it doesn't exist for TCP/UDP target groups",
+                  "Parameters": {
+                    "TargetGroupArn.$": "$.TargetGroup.TargetGroupArn",
+                    "TargetGroupName.$": "$.TargetGroup.TargetGroupName",
+                    "Protocol.$": "$.TargetGroup.Protocol",
+                    "Port.$": "$.TargetGroup.Port",
+                    "TargetType.$": "$.TargetGroup.TargetType",
+                    "HealthCheckProtocol.$": "$.TargetGroup.HealthCheckProtocol",
+                    "HealthCheckIntervalSeconds.$": "$.TargetGroup.HealthCheckIntervalSeconds",
+                    "HealthCheckTimeoutSeconds.$": "$.TargetGroup.HealthCheckTimeoutSeconds",
+                    "HealthyThresholdCount.$": "$.TargetGroup.HealthyThresholdCount",
+                    "UnhealthyThresholdCount.$": "$.TargetGroup.UnhealthyThresholdCount",
+                    "TargetHealthDescriptions.$": "$.HealthResult.TargetHealthDescriptions"
+                  },
+                  "End": true
+                }
+              }
+            },
+            "ResultPath": "$.TargetHealthResults",
+            "Next": "FormatLoadBalancerResultWithRole"
+          },
+          "FormatLoadBalancerResultWithRole": {
+            "Type": "Pass",
+            "Parameters": {
+              "LoadBalancerArn.$": "$.LoadBalancer.LoadBalancerArn",
+              "LoadBalancerName.$": "$.LoadBalancer.LoadBalancerName",
+              "DnsName.$": "$.LoadBalancer.DnsName",
+              "Scheme.$": "$.LoadBalancer.Scheme",
+              "VpcId.$": "$.LoadBalancer.VpcId",
+              "State.$": "$.LoadBalancer.State",
+              "Type.$": "$.LoadBalancer.Type",
+              "IpAddressType.$": "$.LoadBalancer.IpAddressType",
+              "SecurityGroups.$": "$.LoadBalancer.SecurityGroups",
+              "AvailabilityZones.$": "$.LoadBalancer.AvailabilityZones",
+              "Listeners.$": "$.ListenersResult.Listeners",
+              "TargetGroups.$": "$.TargetHealthResults"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.ProcessedLoadBalancers",
+      "Next": "CheckLoadBalancerTags",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MapError",
+          "Next": "MapProcessFailed"
+        }
+      ]
+    },
+
+    "MapProcessFailed": {
+      "Type": "Pass",
+      "Comment": "Handle map processing failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "active": 0,
+            "healthy": 0,
+            "totalTargets": 0,
+            "healthyTargets": 0
+          },
+          "loadBalancers": [],
+          "issues": ["Failed to process load balancers"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "CheckLoadBalancerTags": {
+      "Type": "Choice",
+      "Comment": "Check if LoadBalancerTags parameter was provided",
+      "Choices": [
+        {
+          "Variable": "$.Input.LoadBalancerTags",
+          "IsPresent": true,
+          "Next": "ProcessALBData"
+        }
+      ],
+      "Default": "ProcessALBDataNoTags"
+    },
+
+    "ProcessALBDataNoTags": {
+      "Type": "Task",
+      "Comment": "Process ALB data without tag filtering",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessALBLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn",
+          "ProcessedLoadBalancers.$": "$.ProcessedLoadBalancers"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessALBDataFailed"
+        }
+      ]
+    },
+
+    "ProcessALBData": {
+      "Type": "Task",
+      "Comment": "Process and aggregate ALB data via Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessALBLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "LoadBalancerTags.$": "$.Input.LoadBalancerTags",
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn",
+          "ProcessedLoadBalancers.$": "$.ProcessedLoadBalancers"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessALBDataFailed"
+        }
+      ]
+    },
+
+    "ProcessALBDataFailed": {
+      "Type": "Pass",
+      "Comment": "Handle ALB data processing failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "active": 0,
+            "healthy": 0,
+            "totalTargets": 0,
+            "healthyTargets": 0
+          },
+          "loadBalancers": [],
+          "issues": ["Failed to process ALB data"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare final payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "alb",
+        "payload.$": "$.ProcessResult.payload",
+        "updated_by": "step-function:net-alb-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "net",
+        "check_type": "alb",
+        "payload.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "net",
+        "check_type": "alb",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

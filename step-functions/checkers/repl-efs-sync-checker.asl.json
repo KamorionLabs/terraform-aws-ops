@@ -1,0 +1,507 @@
+{
+  "Comment": "Checks EFS native replication status between source and destination regions. New format: project/env/category/check_type",
+  "StartAt": "InitializeState",
+  "States": {
+    "InitializeState": {
+      "Type": "Pass",
+      "Parameters": {
+        "Input.$": "$",
+        "Timestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "CheckCrossAccountRequired"
+    },
+
+    "CheckCrossAccountRequired": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account assume role is required",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetReplicationConfigurationCrossAccount"
+        }
+      ],
+      "Default": "GetReplicationConfiguration"
+    },
+
+    "GetReplicationConfiguration": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.Input.SourceFileSystemId"
+      },
+      "ResultPath": "$.ReplicationConfig",
+      "Next": "CheckReplicationExists",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ReplicationError",
+          "Next": "CheckDestinationProvidedForNoReplication"
+        }
+      ]
+    },
+
+    "GetReplicationConfigurationCrossAccount": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.Input.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultPath": "$.ReplicationConfig",
+      "Next": "CheckReplicationExists",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ReplicationError",
+          "Next": "CheckDestinationProvidedForNoReplication"
+        }
+      ]
+    },
+
+    "CheckReplicationExists": {
+      "Type": "Choice",
+      "Comment": "Check if replication configuration exists",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationConfig.Replications[0]",
+          "IsPresent": true,
+          "Next": "ParallelFilesystemChecks"
+        }
+      ],
+      "Default": "CheckDestinationProvidedForNoReplication"
+    },
+
+    "CheckDestinationProvidedForNoReplication": {
+      "Type": "Choice",
+      "Comment": "Check if DestinationFileSystemId is provided to get both EFS info",
+      "Choices": [
+        {
+          "Variable": "$.Input.DestinationFileSystemId",
+          "IsPresent": true,
+          "Next": "GetBothFilesystemsNoReplication"
+        }
+      ],
+      "Default": "GetSourceFilesystemOnlyNoReplication"
+    },
+
+    "GetSourceFilesystemOnlyNoReplication": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "FileSystemId.$": "$.Input.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "source": {
+          "fileSystemId.$": "$.FileSystems[0].FileSystemId",
+          "name.$": "$.FileSystems[0].Name",
+          "lifeCycleState.$": "$.FileSystems[0].LifeCycleState",
+          "sizeInBytes.$": "$.FileSystems[0].SizeInBytes.Value",
+          "numberOfMountTargets.$": "$.FileSystems[0].NumberOfMountTargets"
+        }
+      },
+      "ResultPath": "$.FilesystemInfo",
+      "Next": "SetStatusCriticalNoReplicationWithInfo",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FilesystemError",
+          "Next": "SetStatusCriticalNoReplication"
+        }
+      ]
+    },
+
+    "GetBothFilesystemsNoReplication": {
+      "Type": "Parallel",
+      "Comment": "Get details of source and destination filesystems when no replication",
+      "Branches": [
+        {
+          "StartAt": "GetSourceFSNoRepl",
+          "States": {
+            "GetSourceFSNoRepl": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.Input.SourceFileSystemId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "ResultSelector": {
+                "type": "source",
+                "fileSystemId.$": "$.FileSystems[0].FileSystemId",
+                "name.$": "$.FileSystems[0].Name",
+                "lifeCycleState.$": "$.FileSystems[0].LifeCycleState",
+                "sizeInBytes.$": "$.FileSystems[0].SizeInBytes.Value",
+                "numberOfMountTargets.$": "$.FileSystems[0].NumberOfMountTargets"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "SourceFSErrorNoRepl"
+                }
+              ]
+            },
+            "SourceFSErrorNoRepl": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "source",
+                "error": "Failed to describe source filesystem",
+                "lifeCycleState": "error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GetDestFSNoRepl",
+          "States": {
+            "GetDestFSNoRepl": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.Input.DestinationFileSystemId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "ResultSelector": {
+                "type": "destination",
+                "fileSystemId.$": "$.FileSystems[0].FileSystemId",
+                "name.$": "$.FileSystems[0].Name",
+                "lifeCycleState.$": "$.FileSystems[0].LifeCycleState",
+                "sizeInBytes.$": "$.FileSystems[0].SizeInBytes.Value",
+                "numberOfMountTargets.$": "$.FileSystems[0].NumberOfMountTargets"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DestFSErrorNoRepl"
+                }
+              ]
+            },
+            "DestFSErrorNoRepl": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "destination",
+                "error": "Failed to describe destination filesystem",
+                "lifeCycleState": "error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FilesystemResults",
+      "Next": "SetStatusCriticalNoReplicationWithBothEFS",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FilesystemError",
+          "Next": "SetStatusCriticalNoReplication"
+        }
+      ]
+    },
+
+    "SetStatusCriticalNoReplicationWithBothEFS": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "repl",
+        "check_type": "efs-sync",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFileSystemId.$": "$.Input.SourceFileSystemId",
+            "destinationFileSystemId.$": "$.Input.DestinationFileSystemId",
+            "replicationState": "NOT_CONFIGURED",
+            "error": "No replication configuration found"
+          },
+          "sourceFilesystem.$": "$.FilesystemResults[0]",
+          "destinationFilesystem.$": "$.FilesystemResults[1]",
+          "issues": ["No EFS replication configuration found between source and destination"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:repl-efs-sync-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SetStatusCriticalNoReplicationWithInfo": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "repl",
+        "check_type": "efs-sync",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFileSystemId.$": "$.Input.SourceFileSystemId",
+            "replicationState": "NOT_CONFIGURED",
+            "error": "No replication configuration found"
+          },
+          "sourceFilesystem.$": "$.FilesystemInfo.source",
+          "issues": ["No EFS replication configuration found for source filesystem"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:repl-efs-sync-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SetStatusCriticalNoReplication": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "repl",
+        "check_type": "efs-sync",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFileSystemId.$": "$.Input.SourceFileSystemId",
+            "replicationState": "NOT_CONFIGURED",
+            "error": "No replication configuration found"
+          },
+          "issues": ["No EFS replication configuration found for source filesystem"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:repl-efs-sync-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ParallelFilesystemChecks": {
+      "Type": "Parallel",
+      "Comment": "Get details of source and destination filesystems in parallel",
+      "Branches": [
+        {
+          "StartAt": "GetSourceFilesystem",
+          "States": {
+            "GetSourceFilesystem": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.Input.SourceFileSystemId"
+              },
+              "ResultSelector": {
+                "type": "source",
+                "fileSystemId.$": "$.FileSystems[0].FileSystemId",
+                "name.$": "$.FileSystems[0].Name",
+                "lifeCycleState.$": "$.FileSystems[0].LifeCycleState",
+                "sizeInBytes.$": "$.FileSystems[0].SizeInBytes.Value",
+                "numberOfMountTargets.$": "$.FileSystems[0].NumberOfMountTargets"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "SourceFilesystemError"
+                }
+              ]
+            },
+            "SourceFilesystemError": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "source",
+                "error": "Failed to describe source filesystem",
+                "lifeCycleState": "error"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GetDestinationFilesystem",
+          "States": {
+            "GetDestinationFilesystem": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.ReplicationConfig.Replications[0].Destinations[0].FileSystemId"
+              },
+              "ResultSelector": {
+                "type": "destination",
+                "fileSystemId.$": "$.FileSystems[0].FileSystemId",
+                "name.$": "$.FileSystems[0].Name",
+                "lifeCycleState.$": "$.FileSystems[0].LifeCycleState",
+                "sizeInBytes.$": "$.FileSystems[0].SizeInBytes.Value",
+                "numberOfMountTargets.$": "$.FileSystems[0].NumberOfMountTargets"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DestinationFilesystemError"
+                }
+              ]
+            },
+            "DestinationFilesystemError": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "destination",
+                "error": "Failed to describe destination filesystem",
+                "lifeCycleState": "error"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FilesystemResults",
+      "Next": "ProcessResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FilesystemError",
+          "Next": "SetStatusCriticalFilesystemError"
+        }
+      ]
+    },
+
+    "SetStatusCriticalFilesystemError": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "repl",
+        "check_type": "efs-sync",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFileSystemId.$": "$.Input.SourceFileSystemId",
+            "error": "Failed to describe filesystems"
+          },
+          "issues": ["Failed to retrieve filesystem details"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:repl-efs-sync-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ProcessResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessEfsReplicationLambdaArn}",
+        "Payload": {
+          "Input.$": "$.Input",
+          "Timestamp.$": "$.Timestamp",
+          "ReplicationConfig.$": "$.ReplicationConfig",
+          "FilesystemResults.$": "$.FilesystemResults"
+        }
+      },
+      "ResultSelector": {
+        "project.$": "$.Payload.project",
+        "env.$": "$.Payload.env",
+        "category.$": "$.Payload.category",
+        "check_type.$": "$.Payload.check_type",
+        "payload.$": "$.Payload.payload",
+        "updated_by.$": "$.Payload.updated_by"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareForSave",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "SetStatusErrorProcessing"
+        }
+      ]
+    },
+
+    "SetStatusErrorProcessing": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "repl",
+        "check_type": "efs-sync",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "sourceFileSystemId.$": "$.Input.SourceFileSystemId",
+            "error": "Failed to process replication results"
+          },
+          "issues": ["Lambda processing error"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:repl-efs-sync-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareForSave": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.ProcessedResult.project",
+        "env.$": "$.ProcessedResult.env",
+        "category.$": "$.ProcessedResult.category",
+        "check_type.$": "$.ProcessedResult.check_type",
+        "payload.$": "$.ProcessedResult.payload",
+        "updated_by.$": "$.ProcessedResult.updated_by"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "End": true,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Failed",
+        "Error": "Failed to save state to DynamoDB",
+        "Details.$": "$.SaveError"
+      },
+      "End": true
+    }
+  }
+}

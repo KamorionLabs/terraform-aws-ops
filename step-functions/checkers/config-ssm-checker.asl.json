@@ -1,0 +1,231 @@
+{
+  "Comment": "Fetches SSM Parameter Store parameters from AWS accounts and stores state in DynamoDB for comparison. New format: project/env/category/check_type",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.CrossAccountRoleArn",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ParameterPaths",
+              "IsPresent": true
+            }
+          ],
+          "Next": "PrepareInput"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, CrossAccountRoleArn, and ParameterPaths are required"
+    },
+
+    "PrepareInput": {
+      "Type": "Pass",
+      "Comment": "Prepare input with defaults for fetch Lambda",
+      "Parameters": {
+        "Project.$": "$.Project",
+        "Env.$": "$.Env",
+        "Instance.$": "$.Instance",
+        "Environment.$": "$.Environment",
+        "CrossAccountRoleArn.$": "$.CrossAccountRoleArn",
+        "Region": "eu-central-1",
+        "ParameterPaths.$": "$.ParameterPaths"
+      },
+      "ResultPath": "$.Input",
+      "Next": "FetchSSMParameters"
+    },
+
+    "FetchSSMParameters": {
+      "Type": "Task",
+      "Comment": "Fetch SSM parameters from the target account",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchSsmLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "RoleArn.$": "$.Input.CrossAccountRoleArn",
+          "Region.$": "$.Input.Region",
+          "ParameterPaths.$": "$.Input.ParameterPaths"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.FetchResult",
+      "Next": "CheckFetchResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchFailed"
+        }
+      ]
+    },
+
+    "FetchFailed": {
+      "Type": "Pass",
+      "Comment": "Handle fetch failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "config",
+        "check_type": "ssm",
+        "payload": {
+          "status": "error",
+          "summary": {
+            "totalParameters": 0,
+            "pathsChecked": 0,
+            "pathsWithErrors": 0
+          },
+          "issues": ["Failed to fetch SSM parameters"],
+          "healthy": false,
+          "timestamp.$": "$$.State.EnteredTime"
+        },
+        "updated_by": "step-function:config-ssm-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "CheckFetchResult": {
+      "Type": "Choice",
+      "Comment": "Check if fetch was successful",
+      "Choices": [
+        {
+          "Variable": "$.FetchResult.statusCode",
+          "NumericEquals": 200,
+          "Next": "PreparePayload"
+        }
+      ],
+      "Default": "FetchReturnedError"
+    },
+
+    "FetchReturnedError": {
+      "Type": "Pass",
+      "Comment": "Handle non-200 response from fetch Lambda",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "config",
+        "check_type": "ssm",
+        "payload.$": "$.FetchResult.payload",
+        "updated_by": "step-function:config-ssm-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PreparePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "config",
+        "check_type": "ssm",
+        "payload.$": "$.FetchResult.payload",
+        "updated_by": "step-function:config-ssm-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveFailed"
+        }
+      ]
+    },
+
+    "SaveFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save failure but return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "config",
+        "check_type": "ssm",
+        "result.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "config",
+        "check_type": "ssm",
+        "result": {
+          "status.$": "$.payload.status",
+          "summary.$": "$.payload.summary"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}
