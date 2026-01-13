@@ -4,7 +4,7 @@ Generate JSON input files for refresh Step Functions.
 
 Usage:
     python generate_refresh_inputs.py --scenario mono-account --output-dir ./test-mi3
-    python generate_refresh_inputs.py --scenario cross-account --output-dir ./test-cross
+    python generate_refresh_inputs.py --scenario cross-account-it --output-dir ./test-cross-it
     python generate_refresh_inputs.py --source-cluster my-prod --dest-cluster my-staging \
         --source-profile prod --dest-profile staging --output-dir ./test-custom
 """
@@ -16,7 +16,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Dict
 
 
 @dataclass
@@ -40,7 +40,9 @@ class ClusterInfo:
     security_groups: list = field(default_factory=list)
     subnet_group: Optional[str] = None
     parameter_group: Optional[str] = None
+    instance_parameter_group: Optional[str] = None
     kms_key_id: Optional[str] = None
+    tags: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -49,6 +51,7 @@ class RefreshConfig:
     destination: AccountConfig
     source_cluster: ClusterInfo
     dest_cluster: ClusterInfo
+    tmp_cluster_identifier: str
     region: str
     orchestrator_account: str = "025922408720"
     orchestrator_profile: str = "shared-services/AWSAdministratorAccess"
@@ -57,10 +60,6 @@ class RefreshConfig:
     @property
     def is_same_account(self) -> bool:
         return self.source.account_id == self.destination.account_id
-
-    @property
-    def tmp_cluster_id(self) -> str:
-        return f"{self.dest_cluster.identifier}-restore"
 
     @property
     def prepare_sfn_arn(self) -> str:
@@ -98,6 +97,22 @@ class AWSClient:
             return None
 
         cluster = result["DBClusters"][0]
+
+        # Get instance parameter group from first instance if available
+        instance_pg = None
+        instances = cluster.get("DBClusterMembers", [])
+        if instances:
+            instance_id = instances[0].get("DBInstanceIdentifier")
+            if instance_id:
+                instance_result = cls.run([
+                    "rds", "describe-db-instances",
+                    "--db-instance-identifier", instance_id
+                ], profile, region)
+                if instance_result and instance_result.get("DBInstances"):
+                    pgs = instance_result["DBInstances"][0].get("DBParameterGroups", [])
+                    if pgs:
+                        instance_pg = pgs[0].get("DBParameterGroupName")
+
         return ClusterInfo(
             identifier=cluster_id,
             engine=cluster.get("Engine"),
@@ -105,26 +120,19 @@ class AWSClient:
             security_groups=[sg["VpcSecurityGroupId"] for sg in cluster.get("VpcSecurityGroups", [])],
             subnet_group=cluster.get("DBSubnetGroup"),
             parameter_group=cluster.get("DBClusterParameterGroup"),
-            kms_key_id=cluster.get("KmsKeyId")
+            instance_parameter_group=instance_pg,
+            kms_key_id=cluster.get("KmsKeyId"),
+            tags=cluster.get("TagList", [])
         )
 
     @classmethod
-    def get_latest_snapshot(cls, cluster_id: str, profile: str, region: str) -> Optional[str]:
+    def get_parameter_groups(cls, profile: str, region: str, family: str = "aurora-mysql8.0") -> List[str]:
+        """Get available DB parameter groups for a family."""
         result = cls.run([
-            "rds", "describe-db-cluster-snapshots",
-            "--db-cluster-identifier", cluster_id,
-            "--snapshot-type", "automated",
-            "--query", "DBClusterSnapshots[-1].DBClusterSnapshotIdentifier"
+            "rds", "describe-db-parameter-groups",
+            "--query", f"DBParameterGroups[?DBParameterGroupFamily=='{family}'].DBParameterGroupName"
         ], profile, region)
-        return result if isinstance(result, str) else None
-
-    @classmethod
-    def get_sfn_arn(cls, sfn_name: str, profile: str, region: str) -> Optional[str]:
-        result = cls.run([
-            "stepfunctions", "list-state-machines",
-            "--query", f"stateMachines[?name=='{sfn_name}'].stateMachineArn | [0]"
-        ], profile, region)
-        return result if isinstance(result, str) and result != "None" else None
+        return result if isinstance(result, list) else []
 
 
 class InputGenerator:
@@ -161,18 +169,45 @@ class InputGenerator:
             "DestinationAccount": self.config.destination.to_dict(),
             "IsSameAccount": self.config.is_same_account,
             "Region": self.config.region,
-            "PrepareSnapshotStateMachineArn": self.config.prepare_sfn_arn
+            "PrepareSnapshotStateMachineArn": self.config.prepare_sfn_arn,
+            "TmpClusterIdentifier": self.config.tmp_cluster_identifier
         })
+
+    def _build_restore_tags(self) -> List[Dict[str, str]]:
+        """Build tags for restored resources."""
+        # Start with source tags, modify for destination
+        tags = []
+        source_tags = {t["Key"]: t["Value"] for t in self.config.source_cluster.tags}
+
+        # Keep some tags, modify others
+        for key, value in source_tags.items():
+            if key in ["Name"]:
+                tags.append({"Key": key, "Value": self.config.tmp_cluster_identifier})
+            elif key in ["nbs_environment", "customer_environment"]:
+                # Change prod -> staging for refresh
+                if "prod" in value.lower():
+                    tags.append({"Key": key, "Value": "staging"})
+                else:
+                    tags.append({"Key": key, "Value": value})
+            elif key not in ["terraform"]:  # Skip terraform tag
+                tags.append({"Key": key, "Value": value})
+
+        # Add refresh-specific tags
+        tags.append({"Key": "refresh", "Value": "true"})
+        tags.append({"Key": "refresh-cluster", "Value": self.config.source_cluster.identifier})
+
+        return tags
 
     def _generate_phase1_db(self):
         dest = self.config.destination.to_dict()
         src = self.config.source.to_dict()
         dc = self.config.dest_cluster
+        tmp_id = self.config.tmp_cluster_identifier
 
         # 01 - Ensure cluster not exists
         self._write_json(self.output_dir / "phase1-db/01-ensure-cluster-not-exists.json", {
             "DestinationAccount": dest,
-            "DbClusterIdentifier": self.config.tmp_cluster_id
+            "DbClusterIdentifier": tmp_id
         })
 
         # 02 - Restore cluster
@@ -181,57 +216,66 @@ class InputGenerator:
             "DestinationAccount": dest,
             "PrepareSnapshotStateMachineArn": self.config.prepare_sfn_arn,
             "SourceDBClusterIdentifier": self.config.source_cluster.identifier,
-            "TmpDbClusterIdentifier": self.config.tmp_cluster_id,
+            "TmpDbClusterIdentifier": tmp_id,
             "RestoreType": "from-snapshot",
             "SnapshotMode": "copy-latest",
             "DbInstanceClass": "db.serverless",
             "AuroraServerlessMinCapacity": 0.5,
             "AuroraServerlessMaxCapacity": 6,
-            "DbSubnetGroupName": dc.subnet_group or "PLACEHOLDER",
-            "VpcSecurityGroupIds": dc.security_groups or ["sg-PLACEHOLDER"],
-            "DbClusterParameterGroupName": dc.parameter_group or "PLACEHOLDER",
+            "DbSubnetGroupName": dc.subnet_group or "PLACEHOLDER_SUBNET_GROUP",
+            "VpcSecurityGroupIds": dc.security_groups or ["PLACEHOLDER_SG"],
+            "DbClusterParameterGroupName": dc.parameter_group or "default.aurora-mysql8.0",
             "KmsKeyId": dc.kms_key_id or "alias/aws/rds"
         })
 
         # 03 - Create instance
-        instance_prefix = self.config.dest_cluster.identifier.split("-")[0]
+        # Use destination instance parameter group, or try to find one, or use default
+        instance_pg = dc.instance_parameter_group or "default.aurora-mysql8.0"
+
+        # Build tags for the instance
+        restore_tags = self._build_restore_tags()
+
         self._write_json(self.output_dir / "phase1-db/03-create-instance.json", {
             "DestinationAccount": dest,
-            "DbClusterIdentifier": self.config.tmp_cluster_id,
-            "DbInstanceClass": "db.serverless",
-            "Engine": "aurora-mysql",
+            "DbClusterIdentifier": tmp_id,
+            "DbInstanceIdentifierPrefix": tmp_id,
+            "DbParameterGroupName": instance_pg,
+            "DbSubnetGroupName": dc.subnet_group or "PLACEHOLDER_SUBNET_GROUP",
+            "Tags": restore_tags,
             "DbInstances": [
-                {"DbInstanceIdentifier": f"{instance_prefix}-restore-0"}
+                {
+                    "DbInstanceClass": "db.serverless",
+                    "PromotionTier": 0
+                }
             ]
         })
 
         # 04 - Enable master secret
         self._write_json(self.output_dir / "phase1-db/04-enable-master-secret.json", {
             "DestinationAccount": dest,
-            "DbClusterIdentifier": self.config.tmp_cluster_id,
-            "Region": self.config.region,
-            "KmsKeyId": "alias/aws/secretsmanager"
+            "DbClusterIdentifier": tmp_id,
+            "MasterUserSecretKmsKeyId": "alias/aws/secretsmanager"
         })
 
     def _generate_phase2_switch(self):
         dest = self.config.destination.to_dict()
         dc_id = self.config.dest_cluster.identifier
-        instance_prefix = dc_id.split("-")[0]
+        tmp_id = self.config.tmp_cluster_identifier
 
         # 01 - Rename old cluster
         self._write_json(self.output_dir / "phase2-switch/01-rename-old-cluster.json", {
             "DestinationAccount": dest,
             "DbClusterIdentifier": dc_id,
             "NewDbClusterIdentifier": f"{dc_id}-old",
-            "NewInstanceIdentifierPrefix": f"{instance_prefix}-old"
+            "NewInstanceIdentifierPrefix": f"{dc_id}-old"
         })
 
         # 02 - Rename new cluster
         self._write_json(self.output_dir / "phase2-switch/02-rename-new-cluster.json", {
             "DestinationAccount": dest,
-            "DbClusterIdentifier": self.config.tmp_cluster_id,
+            "DbClusterIdentifier": tmp_id,
             "NewDbClusterIdentifier": dc_id,
-            "NewInstanceIdentifierPrefix": instance_prefix
+            "NewInstanceIdentifierPrefix": dc_id
         })
 
     def _generate_phase3_cleanup(self):
@@ -265,6 +309,16 @@ ORCHESTRATOR_ACCOUNT="025922408720"
 usage() {
     echo "Usage: $0 <step-function-suffix> <input-file> [execution-name]"
     echo "Example: $0 db-ensure-cluster-not-exists phase1-db/01-ensure-cluster-not-exists.json"
+    echo ""
+    echo "Available step functions:"
+    echo "  db-ensure-cluster-not-exists"
+    echo "  db-restore-cluster"
+    echo "  db-create-instance"
+    echo "  db-enable-master-secret"
+    echo "  db-rename-cluster"
+    echo "  db-delete-cluster"
+    echo "  db-stop-cluster"
+    echo "  efs-restore-from-backup"
     exit 1
 }
 
@@ -296,7 +350,8 @@ RESULT=$(aws stepfunctions start-execution \\
 EXEC_ARN=$(echo "$RESULT" | jq -r '.executionArn')
 echo "Started: $EXEC_ARN"
 echo ""
-echo "Monitor: aws stepfunctions describe-execution --execution-arn '$EXEC_ARN' --query 'status' --profile $AWS_PROFILE --region $AWS_REGION"
+echo "Monitor:"
+echo "  aws stepfunctions describe-execution --execution-arn '$EXEC_ARN' --query 'status' --output text --profile $AWS_PROFILE --region $AWS_REGION"
 '''
         script_path = self.output_dir / "scripts/run-step.sh"
         script_path.write_text(script)
@@ -304,39 +359,86 @@ echo "Monitor: aws stepfunctions describe-execution --execution-arn '$EXEC_ARN' 
         print(f"  Generated: scripts/run-step.sh")
 
     def _print_summary(self):
-        print("\n" + "=" * 50)
+        print("\n" + "=" * 60)
         print(f"Generated inputs in: {self.output_dir}")
-        print("=" * 50)
-        print(f"Source: {self.config.source_cluster.identifier} ({self.config.source.account_id})")
-        print(f"Destination: {self.config.dest_cluster.identifier} ({self.config.destination.account_id})")
-        print(f"Mode: {'Same-account' if self.config.is_same_account else 'Cross-account'}")
+        print("=" * 60)
+        print(f"Source cluster:      {self.config.source_cluster.identifier}")
+        print(f"Source account:      {self.config.source.account_id}")
+        print(f"Destination cluster: {self.config.dest_cluster.identifier}")
+        print(f"Destination account: {self.config.destination.account_id}")
+        print(f"Temp cluster:        {self.config.tmp_cluster_identifier}")
+        print(f"Mode:                {'Same-account' if self.config.is_same_account else 'Cross-account'}")
         print("\nTo run:")
         print(f"  cd {self.output_dir}")
-        print("  ./scripts/run-step.sh db-ensure-cluster-not-exists phase1-db/01-ensure-cluster-not-exists.json")
+        print("  ./scripts/run-step.sh db-restore-cluster phase1-db/02-restore-cluster.json")
 
 
 # =============================================================================
-# Presets
+# Presets - Account and role configurations
 # =============================================================================
+
+# Role naming patterns per account
+ROLE_PATTERNS = {
+    # Legacy NBS account (073290922796)
+    "073290922796": {
+        "source": "rubix-refresh-source-role",
+        "destination": "rubix-refresh-destination-role"
+    },
+    # NewHorizon accounts use iam-dig-{env}-refresh-{source|destination}-role
+    "281127105461": {  # staging
+        "source": "iam-dig-stg-refresh-source-role",
+        "destination": "iam-dig-stg-refresh-destination-role"
+    },
+    "287223952330": {  # preprod
+        "source": "iam-dig-ppd-refresh-source-role",
+        "destination": "iam-dig-ppd-refresh-destination-role"
+    },
+    "366483377530": {  # prod
+        "source": "iam-dig-prd-refresh-source-role",
+        "destination": "iam-dig-prd-refresh-destination-role"
+    },
+    "492919832539": {  # integration
+        "source": "iam-dig-int-refresh-source-role",
+        "destination": "iam-dig-int-refresh-destination-role"
+    },
+}
+
+
+def get_role_name(account_id: str, role_type: str) -> str:
+    """Get the correct role name for an account."""
+    if account_id in ROLE_PATTERNS:
+        return ROLE_PATTERNS[account_id][role_type]
+    # Default pattern for unknown accounts
+    return f"refresh-{role_type}-role"
+
 
 PRESETS = {
     "mono-account": {
+        "description": "MI3 prod -> staging in legacy NBS account",
         "source_profile": "iph",
         "dest_profile": "iph",
         "source_cluster": "mi3-prod-eks-cluster",
         "dest_cluster": "mi3-staging-eks-cluster",
+        "tmp_cluster": "mi3-staging-eks-cluster-restore",
         "region": "eu-central-1",
-        "source_role": "rubix-refresh-source-role",
-        "dest_role": "rubix-refresh-destination-role",
     },
-    "cross-account": {
+    "cross-account-it": {
+        "description": "IT prod (legacy) -> staging (NewHorizon)",
         "source_profile": "iph",
         "dest_profile": "digital-webshop-staging/AWSAdministratorAccess",
         "source_cluster": "it-prod-eks-cluster",
-        "dest_cluster": "rubix-dig-stg-aurora",
+        "dest_cluster": "rds-dig-stg-mro-it",  # target final name
+        "tmp_cluster": "rds-dig-stg-mro-it-restore",
         "region": "eu-central-1",
-        "source_role": "rubix-refresh-source-role",
-        "dest_role": "refresh-destination-role",
+    },
+    "cross-account-mi3": {
+        "description": "MI3 prod (legacy) -> staging (NewHorizon)",
+        "source_profile": "iph",
+        "dest_profile": "digital-webshop-staging/AWSAdministratorAccess",
+        "source_cluster": "mi3-prod-eks-cluster",
+        "dest_cluster": "rds-dig-stg-mro-mi3",
+        "tmp_cluster": "rds-dig-stg-mro-mi3-restore",
+        "region": "eu-central-1",
     },
 }
 
@@ -349,17 +451,19 @@ def build_config(args) -> RefreshConfig:
     dest_profile = args.dest_profile or preset.get("dest_profile")
     source_cluster_id = args.source_cluster or preset.get("source_cluster")
     dest_cluster_id = args.dest_cluster or preset.get("dest_cluster")
+    tmp_cluster_id = args.tmp_cluster or preset.get("tmp_cluster") or f"{dest_cluster_id}-restore"
     region = args.region or preset.get("region", "eu-central-1")
-    source_role = preset.get("source_role", "rubix-refresh-source-role")
-    dest_role = preset.get("dest_role", "refresh-destination-role")
 
     if not all([source_profile, dest_profile, source_cluster_id, dest_cluster_id]):
         print("Error: Missing required parameters. Use --help for usage.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Fetching account info...")
+    print(f"Building configuration...")
+    if preset.get("description"):
+        print(f"  Preset: {args.scenario} - {preset['description']}")
 
     # Get account IDs
+    print(f"Fetching account info...")
     source_account_id = AWSClient.get_account_id(source_profile)
     dest_account_id = AWSClient.get_account_id(dest_profile)
 
@@ -370,8 +474,12 @@ def build_config(args) -> RefreshConfig:
         print(f"Error: Cannot get account ID for profile {dest_profile}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"  Source: {source_account_id} ({source_profile})")
-    print(f"  Destination: {dest_account_id} ({dest_profile})")
+    # Determine role names based on account
+    source_role = get_role_name(source_account_id, "source")
+    dest_role = get_role_name(dest_account_id, "destination")
+
+    print(f"  Source: {source_account_id} (role: {source_role})")
+    print(f"  Destination: {dest_account_id} (role: {dest_role})")
 
     # Get cluster info
     print(f"Fetching cluster info...")
@@ -379,7 +487,7 @@ def build_config(args) -> RefreshConfig:
     dest_cluster = AWSClient.get_cluster_info(dest_cluster_id, dest_profile, region)
 
     if source_cluster:
-        print(f"  Source cluster: {source_cluster_id} (found)")
+        print(f"  Source cluster: {source_cluster_id} (found, {len(source_cluster.tags)} tags)")
     else:
         print(f"  Source cluster: {source_cluster_id} (not found, using defaults)")
         source_cluster = ClusterInfo(identifier=source_cluster_id)
@@ -403,22 +511,60 @@ def build_config(args) -> RefreshConfig:
         ),
         source_cluster=source_cluster,
         dest_cluster=dest_cluster,
+        tmp_cluster_identifier=tmp_cluster_id,
         region=region
     )
 
 
+def list_presets():
+    """List available presets."""
+    print("Available presets:")
+    print("-" * 60)
+    for name, config in PRESETS.items():
+        desc = config.get("description", "No description")
+        print(f"  {name}")
+        print(f"    {desc}")
+        print(f"    {config['source_cluster']} -> {config['dest_cluster']}")
+        print()
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate refresh Step Function inputs")
-    parser.add_argument("--scenario", choices=["mono-account", "cross-account", "custom"],
+    parser = argparse.ArgumentParser(
+        description="Generate refresh Step Function inputs",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Use a preset
+  %(prog)s --scenario mono-account -o ./test-mono-mi3
+  %(prog)s --scenario cross-account-it -o ./test-cross-it
+
+  # Custom configuration
+  %(prog)s --source-cluster my-prod --dest-cluster my-staging \\
+           --source-profile prod --dest-profile staging -o ./test-custom
+
+  # List available presets
+  %(prog)s --list-presets
+"""
+    )
+    parser.add_argument("--scenario", choices=list(PRESETS.keys()),
                         help="Use a preset scenario")
     parser.add_argument("--source-cluster", help="Source DB cluster identifier")
-    parser.add_argument("--dest-cluster", help="Destination DB cluster identifier")
+    parser.add_argument("--dest-cluster", help="Destination DB cluster identifier (final name)")
+    parser.add_argument("--tmp-cluster", help="Temporary cluster identifier during restore")
     parser.add_argument("--source-profile", help="AWS profile for source account")
     parser.add_argument("--dest-profile", help="AWS profile for destination account")
     parser.add_argument("--region", default="eu-central-1", help="AWS region")
-    parser.add_argument("--output-dir", "-o", required=True, help="Output directory")
+    parser.add_argument("--output-dir", "-o", help="Output directory")
+    parser.add_argument("--list-presets", action="store_true", help="List available presets")
 
     args = parser.parse_args()
+
+    if args.list_presets:
+        list_presets()
+        sys.exit(0)
+
+    if not args.output_dir:
+        parser.error("--output-dir is required")
 
     if not args.scenario and not (args.source_cluster and args.dest_cluster):
         parser.print_help()
