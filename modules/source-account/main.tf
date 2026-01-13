@@ -208,6 +208,7 @@ resource "aws_iam_role_policy" "efs_access" {
         Action = [
           "backup:DescribeBackupVault",
           "backup:ListRecoveryPointsByBackupVault",
+          "backup:ListRecoveryPointsByResource",
           "backup:DescribeRecoveryPoint",
           "backup:GetRecoveryPointRestoreMetadata"
         ]

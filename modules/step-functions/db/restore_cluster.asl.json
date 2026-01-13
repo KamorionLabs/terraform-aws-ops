@@ -1,5 +1,5 @@
 {
-  "Comment": "Cross-Account Micro-Step-Function to restore an RDS/Aurora cluster either from a snapshot or point-in-time, handling standard and serverless cases. Supports cross-account snapshot restore.",
+  "Comment": "Restore an RDS/Aurora cluster from snapshot or point-in-time. Uses prepare_snapshot_for_restore for same-account or cross-account snapshot preparation (copy + share).",
   "StartAt": "CheckExistingRestoreCluster",
   "States": {
     "CheckExistingRestoreCluster": {
@@ -73,7 +73,7 @@
         {
           "Variable": "$.RestoreType",
           "StringEquals": "from-snapshot",
-          "Next": "GetLatestSnapshot"
+          "Next": "SetDefaultSnapshotMode"
         },
         {
           "Variable": "$.RestoreType",
@@ -99,55 +99,41 @@
       ],
       "Default": "RestoreClusterToSpecificTime"
     },
-    "GetLatestSnapshot": {
-      "Type": "Task",
-      "Comment": "Get latest snapshot from source account (cross-account)",
-      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
-      "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
-      },
+    "SetDefaultSnapshotMode": {
+      "Type": "Pass",
+      "Comment": "Set default SnapshotMode to copy-latest if not provided",
       "Parameters": {
-        "DbClusterIdentifier.$": "$.SourceDBClusterIdentifier"
+        "SnapshotMode": "copy-latest"
+      },
+      "ResultPath": "$.Defaults",
+      "Next": "PrepareSnapshot"
+    },
+    "PrepareSnapshot": {
+      "Type": "Task",
+      "Comment": "Call prepare_snapshot_for_restore to handle same-account or cross-account snapshot preparation",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.PrepareSnapshotStateMachineArn",
+        "Input": {
+          "SourceAccount.$": "$.SourceAccount",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
+          "Mode.$": "States.ArrayGetItem(States.Array($.SnapshotMode, $.Defaults.SnapshotMode), 0)"
+        }
       },
       "ResultSelector": {
-        "SnapshotIdentifier.$": "$.DbClusterSnapshots[4].DbClusterSnapshotIdentifier",
-        "SnapshotArn.$": "$.DbClusterSnapshots[4].DbClusterSnapshotArn",
-        "SnapshotCreateTime.$": "$.DbClusterSnapshots[4].SnapshotCreateTime",
-        "EngineVersion.$": "$.DbClusterSnapshots[4].EngineVersion"
+        "SnapshotIdentifier.$": "$.Output.SnapshotIdentifier",
+        "SnapshotArn.$": "$.Output.SnapshotArn",
+        "EngineVersion.$": "$.Output.EngineVersion",
+        "Shared.$": "$.Output.Shared"
       },
       "ResultPath": "$.SnapshotInfo",
-      "Next": "ShareSnapshotWithDestination",
+      "Next": "IsServerless",
       "Catch": [{
         "ErrorEquals": ["States.ALL"],
-        "ResultPath": "$.Error.SnapshotRetrieval",
+        "ResultPath": "$.Error.PrepareSnapshot",
         "Next": "RestoreFailed"
       }]
-    },
-    "ShareSnapshotWithDestination": {
-      "Type": "Task",
-      "Comment": "Share snapshot with destination account",
-      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBClusterSnapshotAttribute",
-      "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
-      },
-      "Parameters": {
-        "DbClusterSnapshotIdentifier.$": "$.SnapshotInfo.SnapshotIdentifier",
-        "AttributeName": "restore",
-        "ValuesToAdd.$": "States.Array($.DestinationAccount.AccountId)"
-      },
-      "ResultPath": "$.ShareResult",
-      "Next": "WaitSnapshotShared",
-      "Catch": [{
-        "ErrorEquals": ["States.ALL"],
-        "ResultPath": "$.Error.SnapshotSharing",
-        "Next": "RestoreFailed"
-      }]
-    },
-    "WaitSnapshotShared": {
-      "Type": "Wait",
-      "Seconds": 5,
-      "Comment": "Wait for snapshot sharing to propagate",
-      "Next": "IsServerless"
     },
     "IsServerless": {
       "Type": "Choice",
@@ -428,7 +414,9 @@
       "Parameters": {
         "Status": "Completed",
         "ModuleName": "restore_cluster",
-        "PrimaryIdentifier.$": "$.TmpDbClusterIdentifier"
+        "PrimaryIdentifier.$": "$.TmpDbClusterIdentifier",
+        "SnapshotUsed.$": "$.SnapshotInfo.SnapshotIdentifier",
+        "CrossAccountShared.$": "$.SnapshotInfo.Shared"
       },
       "Next": "RestoreSucceeded"
     },

@@ -1,0 +1,471 @@
+{
+  "Comment": "Prepares a snapshot for cross-account or same-account restore. Handles snapshot copy (from automated) or creation (from cluster), and sharing with KMS grants when needed.",
+  "QueryLanguage": "JSONata",
+  "StartAt": "IsSameAccount",
+  "States": {
+    "IsSameAccount": {
+      "Type": "Choice",
+      "Comment": "Check if source and destination are the same account",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.SourceAccount.AccountId = $states.input.DestinationAccount.AccountId %}",
+          "Next": "GetLatestSnapshotSameAccount"
+        }
+      ],
+      "Default": "ChooseSnapshotMode"
+    },
+
+    "GetLatestSnapshotSameAccount": {
+      "Type": "Task",
+      "Comment": "Same account - just get the latest automated snapshot",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "SnapshotType": "automated"
+      },
+      "Output": {
+        "SnapshotIdentifier": "{% $states.result.DbClusterSnapshots[-1].DbClusterSnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.result.DbClusterSnapshots[-1].DbClusterSnapshotArn %}",
+        "EngineVersion": "{% $states.result.DbClusterSnapshots[-1].EngineVersion %}",
+        "SnapshotCreateTime": "{% $states.result.DbClusterSnapshots[-1].SnapshotCreateTime %}"
+      },
+      "Next": "PrepareOutputSameAccount",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
+    },
+
+    "PrepareOutputSameAccount": {
+      "Type": "Pass",
+      "Comment": "Output for same-account scenario",
+      "Output": {
+        "Status": "Completed",
+        "ModuleName": "prepare_snapshot_for_restore",
+        "Mode": "same-account",
+        "SnapshotIdentifier": "{% $states.input.SnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.input.SnapshotArn %}",
+        "EngineVersion": "{% $states.input.EngineVersion %}",
+        "SnapshotCreateTime": "{% $states.input.SnapshotCreateTime %}",
+        "Shared": false
+      },
+      "Next": "PrepareSucceeded"
+    },
+
+    "ChooseSnapshotMode": {
+      "Type": "Choice",
+      "Comment": "Choose between copying latest automated snapshot or creating a new manual one",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.Mode = 'create-manual' %}",
+          "Next": "GenerateManualSnapshotId"
+        }
+      ],
+      "Default": "GetLatestSnapshotForCopy"
+    },
+
+    "GenerateManualSnapshotId": {
+      "Type": "Pass",
+      "Comment": "Generate unique ID for the manual snapshot",
+      "Output": "{% $merge([$states.input, {'ManualSnapshotParams': {'TargetSnapshotId': 'refresh-manual-' & $substringAfter($states.context.Execution.Name, ':') }}]) %}",
+      "Next": "CreateManualSnapshot"
+    },
+
+    "GetLatestSnapshotForCopy": {
+      "Type": "Task",
+      "Comment": "Get latest automated snapshot to copy",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "SnapshotType": "automated"
+      },
+      "Output": {
+        "SourceAccount": "{% $states.input.SourceAccount %}",
+        "DestinationAccount": "{% $states.input.DestinationAccount %}",
+        "SourceDBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "Mode": "{% $states.input.Mode %}",
+        "SourceSnapshot": {
+          "SourceSnapshotId": "{% $states.result.DbClusterSnapshots[-1].DbClusterSnapshotIdentifier %}",
+          "SourceSnapshotArn": "{% $states.result.DbClusterSnapshots[-1].DbClusterSnapshotArn %}",
+          "EngineVersion": "{% $states.result.DbClusterSnapshots[-1].EngineVersion %}",
+          "StorageEncrypted": "{% $states.result.DbClusterSnapshots[-1].StorageEncrypted %}",
+          "KmsKeyId": "{% $states.result.DbClusterSnapshots[-1].KmsKeyId ? $states.result.DbClusterSnapshots[-1].KmsKeyId : null %}"
+        }
+      },
+      "Next": "GenerateCopySnapshotId",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
+    },
+
+    "GenerateCopySnapshotId": {
+      "Type": "Pass",
+      "Comment": "Generate unique ID for the copied snapshot",
+      "Output": "{% $merge([$states.input, {'CopyParams': {'TargetSnapshotId': 'refresh-copy-' & $substringAfter($states.context.Execution.Name, ':') }}]) %}",
+      "Next": "CopySnapshot"
+    },
+
+    "CopySnapshot": {
+      "Type": "Task",
+      "Comment": "Copy automated snapshot to manual snapshot (required for sharing)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:copyDBClusterSnapshot",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "SourceDBClusterSnapshotIdentifier": "{% $states.input.SourceSnapshot.SourceSnapshotId %}",
+        "TargetDBClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}",
+        "CopyTags": true,
+        "Tags": [
+          {
+            "Key": "CreatedBy",
+            "Value": "RefreshOrchestrator"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "CrossAccountRefresh"
+          },
+          {
+            "Key": "SourceSnapshot",
+            "Value": "{% $states.input.SourceSnapshot.SourceSnapshotId %}"
+          },
+          {
+            "Key": "CreatedAt",
+            "Value": "{% $states.context.State.EnteredTime %}"
+          }
+        ]
+      },
+      "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshot.Status}}]) %}",
+      "Next": "WaitCopySnapshot",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterSnapshotAlreadyExistsFault"],
+          "Output": "{% $states.input %}",
+          "Next": "GetExistingCopiedSnapshot"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PrepareFailed"
+        }
+      ]
+    },
+
+    "GetExistingCopiedSnapshot": {
+      "Type": "Task",
+      "Comment": "Get existing copied snapshot if it already exists",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}"
+      },
+      "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshots[0].Status}}]) %}",
+      "Next": "IsCopyComplete"
+    },
+
+    "WaitCopySnapshot": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckCopyStatus"
+    },
+
+    "CheckCopyStatus": {
+      "Type": "Task",
+      "Comment": "Check copy progress",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}"
+      },
+      "Output": "{% $merge([$states.input, {'CopyStatus': {'Status': $states.result.DbClusterSnapshots[0].Status, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn}}]) %}",
+      "Next": "IsCopyComplete"
+    },
+
+    "IsCopyComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.CopiedSnapshot.Status = 'available' or $states.input.CopyStatus.Status = 'available' %}",
+          "Next": "PrepareSnapshotInfoFromCopy"
+        },
+        {
+          "Condition": "{% $states.input.CopiedSnapshot.Status = 'failed' or $states.input.CopyStatus.Status = 'failed' %}",
+          "Next": "PrepareFailed"
+        }
+      ],
+      "Default": "WaitCopySnapshot"
+    },
+
+    "PrepareSnapshotInfoFromCopy": {
+      "Type": "Pass",
+      "Comment": "Prepare snapshot info from copied snapshot",
+      "Output": "{% $merge([$states.input, {'PreparedSnapshot': {'SnapshotIdentifier': $states.input.CopiedSnapshot.SnapshotIdentifier, 'SnapshotArn': $states.input.CopiedSnapshot.SnapshotArn, 'EngineVersion': $states.input.SourceSnapshot.EngineVersion, 'StorageEncrypted': $states.input.SourceSnapshot.StorageEncrypted, 'KmsKeyId': $states.input.SourceSnapshot.KmsKeyId, 'Mode': 'copy-latest'}}]) %}",
+      "Next": "IsSnapshotEncrypted"
+    },
+
+    "CreateManualSnapshot": {
+      "Type": "Task",
+      "Comment": "Create a new manual snapshot from the source cluster",
+      "Resource": "arn:aws:states:::aws-sdk:rds:createDBClusterSnapshot",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "DbClusterSnapshotIdentifier": "{% $states.input.ManualSnapshotParams.TargetSnapshotId %}",
+        "Tags": [
+          {
+            "Key": "CreatedBy",
+            "Value": "RefreshOrchestrator"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "CrossAccountRefresh"
+          },
+          {
+            "Key": "SourceCluster",
+            "Value": "{% $states.input.SourceDBClusterIdentifier %}"
+          },
+          {
+            "Key": "CreatedAt",
+            "Value": "{% $states.context.State.EnteredTime %}"
+          }
+        ]
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshot.Status, 'EngineVersion': $states.result.DbClusterSnapshot.EngineVersion, 'StorageEncrypted': $states.result.DbClusterSnapshot.StorageEncrypted, 'KmsKeyId': $states.result.DbClusterSnapshot.KmsKeyId ? $states.result.DbClusterSnapshot.KmsKeyId : null}}]) %}",
+      "Next": "WaitManualSnapshot",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterSnapshotAlreadyExistsFault"],
+          "Output": "{% $states.input %}",
+          "Next": "GetExistingManualSnapshot"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PrepareFailed"
+        }
+      ]
+    },
+
+    "GetExistingManualSnapshot": {
+      "Type": "Task",
+      "Comment": "Get existing manual snapshot if it already exists",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.ManualSnapshotParams.TargetSnapshotId %}"
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshots[0].Status, 'EngineVersion': $states.result.DbClusterSnapshots[0].EngineVersion, 'StorageEncrypted': $states.result.DbClusterSnapshots[0].StorageEncrypted, 'KmsKeyId': $states.result.DbClusterSnapshots[0].KmsKeyId ? $states.result.DbClusterSnapshots[0].KmsKeyId : null}}]) %}",
+      "Next": "IsManualSnapshotComplete"
+    },
+
+    "WaitManualSnapshot": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckManualSnapshotStatus"
+    },
+
+    "CheckManualSnapshotStatus": {
+      "Type": "Task",
+      "Comment": "Check manual snapshot creation progress",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.ManualSnapshot.SnapshotIdentifier %}"
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshotStatus': {'Status': $states.result.DbClusterSnapshots[0].Status}}]) %}",
+      "Next": "IsManualSnapshotComplete"
+    },
+
+    "IsManualSnapshotComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.ManualSnapshot.Status = 'available' or $states.input.ManualSnapshotStatus.Status = 'available' %}",
+          "Next": "PrepareSnapshotInfoFromManual"
+        },
+        {
+          "Condition": "{% $states.input.ManualSnapshot.Status = 'failed' or $states.input.ManualSnapshotStatus.Status = 'failed' %}",
+          "Next": "PrepareFailed"
+        }
+      ],
+      "Default": "WaitManualSnapshot"
+    },
+
+    "PrepareSnapshotInfoFromManual": {
+      "Type": "Pass",
+      "Comment": "Prepare snapshot info from manual snapshot",
+      "Output": "{% $merge([$states.input, {'PreparedSnapshot': {'SnapshotIdentifier': $states.input.ManualSnapshot.SnapshotIdentifier, 'SnapshotArn': $states.input.ManualSnapshot.SnapshotArn, 'EngineVersion': $states.input.ManualSnapshot.EngineVersion, 'StorageEncrypted': $states.input.ManualSnapshot.StorageEncrypted, 'KmsKeyId': $states.input.ManualSnapshot.KmsKeyId, 'Mode': 'create-manual'}}]) %}",
+      "Next": "IsSnapshotEncrypted"
+    },
+
+    "IsSnapshotEncrypted": {
+      "Type": "Choice",
+      "Comment": "Check if KMS grant is needed for encrypted snapshots",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.PreparedSnapshot.StorageEncrypted = true %}",
+          "Next": "CreateKMSGrant"
+        }
+      ],
+      "Default": "ShareSnapshot"
+    },
+
+    "CreateKMSGrant": {
+      "Type": "Task",
+      "Comment": "Create KMS grant for destination account to decrypt snapshot",
+      "Resource": "arn:aws:states:::aws-sdk:kms:createGrant",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "KeyId": "{% $states.input.PreparedSnapshot.KmsKeyId %}",
+        "GranteePrincipal": "{% $states.input.DestinationAccount.RoleArn %}",
+        "Operations": [
+          "Decrypt",
+          "CreateGrant",
+          "DescribeKey",
+          "GenerateDataKey",
+          "GenerateDataKeyWithoutPlaintext",
+          "ReEncryptFrom",
+          "ReEncryptTo"
+        ]
+      },
+      "Output": "{% $merge([$states.input, {'KmsGrant': {'GrantId': $states.result.GrantId, 'GrantToken': $states.result.GrantToken}}]) %}",
+      "Next": "ShareSnapshot",
+      "Catch": [
+        {
+          "ErrorEquals": ["Kms.AlreadyExistsException"],
+          "Comment": "Grant already exists, continue",
+          "Output": "{% $states.input %}",
+          "Next": "ShareSnapshot"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PrepareFailed"
+        }
+      ]
+    },
+
+    "ShareSnapshot": {
+      "Type": "Task",
+      "Comment": "Share snapshot with destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBClusterSnapshotAttribute",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotIdentifier %}",
+        "AttributeName": "restore",
+        "ValuesToAdd": ["{% $states.input.DestinationAccount.AccountId %}"]
+      },
+      "Output": "{% $merge([$states.input, {'ShareResult': $states.result}]) %}",
+      "Next": "WaitSharePropagation",
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.InvalidDBClusterSnapshotStateFault"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
+    },
+
+    "WaitSharePropagation": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Comment": "Wait for snapshot sharing to propagate",
+      "Next": "VerifySnapshotVisibleInDestination"
+    },
+
+    "VerifySnapshotVisibleInDestination": {
+      "Type": "Task",
+      "Comment": "Verify snapshot is visible in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotArn %}",
+        "IncludeShared": true
+      },
+      "Output": "{% $merge([$states.input, {'Verification': {'Visible': true, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn}}]) %}",
+      "Next": "PrepareOutputCrossAccount",
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.DBClusterSnapshotNotFoundFault"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 6,
+          "BackoffRate": 1.5,
+          "Comment": "Retry if snapshot not yet visible"
+        }
+      ],
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Output": "{% $states.input %}",
+        "Next": "PrepareOutputCrossAccountWithWarning"
+      }]
+    },
+
+    "PrepareOutputCrossAccount": {
+      "Type": "Pass",
+      "Comment": "Output for cross-account scenario",
+      "Output": {
+        "Status": "Completed",
+        "ModuleName": "prepare_snapshot_for_restore",
+        "Mode": "{% $states.input.PreparedSnapshot.Mode %}",
+        "SnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.input.PreparedSnapshot.SnapshotArn %}",
+        "EngineVersion": "{% $states.input.PreparedSnapshot.EngineVersion %}",
+        "Shared": true,
+        "SharedWith": "{% $states.input.DestinationAccount.AccountId %}"
+      },
+      "Next": "PrepareSucceeded"
+    },
+
+    "PrepareOutputCrossAccountWithWarning": {
+      "Type": "Pass",
+      "Comment": "Output when verification failed but sharing succeeded",
+      "Output": {
+        "Status": "CompletedWithWarning",
+        "ModuleName": "prepare_snapshot_for_restore",
+        "Mode": "{% $states.input.PreparedSnapshot.Mode %}",
+        "SnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.input.PreparedSnapshot.SnapshotArn %}",
+        "EngineVersion": "{% $states.input.PreparedSnapshot.EngineVersion %}",
+        "Shared": true,
+        "SharedWith": "{% $states.input.DestinationAccount.AccountId %}",
+        "Warning": "Snapshot shared but verification in destination account failed - may still work"
+      },
+      "Next": "PrepareSucceeded"
+    },
+
+    "PrepareFailed": {
+      "Type": "Fail",
+      "Error": "PrepareSnapshotFailed",
+      "Cause": "Failed to prepare snapshot for restore"
+    },
+
+    "PrepareSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

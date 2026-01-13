@@ -17,9 +17,10 @@ locals {
     create_instance = "create_instance.asl.json"
 
     # Snapshot Management
-    share_snapshot         = "share_snapshot.asl.json"
-    create_manual_snapshot = "create_manual_snapshot.asl.json"
-    list_shared_snapshots  = "list_shared_snapshots.asl.json"
+    prepare_snapshot_for_restore = "prepare_snapshot_for_restore.asl.json"
+    share_snapshot               = "share_snapshot.asl.json"
+    create_manual_snapshot       = "create_manual_snapshot.asl.json"
+    list_shared_snapshots        = "list_shared_snapshots.asl.json"
 
     # Secrets Management
     enable_master_secret = "enable_master_secret.asl.json"

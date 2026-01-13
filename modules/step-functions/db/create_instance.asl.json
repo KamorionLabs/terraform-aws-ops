@@ -85,12 +85,12 @@
           },
           "TagInstance": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+            "Resource": "arn:aws:states:::aws-sdk:rds:addTagsToResource",
             "Credentials": {
               "RoleArn.$": "$.DestinationAccountRoleArn"
             },
             "Parameters": {
-              "ResourceARNList.$": "States.Array($.Status.DbInstances[0].DbInstanceArn)",
+              "ResourceName.$": "$.Status.DbInstances[0].DbInstanceArn",
               "Tags.$": "$.Tags"
             },
             "ResultPath": null,
