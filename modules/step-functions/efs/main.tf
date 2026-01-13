@@ -16,6 +16,7 @@ locals {
     restore_from_backup             = "restore_from_backup.asl.json"
     setup_cross_account_replication = "setup_cross_account_replication.asl.json"
     check_replication_sync          = "check_replication_sync.asl.json"
+    delete_replication              = "delete_replication.asl.json"
   }
 
   # Naming: pascal = "EFS-RestoreFromBackup", kebab = "efs-restore-from-backup"
