@@ -45,3 +45,17 @@ output "lambda_subnet_ids" {
   description = "Subnet IDs for Lambda VPC configuration"
   value       = var.lambda_subnet_ids
 }
+
+# -----------------------------------------------------------------------------
+# EFS Replication Outputs
+# -----------------------------------------------------------------------------
+
+output "efs_replication_role_arn" {
+  description = "ARN of the EFS replication role (for cross-account replication)"
+  value       = var.enable_efs ? aws_iam_role.efs_replication[0].arn : null
+}
+
+output "efs_replication_role_name" {
+  description = "Name of the EFS replication role"
+  value       = var.enable_efs ? aws_iam_role.efs_replication[0].name : null
+}

@@ -310,3 +310,9 @@ variable "dynamic_lambda_prefix" {
   type        = string
   default     = null
 }
+
+variable "ssm_parameter_prefixes" {
+  description = "Additional SSM parameter path prefixes to allow (without leading slash)."
+  type        = list(string)
+  default     = []
+}

@@ -27,6 +27,15 @@ locals {
     local.dynamic_lambda_prefix != local.prefixes.lambda ? ["arn:aws:lambda:*:${local.account_id}:function:${local.dynamic_lambda_prefix}-*"] : []
   ))
 
+  ssm_parameter_prefixes = distinct(compact(concat(
+    [local.prefixes.lambda],
+    var.ssm_parameter_prefixes
+  )))
+  ssm_parameter_arns = [
+    for prefix in local.ssm_parameter_prefixes :
+    "arn:aws:ssm:*:${local.account_id}:parameter/${prefix}/*"
+  ]
+
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.destination[0].arn : var.existing_role_arn
   role_name = var.create_role ? aws_iam_role.destination[0].name : var.existing_role_name
@@ -331,7 +340,7 @@ resource "aws_iam_role_policy" "ssm_access" {
           "ssm:PutParameter",
           "ssm:DeleteParameter"
         ]
-        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/${local.prefixes.lambda}/*"
+        Resource = local.ssm_parameter_arns
       },
       {
         Sid    = "SSMReadAllParameters"

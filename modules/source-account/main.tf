@@ -179,9 +179,33 @@ resource "aws_iam_role_policy" "efs_access" {
           "elasticfilesystem:DescribeMountTargets",
           "elasticfilesystem:DescribeAccessPoints",
           "elasticfilesystem:DescribeBackupPolicy",
-          "elasticfilesystem:DescribeReplicationConfigurations"
+          "elasticfilesystem:DescribeReplicationConfigurations",
+          "elasticfilesystem:DescribeFileSystemPolicy"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "EFSReplication"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:CreateReplicationConfiguration",
+          "elasticfilesystem:DeleteReplicationConfiguration",
+          "elasticfilesystem:PutFileSystemPolicy"
+        ]
+        Resource = "arn:aws:elasticfilesystem:*:${local.account_id}:file-system/*"
+      },
+      {
+        Sid    = "PassRoleToEFSReplication"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-efs-replication-role"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "elasticfilesystem.amazonaws.com"
+          }
+        }
       },
       {
         Sid    = "EFSAccessPointManage"
@@ -501,6 +525,67 @@ resource "aws_iam_role_policy" "ssm_access" {
           "ssm:GetParametersByPath"
         ]
         Resource = "arn:aws:ssm:*:${local.account_id}:parameter/*"
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# EFS Replication Role - Dedicated role for cross-account EFS replication
+# This role is assumed by the EFS service to perform replication operations
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "efs_replication" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-efs-replication-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAssumeByEFSService"
+        Effect = "Allow"
+        Principal = {
+          Service = "elasticfilesystem.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "efs_replication" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-efs-replication"
+  role = aws_iam_role.efs_replication[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "EFSReplicationRead"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ReplicationRead",
+          "elasticfilesystem:DescribeFileSystems"
+        ]
+        Resource = "arn:aws:elasticfilesystem:*:${local.account_id}:file-system/*"
+      },
+      {
+        Sid    = "EFSReplicationWriteDestination"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:DescribeFileSystems",
+          "elasticfilesystem:CreateReplicationConfiguration",
+          "elasticfilesystem:DescribeReplicationConfigurations",
+          "elasticfilesystem:DeleteReplicationConfiguration",
+          "elasticfilesystem:ReplicationWrite"
+        ]
+        Resource = "*"
       }
     ]
   })
