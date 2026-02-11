@@ -61,12 +61,10 @@
       "Comment": "Ensure cluster is started and available before deletion (handles stopped clusters)",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable')",
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.EnsureClusterAvailable)",
+        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable-Delete')",
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
         "Input": {
           "DbClusterIdentifier.$": "$.DbClusterIdentifier",
-          "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
-          "Environment.$": "$.Environment",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -175,6 +173,7 @@
       "Catch": [
         {
           "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": "$.ClusterNotFoundError",
           "Next": "PrepareOutput"
         }
       ]

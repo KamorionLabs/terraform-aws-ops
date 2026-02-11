@@ -1,7 +1,26 @@
 {
   "Comment": "Creates an EFS file system in the destination account with lifecycle policies and mount targets",
-  "StartAt": "CreateFileSystem",
+  "StartAt": "CheckExistingFileSystem",
   "States": {
+    "CheckExistingFileSystem": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.FileSystemId",
+          "IsPresent": true,
+          "Next": "SetExistingFileSystem"
+        }
+      ],
+      "Default": "CreateFileSystem"
+    },
+    "SetExistingFileSystem": {
+      "Type": "Pass",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultPath": "$.CreatedFileSystem",
+      "Next": "WaitFileSystemAvailable"
+    },
     "CreateFileSystem": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
@@ -179,7 +198,7 @@
         "Status": "Completed",
         "ModuleName": "create_filesystem",
         "FileSystemId.$": "$.CreatedFileSystem.FileSystemId",
-        "FileSystemArn.$": "$.CreatedFileSystem.FileSystemArn",
+        "FileSystemArn.$": "$.FileSystemStatus.FileSystems[0].FileSystemArn",
         "MountTargetCount.$": "States.ArrayLength($.MountTargetsStatus.MountTargets)"
       },
       "Next": "CreateSucceeded"

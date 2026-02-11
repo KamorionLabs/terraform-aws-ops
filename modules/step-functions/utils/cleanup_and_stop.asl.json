@@ -27,6 +27,8 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+                  "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },
@@ -117,7 +119,7 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.Database.StopCluster",
                 "Input": {
-                  "ClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },
@@ -138,6 +140,8 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
                 "Input": {
                   "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+                  "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },

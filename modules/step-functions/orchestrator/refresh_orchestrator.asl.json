@@ -79,7 +79,8 @@
         "CurrentDatabaseTags.$": "$.PrepareResult.CurrentDatabaseTags",
         "CurrentEfsTags.$": "$.PrepareResult.CurrentEfsTags",
         "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId",
-        "MergedDatabaseTags.$": "$.Tags.Common"
+        "MergedDatabaseTags.$": "$.Tags",
+        "MergedEfsTags.$": "$.Tags"
       },
       "Next": "Phase1DataRefresh"
     },
@@ -157,6 +158,8 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },
@@ -177,11 +180,16 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
                 "Input": {
+                  "RestoreType.$": "$.Database.Source.RestoreType",
+                  "PrepareSnapshotStateMachineArn.$": "$.StepFunctions.Database.PrepareSnapshotForRestore",
                   "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
                   "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
                   "DbInstanceClass.$": "$.Database.Target.InstanceClass",
+                  "AuroraServerlessMinCapacity.$": "$.Database.Target.ServerlessConfig.MinCapacity",
+                  "AuroraServerlessMaxCapacity.$": "$.Database.Target.ServerlessConfig.MaxCapacity",
                   "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
                   "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
@@ -206,6 +214,9 @@
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
                   "DbInstanceIdentifierPrefix.$": "$.ResourceNames.TmpInstanceIdentifierPrefix",
                   "DbInstances.$": "$.Database.Target.Instances",
+                  "DbParameterGroupName.$": "$.Database.Parameters.InstanceParameterGroupName",
+                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
+                  "Tags.$": "$.Database.Target.Tags",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },
@@ -226,7 +237,7 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.EnableMasterSecret",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
-                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.MasterUserSecretKmsKeyId",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
               },
@@ -247,6 +258,7 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.ConfigureS3Integration",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "RoleArn.$": "$.Database.S3Integration.RoleArn",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
@@ -286,7 +298,89 @@
                   "Next": "EFSRefreshComplete"
                 }
               ],
+              "Default": "CheckEFSCrossAccount"
+            },
+            "CheckEFSCrossAccount": {
+              "Type": "Choice",
+              "Comment": "Check if EFS is cross-account by comparing Source.Account.AccountId with DestinationAccount.AccountId",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
+                    {"Not": {"Variable": "$.EFS.Source.Account.AccountId", "StringEqualsPath": "$.DestinationAccount.AccountId"}}
+                  ],
+                  "Next": "SetupCrossAccountReplication"
+                }
+              ],
               "Default": "RestoreEFS"
+            },
+            "SetupCrossAccountReplication": {
+              "Type": "Task",
+              "Comment": "Cross-account: Setup EFS replication from source to destination",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.SetupCrossAccountReplication",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "DestinationRegion.$": "$.EFS.Replication.DestinationRegion",
+                  "DestinationKmsKeyId.$": "$.EFS.Replication.DestinationKmsKeyId",
+                  "ReplicationRoleArn.$": "$.EFS.Replication.RoleArn",
+                  "PerformanceMode": "generalPurpose",
+                  "Encrypted": true,
+                  "Tags.$": "$.EFS.Tags"
+                }
+              },
+              "ResultPath": "$.ReplicationSetupResult",
+              "Next": "CheckReplicationSyncInitial",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "CheckReplicationSyncInitial": {
+              "Type": "Task",
+              "Comment": "Cross-account: Wait for initial replication to complete",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "DestinationFileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "Context.$": "$.EFS.Context",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "Mode": "wait"
+                }
+              },
+              "ResultPath": "$.ReplicationSyncResult",
+              "Next": "PrepareEfsResultFromReplication",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "PrepareEfsResultFromReplication": {
+              "Type": "Pass",
+              "Comment": "Format replication result to match RestoreEFS output structure",
+              "Parameters": {
+                "Output": {
+                  "FileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.EFS.Replication.DestinationRegion, $.DestinationAccount.AccountId, $.ReplicationSetupResult.Output.DestinationFileSystemId)",
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "Mode": "cross-account-replication"
+                }
+              },
+              "ResultPath": "$.EfsRestoreResult",
+              "Next": "CreateEFSMountTargets"
             },
             "RestoreEFS": {
               "Type": "Task",
@@ -294,13 +388,13 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.EFS.RestoreFromBackup",
                 "Input": {
-                  "SourceEFSName.$": "$.EFS.Source",
+                  "SourceEFSName.$": "$.EFS.Source.Name",
                   "AWSBackupRoleArn.$": "$.EFS.Backup.RoleArn",
                   "Encrypted": "true",
                   "KmsKeyId.$": "$.EFS.Security.KmsKeyId",
                   "NewFileSystem": "true",
                   "ItemsToRestore.$": "$.EFS.Backup.ItemsToRestore",
-                  "Tags.$": "$.Tags",
+                  "Tags.$": "$.EFS.Tags",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
                 }
@@ -360,7 +454,7 @@
                 "Input": {
                   "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
                   "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.DestinationAccount.Region, $.DestinationAccount.AccountId, $.EfsRestoreResult.Output.FileSystemId)",
-                  "Context.$": "$.EFS.Name",
+                  "Context.$": "$.EFS.Context",
                   "LambdaConfig.$": "$.EFS.LambdaConfig",
                   "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
                   "EfsSubPathSSMParameterName.$": "$.EFS.SSMParameters.EfsSubPath",
@@ -496,7 +590,7 @@
           "Next": "ScaleDownServices"
         }
       ],
-      "Default": "Phase3ClusterSwitch"
+      "Default": "CheckEFSCrossAccountFinalSync"
     },
     "ScaleDownServices": {
       "Type": "Task",
@@ -537,11 +631,77 @@
         }
       },
       "ResultPath": "$.DeleteStorageResult",
-      "Next": "Phase3ClusterSwitch",
+      "Next": "CheckEFSCrossAccountFinalSync",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.DeleteStorageError",
+          "Next": "CheckEFSCrossAccountFinalSync"
+        }
+      ]
+    },
+
+    "CheckEFSCrossAccountFinalSync": {
+      "Type": "Choice",
+      "Comment": "Check if EFS cross-account replication needs final sync and deletion before switch",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.EFS.Enabled", "IsPresent": true},
+            {"Variable": "$.EFS.Enabled", "BooleanEquals": true},
+            {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
+            {"Not": {"Variable": "$.EFS.Source.Account.AccountId", "StringEqualsPath": "$.DestinationAccount.AccountId"}}
+          ],
+          "Next": "CheckReplicationSyncFinal"
+        }
+      ],
+      "Default": "Phase3ClusterSwitch"
+    },
+    "CheckReplicationSyncFinal": {
+      "Type": "Task",
+      "Comment": "Cross-account: Final sync check with flag file verification before deleting replication",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
+        "Input": {
+          "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+          "DestinationFileSystemId.$": "$.Phase1Results[1].EfsRestoreResult.Output.FileSystemId",
+          "SourceAccount.$": "$.EFS.Source.Account",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "Context.$": "$.EFS.Context",
+          "LambdaConfig.$": "$.EFS.LambdaConfig",
+          "Mode": "wait"
+        }
+      },
+      "ResultPath": "$.FinalSyncResult",
+      "Next": "DeleteEFSReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FinalSyncError",
+          "Next": "DeleteEFSReplication"
+        }
+      ]
+    },
+    "DeleteEFSReplication": {
+      "Type": "Task",
+      "Comment": "Cross-account: Delete replication to make destination EFS writable",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EFS.DeleteReplication",
+        "Input": {
+          "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+          "SourceAccount.$": "$.EFS.Source.Account",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "DeleteDestinationFileSystem": false
+        }
+      },
+      "ResultPath": "$.DeleteReplicationResult",
+      "Next": "Phase3ClusterSwitch",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DeleteReplicationError",
           "Next": "Phase3ClusterSwitch"
         }
       ]
@@ -561,7 +721,7 @@
           "Next": "EnsureOldClusterNotExists"
         }
       ],
-      "Default": "RenameNewCluster"
+      "Default": "EnsureTargetClusterAvailable"
     },
     "EnsureOldClusterNotExists": {
       "Type": "Task",
@@ -570,6 +730,8 @@
         "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
         "Input": {
           "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
+          "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -579,7 +741,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.EnsureOldError",
-          "Next": "RenameNewCluster"
+          "Next": "EnsureTargetClusterAvailable"
         }
       ]
     },
@@ -601,7 +763,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.RenameOldError",
-          "Next": "RenameNewCluster"
+          "Next": "EnsureTargetClusterAvailable"
         }
       ]
     },
@@ -620,11 +782,32 @@
         }
       },
       "ResultPath": "$.TagOldClusterResult",
-      "Next": "RenameNewCluster",
+      "Next": "EnsureTargetClusterAvailable",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.TagOldClusterError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "EnsureTargetClusterAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure target cluster is available (start if stopped) before rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.EnsureTargetAvailableResult",
+      "Next": "RenameNewCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EnsureTargetAvailableError",
           "Next": "RenameNewCluster"
         }
       ]
@@ -670,6 +853,9 @@
         "Input": {
           "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "DatabaseUsersSecrets.$": "$.Database.Secrets.UserSecrets",
+          "RotationLambdaName.$": "$.Database.Secrets.RotationLambdaName",
+          "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+          "Region.$": "$.Region",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -829,8 +1015,10 @@
           "RenameNewResult.$": "$.RenameNewResult",
           "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
           "CurrentEfsTags.$": "$.CurrentEfsTags",
+          "MergedEfsTags.$": "$.MergedEfsTags",
           "OldEfsFileSystemId.$": "$.OldEfsFileSystemId",
           "MergedDatabaseTags.$": "$.MergedDatabaseTags",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         }

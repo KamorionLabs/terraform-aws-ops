@@ -7,7 +7,7 @@
       "Comment": "Ensure cluster is started and available before mysqldump",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable')",
+        "Name.$": "States.Format('{}-EnsureClusterAvailable-Dump', $.OrchestratorExecutionName)",
         "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
         "Input": {
           "DbClusterIdentifier.$": "$.DbClusterIdentifier",
