@@ -181,6 +181,7 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
                 "Input": {
                   "RestoreType.$": "$.Database.Source.RestoreType",
+                  "SnapshotMode.$": "$.Database.Source.SnapshotMode",
                   "PrepareSnapshotStateMachineArn.$": "$.StepFunctions.Database.PrepareSnapshotForRestore",
                   "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
                   "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
