@@ -1,0 +1,203 @@
+{
+  "Comment": "Cross-account: Scales a list of EKS services (Deployments, StatefulSets) to a specified number of replicas.",
+  "StartAt": "GetEksClusterInfo",
+  "States": {
+    "GetEksClusterInfo": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.EksClusterName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.EksCluster",
+      "Next": "ScaleServicesMap",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "ScaleServicesMap": {
+      "Type": "Map",
+      "ItemsPath": "$.Services",
+      "ItemSelector": {
+        "ClusterName.$": "$.EksCluster.Cluster.Name",
+        "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
+        "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "Namespace.$": "$.Namespace",
+        "Replicas.$": "$.Replicas",
+        "ServiceName.$": "$$.Map.Item.Value.ServiceName",
+        "ServiceType.$": "$$.Map.Item.Value.ServiceType",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "PatchService",
+        "States": {
+          "PatchService": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::eks:call",
+            "Parameters": {
+              "ClusterName.$": "$.ClusterName",
+              "CertificateAuthority.$": "$.CertificateAuthority",
+              "Endpoint.$": "$.Endpoint",
+              "Method": "PATCH",
+              "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}/scale', $.Namespace, $.ServiceType, $.ServiceName)",
+              "RequestBody": {
+                "spec": {
+                  "replicas.$": "$.Replicas"
+                }
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultPath": "$.PatchResult",
+            "Next": "WaitForScale",
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["EKS.404"],
+                "ResultPath": "$.PatchError",
+                "Next": "ServiceNotFoundSkip"
+              }
+            ]
+          },
+          "ServiceNotFoundSkip": {
+            "Type": "Pass",
+            "Parameters": {
+              "ServiceName.$": "$.ServiceName",
+              "Status": "Skipped",
+              "Reason": "Service not found"
+            },
+            "End": true
+          },
+          "WaitForScale": {
+            "Type": "Wait",
+            "Seconds": 5,
+            "End": true
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ScaleFailed"
+        }
+      ],
+      "ResultPath": "$.MapResult",
+      "Next": "WaitAfterScaling"
+    },
+    "WaitAfterScaling": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "CheckCleanupSecret"
+    },
+    "CheckCleanupSecret": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.CleanupSecret",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.CleanupSecret",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.Replicas",
+              "NumericGreaterThan": 0
+            }
+          ],
+          "Next": "GetSecret"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "GetSecret": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.EksCluster.Cluster.Name",
+        "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
+        "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "Method": "GET",
+        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.SecretResult",
+      "Next": "DeleteSecret",
+      "Catch": [
+        {
+          "ErrorEquals": ["EKS.404"],
+          "ResultPath": "$.SecretError",
+          "Next": "PrepareOutput"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SecretError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "DeleteSecret": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.EksCluster.Cluster.Name",
+        "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
+        "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "Method": "DELETE",
+        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.SecretDeleteResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SecretDeleteError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "scale_services",
+        "PrimaryIdentifier.$": "$.EksClusterName",
+        "Replicas.$": "$.Replicas"
+      },
+      "Next": "ScaleSucceeded"
+    },
+    "ScaleFailed": {
+      "Type": "Fail",
+      "Error": "ScaleFailed",
+      "Cause": "Failed to scale EKS services"
+    },
+    "ScaleSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

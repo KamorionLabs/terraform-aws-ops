@@ -8,7 +8,7 @@
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
         "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable')",
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.EnsureClusterAvailable)",
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
         "Input": {
           "DbClusterIdentifier.$": "$.DbClusterIdentifier",
           "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
@@ -48,7 +48,7 @@
       "Comment": "Ensure node group has sufficient capacity before running mysqldump",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.EKS.ScaleNodegroupAsg)",
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleNodegroupAsg",
         "Input": {
           "ClusterName.$": "$.EKS.ClusterName",
           "Tolerations.$": "$.EKS.Tolerations",

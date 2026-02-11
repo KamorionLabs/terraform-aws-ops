@@ -1,7 +1,8 @@
 {
-  "Comment": "Cross-Account Refresh Orchestrator - Orchestrates database and EFS refresh from source to destination account",
+  "Comment": "Cross-Account Refresh Orchestrator - Full 5-phase flow with database, EFS, and EKS operations",
   "StartAt": "LoadConfiguration",
   "States": {
+
     "LoadConfiguration": {
       "Type": "Choice",
       "Choices": [
@@ -33,6 +34,7 @@
         }
       ]
     },
+
     "PrepareRefresh": {
       "Type": "Task",
       "Comment": "Prepare resource names and retrieve current tags from destination account",
@@ -76,15 +78,75 @@
         "ResourceNames.$": "$.PrepareResult.ResourceNames",
         "CurrentDatabaseTags.$": "$.PrepareResult.CurrentDatabaseTags",
         "CurrentEfsTags.$": "$.PrepareResult.CurrentEfsTags",
-        "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId"
+        "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId",
+        "MergedDatabaseTags.$": "$.Tags.Common"
       },
       "Next": "Phase1DataRefresh"
     },
+
     "Phase1DataRefresh": {
       "Type": "Parallel",
-      "Comment": "Phase 1: Restore database and EFS in parallel",
+      "Comment": "Phase 1: Restore database and EFS in parallel, optionally run mysqldump on old cluster",
       "Branches": [
         {
+          "Comment": "Branch A: MySQLDump on old cluster (optional, runs in parallel with restore)",
+          "StartAt": "CheckMysqlDumpOption",
+          "States": {
+            "CheckMysqlDumpOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "BooleanEquals": true}
+                  ],
+                  "Next": "RunMysqlDump"
+                }
+              ],
+              "Default": "MysqlDumpSkipped"
+            },
+            "RunMysqlDump": {
+              "Type": "Task",
+              "Comment": "Dump tables from old cluster to EFS before restore completes",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.RunMysqldumpOnEks",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "TablesToDump.$": "$.Database.MySQLOperations.TablesToDump",
+                  "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
+                  "DumpSubPath.$": "$.Database.MySQLOperations.DumpSubPath",
+                  "EKS.$": "$.EKS",
+                  "StepFunctions.$": "$.StepFunctions",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": null,
+              "Next": "MysqlDumpComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.DumpError",
+                  "Next": "MysqlDumpFailed"
+                }
+              ]
+            },
+            "MysqlDumpComplete": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpSkipped": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpFailed": {
+              "Type": "Fail",
+              "Error": "MysqlDumpFailed",
+              "Cause": "MySQLDump on old cluster failed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch B: Database Restore chain",
           "StartAt": "EnsureRestoreClusterNotExists",
           "States": {
             "EnsureRestoreClusterNotExists": {
@@ -210,6 +272,7 @@
           }
         },
         {
+          "Comment": "Branch C: EFS Restore chain with optional SSM subpath storage",
           "StartAt": "CheckEFSEnabled",
           "States": {
             "CheckEFSEnabled": {
@@ -266,12 +329,51 @@
                 }
               },
               "ResultPath": "$.EfsConfigureResult",
-              "Next": "EFSRefreshComplete",
+              "Next": "CheckStoreInSSMOption",
               "Catch": [
                 {
                   "ErrorEquals": ["States.ALL"],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "CheckStoreInSSMOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Options.StoreInSSM", "IsPresent": true},
+                    {"Variable": "$.EFS.Options.StoreInSSM", "BooleanEquals": true}
+                  ],
+                  "Next": "StoreSubpathInSSM"
+                }
+              ],
+              "Default": "EFSRefreshComplete"
+            },
+            "StoreSubpathInSSM": {
+              "Type": "Task",
+              "Comment": "Find EFS subpath and store both EFS ID and subpath in SSM",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM",
+                "Input": {
+                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.DestinationAccount.Region, $.DestinationAccount.AccountId, $.EfsRestoreResult.Output.FileSystemId)",
+                  "Context.$": "$.EFS.Name",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+                  "EfsSubPathSSMParameterName.$": "$.EFS.SSMParameters.EfsSubPath",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.StoreSSMResult",
+              "Next": "EFSRefreshComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.StoreSSMError",
+                  "Next": "EFSRefreshComplete"
                 }
               ]
             },
@@ -287,7 +389,7 @@
         }
       ],
       "ResultPath": "$.Phase1Results",
-      "Next": "Phase2ClusterSwitch",
+      "Next": "CheckRunSqlScriptsOption",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -296,9 +398,158 @@
         }
       ]
     },
-    "Phase2ClusterSwitch": {
+
+    "CheckRunSqlScriptsOption": {
+      "Type": "Choice",
+      "Comment": "Phase 1 post-process: optionally run SQL scripts on restored cluster",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true},
+            {"Variable": "$.Database.Options.RunSqlScripts", "BooleanEquals": true}
+          ],
+          "Next": "RunSqlScripts"
+        }
+      ],
+      "Default": "CheckMysqlImportOption"
+    },
+    "RunSqlScripts": {
+      "Type": "Task",
+      "Comment": "Execute SQL scripts from S3 on the restored cluster",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RunSqlFromS3",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "S3Bucket.$": "$.Database.SqlScripts.Bucket",
+          "S3Prefix.$": "$.Database.SqlScripts.Prefix",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.SqlScriptsResult",
+      "Next": "CheckMysqlImportOption",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SqlScriptsError",
+          "Next": "CheckMysqlImportOption"
+        }
+      ]
+    },
+    "CheckMysqlImportOption": {
+      "Type": "Choice",
+      "Comment": "Phase 1 post-process: optionally import mysqldump data into restored cluster",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Database.Options.RunMysqlImportCluster", "IsPresent": true},
+            {"Variable": "$.Database.Options.RunMysqlImportCluster", "BooleanEquals": true}
+          ],
+          "Next": "RunMysqlImport"
+        }
+      ],
+      "Default": "Phase2PreSwitchEKS"
+    },
+    "RunMysqlImport": {
+      "Type": "Task",
+      "Comment": "Import mysqldump data into restored cluster via EKS job",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RunMysqlimportOnEks",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DatabaseName.$": "$.Database.MySQLOperations.ImportDatabaseName",
+          "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
+          "DumpSubPath.$": "$.Database.MySQLOperations.DumpSubPath",
+          "RefreshBucket.$": "$.Database.MySQLOperations.RefreshBucket",
+          "RefreshBucketPrefix.$": "$.Database.MySQLOperations.RefreshBucketPrefix",
+          "EKS.$": "$.EKS",
+          "StepFunctions.$": "$.StepFunctions",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.MysqlImportResult",
+      "Next": "Phase2PreSwitchEKS",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MysqlImportError",
+          "Next": "SendFailureNotification"
+        }
+      ]
+    },
+
+    "Phase2PreSwitchEKS": {
       "Type": "Pass",
-      "Comment": "Phase 2: Switch clusters (rename old to -old, rename new to target)",
+      "Comment": "Phase 2: Scale down EKS services and delete storage before cluster switch",
+      "Next": "CheckEKSEnabled_PreSwitch"
+    },
+    "CheckEKSEnabled_PreSwitch": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.EKS.Enabled", "IsPresent": true},
+            {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+          ],
+          "Next": "ScaleDownServices"
+        }
+      ],
+      "Default": "Phase3ClusterSwitch"
+    },
+    "ScaleDownServices": {
+      "Type": "Task",
+      "Comment": "Scale down all EKS services to 0 replicas before storage switch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "Replicas": 0,
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.ScaleDownResult",
+      "Next": "DeleteEKSStorage",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ScaleDownError",
+          "Next": "DeleteEKSStorage"
+        }
+      ]
+    },
+    "DeleteEKSStorage": {
+      "Type": "Task",
+      "Comment": "Delete PVC/PV/StorageClass for old EFS before cluster switch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "FileSystemName.$": "$.EFS.Name",
+          "Action": "Delete",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.DeleteStorageResult",
+      "Next": "Phase3ClusterSwitch",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DeleteStorageError",
+          "Next": "Phase3ClusterSwitch"
+        }
+      ]
+    },
+
+    "Phase3ClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Phase 3: Switch clusters (rename old to -old, tag, rename new to target)",
       "Next": "CheckRenameOldClusterOption"
     },
     "CheckRenameOldClusterOption": {
@@ -345,11 +596,35 @@
         }
       },
       "ResultPath": "$.RenameOldResult",
-      "Next": "RenameNewCluster",
+      "Next": "TagOldClusterRefreshTrue",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.RenameOldError",
+          "Next": "RenameNewCluster"
+        }
+      ]
+    },
+    "TagOldClusterRefreshTrue": {
+      "Type": "Task",
+      "Comment": "Fix: Tag renamed -old cluster with refresh:true so next EnsureClusterNotExists can delete it",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.TagResources",
+        "Input": {
+          "ResourceARNList.$": "States.Array($.RenameOldResult.Output.DbClusterArn)",
+          "ConfigTags": {
+            "refresh": "true"
+          },
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.TagOldClusterResult",
+      "Next": "RenameNewCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TagOldClusterError",
           "Next": "RenameNewCluster"
         }
       ]
@@ -385,7 +660,7 @@
           "Next": "RotateDatabaseSecrets"
         }
       ],
-      "Default": "Phase3Cleanup"
+      "Default": "Phase4PostSwitchEKS"
     },
     "RotateDatabaseSecrets": {
       "Type": "Task",
@@ -399,18 +674,150 @@
         }
       },
       "ResultPath": "$.RotateSecretsResult",
-      "Next": "Phase3Cleanup",
+      "Next": "Phase4PostSwitchEKS",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.RotateSecretsError",
-          "Next": "Phase3Cleanup"
+          "Next": "Phase4PostSwitchEKS"
         }
       ]
     },
-    "Phase3Cleanup": {
+
+    "Phase4PostSwitchEKS": {
+      "Type": "Pass",
+      "Comment": "Phase 4: Create new EKS storage, scale up services, verify and restart",
+      "Next": "CheckEKSEnabled_PostSwitch"
+    },
+    "CheckEKSEnabled_PostSwitch": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.EKS.Enabled", "IsPresent": true},
+            {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+          ],
+          "Next": "CreateEKSStorage"
+        }
+      ],
+      "Default": "Phase5Cleanup"
+    },
+    "CreateEKSStorage": {
       "Type": "Task",
-      "Comment": "Phase 3: Cleanup old resources and send notifications",
+      "Comment": "Create PVC/PV/StorageClass for new EFS (reads EFS ID from SSM)",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "FileSystemName.$": "$.EFS.Name",
+          "Action": "Create",
+          "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.CreateStorageResult",
+      "Next": "ScaleUpServices",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CreateStorageError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+    "ScaleUpServices": {
+      "Type": "Task",
+      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "Replicas": 1,
+          "CleanupSecret": true,
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.ScaleUpResult",
+      "Next": "VerifyAndRestartServices",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ScaleUpError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+    "VerifyAndRestartServices": {
+      "Type": "Task",
+      "Comment": "Verify EFS subpath on services and restart if mismatch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.VerifyAndRestartServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "SSMParameters": {
+            "EfsSubPath.$": "$.EFS.SSMParameters.EfsSubPath"
+          },
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.VerifyResult",
+      "Next": "CheckArchiveJobOption",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.VerifyError",
+          "Next": "CheckArchiveJobOption"
+        }
+      ]
+    },
+    "CheckArchiveJobOption": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.EKS.Options.RunArchiveJob", "IsPresent": true},
+            {"Variable": "$.EKS.Options.RunArchiveJob", "BooleanEquals": true}
+          ],
+          "Next": "RunArchiveJob"
+        }
+      ],
+      "Default": "Phase5Cleanup"
+    },
+    "RunArchiveJob": {
+      "Type": "Task",
+      "Comment": "Sync MySQL dumps and media files to S3",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.RunArchiveJob",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "EKS.$": "$.EKS",
+          "StepFunctions.$": "$.StepFunctions",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.ArchiveResult",
+      "Next": "Phase5Cleanup",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ArchiveError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+
+    "Phase5Cleanup": {
+      "Type": "Task",
+      "Comment": "Phase 5: Cleanup old resources (delete/stop old cluster, delete old EFS, scale down nodegroup)",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.Utils.CleanupAndStop",
@@ -423,6 +830,7 @@
           "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
           "CurrentEfsTags.$": "$.CurrentEfsTags",
           "OldEfsFileSystemId.$": "$.OldEfsFileSystemId",
+          "MergedDatabaseTags.$": "$.MergedDatabaseTags",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         }
@@ -437,6 +845,7 @@
         }
       ]
     },
+
     "SendSuccessNotification": {
       "Type": "Task",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
@@ -474,8 +883,7 @@
           "Item": {
             "ExecutionId": {"S.$": "$$.Execution.Id"},
             "Timestamp": {"S.$": "$$.State.EnteredTime"},
-            "Status": {"S": "FAILED"},
-            "Error": {"S.$": "States.JsonToString($.Phase1Error)"}
+            "Status": {"S": "FAILED"}
           },
           "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
           "SNSSubject": "Refresh Failed",
@@ -492,6 +900,7 @@
         }
       ]
     },
+
     "ConfigLoadFailed": {
       "Type": "Fail",
       "Error": "ConfigLoadFailed",
