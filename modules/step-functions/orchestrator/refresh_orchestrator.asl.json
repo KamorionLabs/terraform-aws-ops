@@ -509,14 +509,20 @@
     },
     "RunSqlScripts": {
       "Type": "Task",
-      "Comment": "Execute SQL scripts from S3 on the restored cluster",
+      "Comment": "Execute SQL scripts from S3 on the restored cluster via run-sql Lambda",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.Database.RunSqlFromS3",
         "Input": {
           "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DatabaseName.$": "$.Database.MySQLOperations.DatabaseName",
+          "MasterUserSecretArn.$": "$.Phase1Results[1].EnableSecretResult.Output.SecretArn",
+          "LambdaFunctionName.$": "$.Database.SqlScripts.LambdaFunctionName",
           "S3Bucket.$": "$.Database.SqlScripts.Bucket",
           "S3Prefix.$": "$.Database.SqlScripts.Prefix",
+          "ExportResults": false,
+          "ExportBucket": "",
+          "ExportPrefix": "",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
