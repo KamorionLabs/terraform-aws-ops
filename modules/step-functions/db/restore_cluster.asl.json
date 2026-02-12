@@ -13,7 +13,7 @@
         "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier"
       },
       "ResultPath": "$.ExistingRestoreCluster",
-      "Next": "DeleteExistingRestoreCluster",
+      "Next": "DeleteExistingRestoreInstances",
       "Catch": [
         {
           "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
@@ -22,9 +22,74 @@
         }
       ]
     },
+    "DeleteExistingRestoreInstances": {
+      "Type": "Map",
+      "Comment": "Delete all instances in the leftover -restore cluster before deleting the cluster itself",
+      "ItemsPath": "$.ExistingRestoreCluster.DbClusters[0].DbClusterMembers",
+      "ItemSelector": {
+        "DbInstanceIdentifier.$": "$$.Map.Item.Value.DbInstanceIdentifier",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "DeleteRestoreInstance",
+        "States": {
+          "DeleteRestoreInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBInstance",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier",
+              "SkipFinalSnapshot": true,
+              "DeleteAutomatedBackups": false
+            },
+            "ResultPath": null,
+            "Next": "WaitRestoreInstanceDeletion",
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "WaitRestoreInstanceDeletion" }]
+          },
+          "WaitRestoreInstanceDeletion": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "CheckRestoreInstanceDeletion"
+          },
+          "CheckRestoreInstanceDeletion": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier"
+            },
+            "ResultPath": "$.InstanceCheck",
+            "Next": "WaitRestoreInstanceDeletion",
+            "Catch": [
+              {
+                "ErrorEquals": ["Rds.DBInstanceNotFoundFault", "Rds.DbInstanceNotFoundException"],
+                "Next": "RestoreInstanceDeleted"
+              }
+            ]
+          },
+          "RestoreInstanceDeleted": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "ResultPath": "$.DeleteInstancesResult",
+      "Next": "DeleteExistingRestoreCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error.DeleteRestoreInstances",
+          "Next": "DeleteExistingRestoreCluster"
+        }
+      ]
+    },
     "DeleteExistingRestoreCluster": {
       "Type": "Task",
-      "Comment": "Delete the existing -restore cluster to avoid conflicts",
+      "Comment": "Delete the existing -restore cluster after its instances have been removed",
       "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBCluster",
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
