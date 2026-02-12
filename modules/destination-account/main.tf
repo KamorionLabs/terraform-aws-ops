@@ -108,6 +108,17 @@ resource "aws_iam_role_policy" "rds_access" {
           "rds:*"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "RDSPassRole"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = "arn:aws:iam::${local.account_id}:role/*"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "rds.amazonaws.com"
+          }
+        }
       }
     ]
   })
