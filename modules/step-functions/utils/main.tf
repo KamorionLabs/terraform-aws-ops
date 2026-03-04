@@ -17,6 +17,9 @@ locals {
 
     # Notifications
     notify = "notify.asl.json"
+
+    # Validation
+    validate_refresh_config = "validate_refresh_config.asl.json"
   }
 
   # Naming: pascal = "Utils-Notify", kebab = "utils-notify"

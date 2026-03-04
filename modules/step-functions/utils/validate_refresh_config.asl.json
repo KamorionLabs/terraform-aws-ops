@@ -1,0 +1,464 @@
+{
+  "Comment": "Validates refresh configuration by checking required resources exist and are accessible across accounts. Always succeeds with a validation report.",
+  "StartAt": "ValidateAll",
+  "States": {
+
+    "ValidateAll": {
+      "Type": "Parallel",
+      "Comment": "Run all validation checks in parallel across 4 categories",
+      "Branches": [
+
+        {
+          "Comment": "Branch 0: IAM - Validate cross-account role assumption",
+          "StartAt": "InitIAMChecks",
+          "States": {
+            "InitIAMChecks": {
+              "Type": "Pass",
+              "Result": {
+                "AssumeSourceRole": {"Status": "NOT_RUN"},
+                "AssumeDestinationRole": {"Status": "NOT_RUN"}
+              },
+              "ResultPath": "$.V",
+              "Next": "CheckSourceRole"
+            },
+            "CheckSourceRole": {
+              "Type": "Task",
+              "Comment": "Verify we can assume the source account role",
+              "Resource": "arn:aws:states:::aws-sdk:sts:getCallerIdentity",
+              "Parameters": {},
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "AccountId.$": "$.Account"
+              },
+              "ResultPath": "$.V.AssumeSourceRole",
+              "Next": "CheckDestRole",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.AssumeSourceRole",
+                "Next": "IAMFailed"
+              }]
+            },
+            "CheckDestRole": {
+              "Type": "Task",
+              "Comment": "Verify we can assume the destination account role",
+              "Resource": "arn:aws:states:::aws-sdk:sts:getCallerIdentity",
+              "Parameters": {},
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "AccountId.$": "$.Account"
+              },
+              "ResultPath": "$.V.AssumeDestinationRole",
+              "Next": "IAMPassed",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.AssumeDestinationRole",
+                "Next": "IAMFailed"
+              }]
+            },
+            "IAMPassed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "IAM",
+                "Status": "PASSED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            },
+            "IAMFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "IAM",
+                "Status": "FAILED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            }
+          }
+        },
+
+        {
+          "Comment": "Branch 1: Database - Validate source cluster, destination network, parameters and KMS",
+          "StartAt": "InitDBChecks",
+          "States": {
+            "InitDBChecks": {
+              "Type": "Pass",
+              "Result": {
+                "SourceCluster": {"Status": "NOT_RUN"},
+                "DestSubnetGroup": {"Status": "NOT_RUN"},
+                "DestClusterParameterGroup": {"Status": "NOT_RUN"},
+                "DestInstanceParameterGroup": {"Status": "NOT_RUN"},
+                "DestSecurityGroups": {"Status": "NOT_RUN"},
+                "DestKmsKey": {"Status": "NOT_RUN"}
+              },
+              "ResultPath": "$.V",
+              "Next": "CheckSourceCluster"
+            },
+            "CheckSourceCluster": {
+              "Type": "Task",
+              "Comment": "Verify source DB cluster exists and is available",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+              "Parameters": {
+                "DbClusterIdentifier.$": "$.Database.Source.ClusterIdentifier"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "ClusterStatus.$": "$.DbClusters[0].Status"
+              },
+              "ResultPath": "$.V.SourceCluster",
+              "Next": "CheckDestSubnetGroup",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.SourceCluster",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckDestSubnetGroup": {
+              "Type": "Task",
+              "Comment": "Verify destination DB subnet group exists",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBSubnetGroups",
+              "Parameters": {
+                "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED"
+              },
+              "ResultPath": "$.V.DestSubnetGroup",
+              "Next": "CheckDestClusterPG",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestSubnetGroup",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckDestClusterPG": {
+              "Type": "Task",
+              "Comment": "Verify destination cluster parameter group exists",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterParameterGroups",
+              "Parameters": {
+                "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED"
+              },
+              "ResultPath": "$.V.DestClusterParameterGroup",
+              "Next": "CheckDestInstancePG",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestClusterParameterGroup",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckDestInstancePG": {
+              "Type": "Task",
+              "Comment": "Verify destination instance parameter group exists",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBParameterGroups",
+              "Parameters": {
+                "DbParameterGroupName.$": "$.Database.Parameters.InstanceParameterGroupName"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED"
+              },
+              "ResultPath": "$.V.DestInstanceParameterGroup",
+              "Next": "CheckDestSecurityGroups",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestInstanceParameterGroup",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckDestSecurityGroups": {
+              "Type": "Task",
+              "Comment": "Verify destination security groups exist",
+              "Resource": "arn:aws:states:::aws-sdk:ec2:describeSecurityGroups",
+              "Parameters": {
+                "GroupIds.$": "$.Database.Network.SecurityGroupIds"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED"
+              },
+              "ResultPath": "$.V.DestSecurityGroups",
+              "Next": "CheckDestKmsAuroraKey",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestSecurityGroups",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckDestKmsAuroraKey": {
+              "Type": "Task",
+              "Comment": "Verify destination KMS key for Aurora is accessible",
+              "Resource": "arn:aws:states:::aws-sdk:kms:describeKey",
+              "Parameters": {
+                "KeyId.$": "$.Database.Secrets.KmsKeyId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "KeyState.$": "$.KeyMetadata.KeyState"
+              },
+              "ResultPath": "$.V.DestKmsKey",
+              "Next": "DBPassed",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestKmsKey",
+                "Next": "DBFailed"
+              }]
+            },
+            "DBPassed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "Database",
+                "Status": "PASSED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            },
+            "DBFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "Database",
+                "Status": "FAILED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            }
+          }
+        },
+
+        {
+          "Comment": "Branch 2: EFS - Validate source filesystem and destination KMS (if EFS enabled)",
+          "StartAt": "CheckEFSEnabled_V",
+          "States": {
+            "CheckEFSEnabled_V": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.EFS.Enabled",
+                  "IsPresent": false,
+                  "Next": "EFSSkipped"
+                },
+                {
+                  "Variable": "$.EFS.Enabled",
+                  "BooleanEquals": false,
+                  "Next": "EFSSkipped"
+                }
+              ],
+              "Default": "InitEFSChecks"
+            },
+            "EFSSkipped": {
+              "Type": "Pass",
+              "Result": {"Category": "EFS", "Status": "SKIPPED"},
+              "End": true
+            },
+            "InitEFSChecks": {
+              "Type": "Pass",
+              "Result": {
+                "SourceFileSystem": {"Status": "NOT_RUN"},
+                "DestKmsKey": {"Status": "NOT_RUN"}
+              },
+              "ResultPath": "$.V",
+              "Next": "CheckSourceEFS"
+            },
+            "CheckSourceEFS": {
+              "Type": "Task",
+              "Comment": "Verify source EFS filesystem exists (uses EFS source account credentials for cross-account)",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.EFS.Source.FileSystemId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.EFS.Source.Account.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "LifeCycleState.$": "$.FileSystems[0].LifeCycleState"
+              },
+              "ResultPath": "$.V.SourceFileSystem",
+              "Next": "CheckDestKmsEfsKey",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.SourceFileSystem",
+                "Next": "EFSFailed"
+              }]
+            },
+            "CheckDestKmsEfsKey": {
+              "Type": "Task",
+              "Comment": "Verify destination KMS key for EFS is accessible",
+              "Resource": "arn:aws:states:::aws-sdk:kms:describeKey",
+              "Parameters": {
+                "KeyId.$": "$.EFS.Replication.DestinationKmsKeyId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "KeyState.$": "$.KeyMetadata.KeyState"
+              },
+              "ResultPath": "$.V.DestKmsKey",
+              "Next": "EFSPassed",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestKmsKey",
+                "Next": "EFSFailed"
+              }]
+            },
+            "EFSPassed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "EFS",
+                "Status": "PASSED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            },
+            "EFSFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "EFS",
+                "Status": "FAILED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            }
+          }
+        },
+
+        {
+          "Comment": "Branch 3: EKS - Validate destination cluster exists (if EKS enabled)",
+          "StartAt": "CheckEKSEnabled_V",
+          "States": {
+            "CheckEKSEnabled_V": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.EKS.Enabled",
+                  "IsPresent": false,
+                  "Next": "EKSSkipped"
+                },
+                {
+                  "Variable": "$.EKS.Enabled",
+                  "BooleanEquals": false,
+                  "Next": "EKSSkipped"
+                }
+              ],
+              "Default": "InitEKSChecks"
+            },
+            "EKSSkipped": {
+              "Type": "Pass",
+              "Result": {"Category": "EKS", "Status": "SKIPPED"},
+              "End": true
+            },
+            "InitEKSChecks": {
+              "Type": "Pass",
+              "Result": {
+                "DestCluster": {"Status": "NOT_RUN"}
+              },
+              "ResultPath": "$.V",
+              "Next": "CheckDestEKSCluster"
+            },
+            "CheckDestEKSCluster": {
+              "Type": "Task",
+              "Comment": "Verify destination EKS cluster exists and is active",
+              "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+              "Parameters": {
+                "Name.$": "$.EKS.ClusterName"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "ClusterStatus.$": "$.Cluster.Status"
+              },
+              "ResultPath": "$.V.DestCluster",
+              "Next": "EKSPassed",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestCluster",
+                "Next": "EKSFailed"
+              }]
+            },
+            "EKSPassed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "EKS",
+                "Status": "PASSED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            },
+            "EKSFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "EKS",
+                "Status": "FAILED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            }
+          }
+        }
+
+      ],
+      "Next": "CheckAnyFailed"
+    },
+
+    "CheckAnyFailed": {
+      "Type": "Choice",
+      "Comment": "Check if any validation branch reported FAILED",
+      "Choices": [
+        {"Variable": "$[0].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
+        {"Variable": "$[1].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
+        {"Variable": "$[2].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
+        {"Variable": "$[3].Status", "StringEquals": "FAILED", "Next": "ReportFailed"}
+      ],
+      "Default": "ReportPassed"
+    },
+
+    "ReportPassed": {
+      "Type": "Pass",
+      "Parameters": {
+        "ValidationStatus": "PASSED",
+        "Results.$": "$"
+      },
+      "Next": "ValidationComplete"
+    },
+
+    "ReportFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "ValidationStatus": "FAILED",
+        "Results.$": "$"
+      },
+      "Next": "ValidationComplete"
+    },
+
+    "ValidationComplete": {
+      "Type": "Succeed"
+    }
+  }
+}

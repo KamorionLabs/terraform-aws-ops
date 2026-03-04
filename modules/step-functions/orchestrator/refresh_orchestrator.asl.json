@@ -12,7 +12,7 @@
           "Next": "LoadConfigFromS3"
         }
       ],
-      "Default": "PrepareRefresh"
+      "Default": "ValidateInputs"
     },
     "LoadConfigFromS3": {
       "Type": "Task",
@@ -25,7 +25,7 @@
         "config.$": "States.StringToJson($.Body)"
       },
       "OutputPath": "$.config",
-      "Next": "PrepareRefresh",
+      "Next": "ValidateInputs",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -33,6 +33,65 @@
           "Next": "ConfigLoadFailed"
         }
       ]
+    },
+
+    "ValidateInputs": {
+      "Type": "Task",
+      "Comment": "Validate all inputs and required resources before starting refresh",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.ValidateRefreshConfig",
+        "Input": {
+          "Database.$": "$.Database",
+          "EFS.$": "$.EFS",
+          "EKS.$": "$.EKS",
+          "SourceAccount.$": "$.SourceAccount",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "StepFunctions.$": "$.StepFunctions"
+        }
+      },
+      "ResultSelector": {
+        "ValidationStatus.$": "$.Output.ValidationStatus",
+        "Results.$": "$.Output.Results"
+      },
+      "ResultPath": "$.ValidationResult",
+      "Next": "CheckValidationStatus",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "ResultPath": "$.ValidationError",
+        "Next": "SendFailureNotification"
+      }]
+    },
+    "CheckValidationStatus": {
+      "Type": "Choice",
+      "Comment": "If validation failed, route to failure notification. Otherwise check DryRun mode.",
+      "Choices": [{
+        "Variable": "$.ValidationResult.ValidationStatus",
+        "StringEquals": "FAILED",
+        "Next": "SendFailureNotification"
+      }],
+      "Default": "CheckDryRunMode"
+    },
+    "CheckDryRunMode": {
+      "Type": "Choice",
+      "Comment": "If DryRun=true, return validation report without executing refresh",
+      "Choices": [{
+        "And": [
+          {"Variable": "$.DryRun", "IsPresent": true},
+          {"Variable": "$.DryRun", "BooleanEquals": true}
+        ],
+        "Next": "DryRunComplete"
+      }],
+      "Default": "PrepareRefresh"
+    },
+    "DryRunComplete": {
+      "Type": "Pass",
+      "Comment": "Return validation report for dry-run mode",
+      "Parameters": {
+        "Status": "DRY_RUN_COMPLETE",
+        "ValidationResult.$": "$.ValidationResult"
+      },
+      "Next": "RefreshComplete"
     },
 
     "PrepareRefresh": {
