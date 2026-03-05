@@ -51,6 +51,7 @@
         "StateMachineArn.$": "$.StepFunctions.EKS.ScaleNodegroupAsg",
         "Input": {
           "ClusterName.$": "$.EKS.ClusterName",
+          "NodeSelector.$": "$.EKS.NodeSelector",
           "Tolerations.$": "$.EKS.Tolerations",
           "MinimumCapacity.$": "$.EKS.Scaling.MinimumCapacity",
           "DesiredCapacity.$": "$.EKS.Scaling.TargetCapacity",

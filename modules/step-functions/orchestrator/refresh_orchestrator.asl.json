@@ -59,7 +59,7 @@
       "Catch": [{
         "ErrorEquals": ["States.ALL"],
         "ResultPath": "$.ValidationError",
-        "Next": "SendFailureNotification"
+        "Next": "CheckNotifyEnabled_Failure"
       }]
     },
     "CheckValidationStatus": {
@@ -68,7 +68,7 @@
       "Choices": [{
         "Variable": "$.ValidationResult.ValidationStatus",
         "StringEquals": "FAILED",
-        "Next": "SendFailureNotification"
+        "Next": "CheckNotifyEnabled_Failure"
       }],
       "Default": "CheckDryRunMode"
     },
@@ -548,7 +548,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.Phase1Error",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
@@ -635,7 +635,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.MysqlImportError",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
@@ -818,7 +818,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.DeleteOldClusterError",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
@@ -936,7 +936,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.RenameNewError",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
@@ -1130,16 +1130,30 @@
         }
       },
       "ResultPath": "$.CleanupResult",
-      "Next": "SendSuccessNotification",
+      "Next": "CheckNotifyEnabled_Success",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CleanupError",
-          "Next": "SendSuccessNotification"
+          "Next": "CheckNotifyEnabled_Success"
         }
       ]
     },
 
+    "CheckNotifyEnabled_Success": {
+      "Type": "Choice",
+      "Comment": "Skip notification if Notifications.Enabled is false or absent",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Notifications.Enabled", "IsPresent": true},
+            {"Variable": "$.Notifications.Enabled", "BooleanEquals": true}
+          ],
+          "Next": "SendSuccessNotification"
+        }
+      ],
+      "Default": "RefreshComplete"
+    },
     "SendSuccessNotification": {
       "Type": "Task",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
@@ -1166,6 +1180,20 @@
           "Next": "RefreshComplete"
         }
       ]
+    },
+    "CheckNotifyEnabled_Failure": {
+      "Type": "Choice",
+      "Comment": "Skip notification if Notifications.Enabled is false or absent",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Notifications.Enabled", "IsPresent": true},
+            {"Variable": "$.Notifications.Enabled", "BooleanEquals": true}
+          ],
+          "Next": "SendFailureNotification"
+        }
+      ],
+      "Default": "RefreshFailed"
     },
     "SendFailureNotification": {
       "Type": "Task",

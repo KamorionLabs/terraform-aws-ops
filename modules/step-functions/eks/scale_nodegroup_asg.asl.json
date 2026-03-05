@@ -1,20 +1,12 @@
 {
-  "Comment": "Finds EKS node group by NodeSelector/Tolerations and scales the underlying Auto Scaling Group in destination account",
+  "Comment": "Finds EKS node group by NodeSelector (labels) and/or Tolerations (taints) and scales the underlying Auto Scaling Group in destination account",
   "StartAt": "PrepareInput",
   "States": {
     "PrepareInput": {
       "Type": "Pass",
       "Comment": "Initialize NodeSelector and Tolerations with default values if not present",
-      "Parameters": {
-        "ClusterName.$": "$.ClusterName",
-        "DesiredCapacity.$": "$.DesiredCapacity",
-        "MinSize.$": "$.MinSize",
-        "MaxSize.$": "$.MaxSize",
-        "MinimumCapacity.$": "$.MinimumCapacity",
-        "NodeSelector.$": "States.JsonMerge(States.StringToJson('{}'), $.NodeSelector)",
-        "Tolerations.$": "States.JsonMerge(States.StringToJson('[]'), $.Tolerations)",
-        "DestinationAccount.$": "$.DestinationAccount"
-      },
+      "QueryLanguage": "JSONata",
+      "Output": "{% $merge([$states.input, { \"NodeSelector\": $exists($states.input.NodeSelector) ? $states.input.NodeSelector : {}, \"Tolerations\": $exists($states.input.Tolerations) ? $states.input.Tolerations : [] }]) %}",
       "Next": "ListNodeGroups"
     },
     "ListNodeGroups": {
@@ -32,7 +24,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.Error",
+          "ResultPath": "$.ListNodeGroupsError",
           "Next": "ScaleFailed"
         }
       ]
@@ -67,7 +59,7 @@
               "RoleArn.$": "$.DestinationAccount.RoleArn"
             },
             "ResultPath": "$.NodeGroupDetails",
-            "Next": "ExtractMatchInfo",
+            "Next": "CheckMatch",
             "Catch": [
               {
                 "ErrorEquals": ["States.ALL"],
@@ -76,13 +68,32 @@
               }
             ]
           },
-          "ExtractMatchInfo": {
+          "CheckMatch": {
             "Type": "Pass",
-            "Comment": "Extract ASG name for matched node group",
+            "Comment": "Check if node group matches NodeSelector (labels) and/or Tolerations (taints) using JSONata - case-insensitive effect comparison",
+            "QueryLanguage": "JSONata",
+            "Output": "{% $merge([$states.input, ( $labels := $states.input.NodeGroupDetails.Nodegroup.Labels; $taints := $states.input.NodeGroupDetails.Nodegroup.Taints; $nodeSelector := $states.input.NodeSelector; $tolerations := $states.input.Tolerations; $nodegroupName := $states.input.NodeGroupName; $asgName := $states.input.NodeGroupDetails.Nodegroup.Resources.AutoScalingGroups[0].Name; $hasNodeSelector := $exists($nodeSelector) and $count($keys($nodeSelector)) > 0; $hasTolerations := $exists($tolerations) and $count($tolerations) > 0; $normalizeEffect := function($e) { $uppercase($join($split($e, '_'), '')) }; $labelsMatch := $hasNodeSelector ? ($count($filter($keys($nodeSelector), function($key) { $labels.($key) = $nodeSelector.($key) })) = $count($keys($nodeSelector))) : true; $taintsMatch := $hasTolerations ? ($count($filter($tolerations, function($tol) { $count($filter($taints, function($taint) { $taint.Key = $tol.key and $taint.Value = $tol.value and $normalizeEffect($taint.Effect) = $normalizeEffect($tol.effect) })) > 0 })) = $count($tolerations)) : true; $finalMatch := $labelsMatch and $taintsMatch; { \"MatchResult\": ($finalMatch ? { \"Matched\": true, \"NodeGroupName\": $nodegroupName, \"AsgName\": $asgName } : { \"Matched\": false }) } )]) %}",
+            "Next": "IsMatched"
+          },
+          "IsMatched": {
+            "Type": "Choice",
+            "Comment": "Check if this node group matched",
+            "Choices": [
+              {
+                "Variable": "$.MatchResult.Matched",
+                "BooleanEquals": true,
+                "Next": "NodeGroupMatched"
+              }
+            ],
+            "Default": "NodeGroupNotMatched"
+          },
+          "NodeGroupMatched": {
+            "Type": "Pass",
+            "Comment": "This node group matches the criteria",
             "Parameters": {
               "Matched": true,
-              "NodeGroupName.$": "$.NodeGroupName",
-              "AsgName.$": "$.NodeGroupDetails.Nodegroup.Resources.AutoScalingGroups[0].Name"
+              "NodeGroupName.$": "$.MatchResult.NodeGroupName",
+              "AsgName.$": "$.MatchResult.AsgName"
             },
             "End": true
           },
@@ -97,7 +108,7 @@
         }
       },
       "ResultPath": "$.MapResults",
-      "Next": "SelectFirstMatch",
+      "Next": "FilterMatchedNodeGroups",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -106,18 +117,11 @@
         }
       ]
     },
-    "SelectFirstMatch": {
+    "FilterMatchedNodeGroups": {
       "Type": "Pass",
-      "Comment": "Select first matched node group",
-      "Parameters": {
-        "ClusterName.$": "$.ClusterName",
-        "DesiredCapacity.$": "$.DesiredCapacity",
-        "MinSize.$": "$.MinSize",
-        "MaxSize.$": "$.MaxSize",
-        "MinimumCapacity.$": "$.MinimumCapacity",
-        "DestinationAccount.$": "$.DestinationAccount",
-        "MatchedNodeGroup.$": "$.MapResults[?(@.Matched==true)]"
-      },
+      "Comment": "Filter to get only matched node groups - ensure array result",
+      "QueryLanguage": "JSONata",
+      "Output": "{% $merge([$states.input, { \"FilteredResults\": { \"MatchedNodeGroups\": [$states.input.MapResults[Matched = true]] } }]) %}",
       "Next": "CheckMatchedNodeGroups"
     },
     "CheckMatchedNodeGroups": {
@@ -125,7 +129,7 @@
       "Comment": "Check if we found any matching node groups",
       "Choices": [
         {
-          "Variable": "$.MatchedNodeGroup[0]",
+          "Variable": "$.FilteredResults.MatchedNodeGroups[0]",
           "IsPresent": true,
           "Next": "GetAsgCurrentCapacity"
         }
@@ -137,7 +141,7 @@
       "Comment": "Get current ASG desired capacity",
       "Resource": "arn:aws:states:::aws-sdk:autoscaling:describeAutoScalingGroups",
       "Parameters": {
-        "AutoScalingGroupNames.$": "States.Array($.MatchedNodeGroup[0].AsgName)"
+        "AutoScalingGroupNames.$": "States.Array($.FilteredResults.MatchedNodeGroups[0].AsgName)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -167,7 +171,7 @@
           "Next": "CheckIfAlreadySufficient"
         }
       ],
-      "Default": "SetDesiredCapacity"
+      "Default": "PrepareScalingInput"
     },
     "CheckIfAlreadySufficient": {
       "Type": "Choice",
@@ -179,7 +183,7 @@
           "Next": "CapacityAlreadySufficient"
         }
       ],
-      "Default": "SetDesiredCapacity"
+      "Default": "PrepareScalingInput"
     },
     "CapacityAlreadySufficient": {
       "Type": "Pass",
@@ -187,20 +191,71 @@
       "Parameters": {
         "Status": "AlreadySufficient",
         "ModuleName": "scale_nodegroup_asg",
-        "NodeGroupName.$": "$.MatchedNodeGroup[0].NodeGroupName",
-        "AsgName.$": "$.MatchedNodeGroup[0].AsgName",
+        "NodeGroupName.$": "$.FilteredResults.MatchedNodeGroups[0].NodeGroupName",
+        "AsgName.$": "$.FilteredResults.MatchedNodeGroups[0].AsgName",
         "CurrentCapacity.$": "$.CurrentAsgInfo.DesiredCapacity",
-        "MinimumRequired.$": "$.MinimumCapacity"
+        "MinimumRequired.$": "$.MinimumCapacity",
+        "Action": "No scaling required"
       },
       "Next": "ScaleSucceeded"
     },
+    "PrepareScalingInput": {
+      "Type": "Pass",
+      "Comment": "Prepare input for ASG scaling - MinSize/MaxSize are optional",
+      "QueryLanguage": "JSONata",
+      "Output": "{% $merge([$states.input, { \"ScalingConfig\": $merge([{ \"AsgName\": $states.input.FilteredResults.MatchedNodeGroups[0].AsgName, \"NodeGroupName\": $states.input.FilteredResults.MatchedNodeGroups[0].NodeGroupName, \"CurrentCapacity\": $states.input.CurrentAsgInfo.DesiredCapacity, \"DesiredCapacity\": $states.input.DesiredCapacity }, $exists($states.input.MinSize) ? { \"MinSize\": $states.input.MinSize } : {}, $exists($states.input.MaxSize) ? { \"MaxSize\": $states.input.MaxSize } : {} ]) }]) %}",
+      "Next": "CheckMinMaxProvided"
+    },
+    "CheckMinMaxProvided": {
+      "Type": "Choice",
+      "Comment": "Check if MinSize and MaxSize are provided",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.MinSize",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.MaxSize",
+              "IsPresent": true
+            }
+          ],
+          "Next": "UpdateAutoScalingGroup"
+        }
+      ],
+      "Default": "SetDesiredCapacity"
+    },
+    "UpdateAutoScalingGroup": {
+      "Type": "Task",
+      "Comment": "Update ASG with desired capacity, min size, and max size",
+      "Resource": "arn:aws:states:::aws-sdk:autoscaling:updateAutoScalingGroup",
+      "Parameters": {
+        "AutoScalingGroupName.$": "$.ScalingConfig.AsgName",
+        "DesiredCapacity.$": "$.ScalingConfig.DesiredCapacity",
+        "MinSize.$": "$.ScalingConfig.MinSize",
+        "MaxSize.$": "$.ScalingConfig.MaxSize"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.UpdateResult",
+      "Next": "WaitForScaling",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.UpdateError",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
     "SetDesiredCapacity": {
       "Type": "Task",
-      "Comment": "Set desired capacity",
+      "Comment": "Set only desired capacity (keep existing min/max)",
       "Resource": "arn:aws:states:::aws-sdk:autoscaling:setDesiredCapacity",
       "Parameters": {
-        "AutoScalingGroupName.$": "$.MatchedNodeGroup[0].AsgName",
-        "DesiredCapacity.$": "$.DesiredCapacity"
+        "AutoScalingGroupName.$": "$.ScalingConfig.AsgName",
+        "DesiredCapacity.$": "$.ScalingConfig.DesiredCapacity"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -227,9 +282,9 @@
       "Parameters": {
         "Status": "Completed",
         "ModuleName": "scale_nodegroup_asg",
-        "NodeGroupName.$": "$.MatchedNodeGroup[0].NodeGroupName",
-        "AsgName.$": "$.MatchedNodeGroup[0].AsgName",
-        "DesiredCapacity.$": "$.DesiredCapacity"
+        "NodeGroupName.$": "$.ScalingConfig.NodeGroupName",
+        "AsgName.$": "$.ScalingConfig.AsgName",
+        "DesiredCapacity.$": "$.ScalingConfig.DesiredCapacity"
       },
       "Next": "ScaleSucceeded"
     },
@@ -239,7 +294,7 @@
       "Parameters": {
         "Status": "NoMatchFound",
         "ModuleName": "scale_nodegroup_asg",
-        "Message": "No node group found matching the provided criteria. Scaling skipped."
+        "Message": "No node group found matching the provided criteria (NodeSelector/Tolerations). Scaling skipped."
       },
       "Next": "ScaleSucceeded"
     },
