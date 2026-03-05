@@ -135,6 +135,7 @@
         "Tags.$": "$.Tags",
         "SourceAccount.$": "$.SourceAccount",
         "DestinationAccount.$": "$.DestinationAccount",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
         "StepFunctions.$": "$.StepFunctions",
         "Notifications.$": "$.Notifications",
         "ResourceNames.$": "$.PrepareResult.ResourceNames",
