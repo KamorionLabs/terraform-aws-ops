@@ -1,0 +1,307 @@
+{
+  "Comment": "Private variant: Runs mysqlimport via k8s-proxy Lambda instead of eks:runJob.sync. Avoids EKS API public endpoint connectivity issues.",
+  "StartAt": "EnsureClusterAvailable",
+  "States": {
+    "EnsureClusterAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure cluster is started and available before mysqlimport",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "Name.$": "States.Format('{}-EnsureClusterAvailable-Import', $.OrchestratorExecutionName)",
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
+        "Input": {
+          "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+          "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.EnsureClusterResult",
+      "Next": "GetClusterInfo",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EnsureClusterError",
+          "Next": "ImportFailed"
+        }
+      ]
+    },
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultSelector": {
+        "Status.$": "$.DbClusters[0].Status",
+        "Endpoint.$": "$.DbClusters[0].Endpoint",
+        "MasterUserSecret.$": "$.DbClusters[0].MasterUserSecret"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "EnsureNodegroupCapacity",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+    },
+    "EnsureNodegroupCapacity": {
+      "Type": "Task",
+      "Comment": "Ensure node group has sufficient capacity before running mysqlimport",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleNodegroupAsg",
+        "Input": {
+          "ClusterName.$": "$.EKS.ClusterName",
+          "NodeSelector.$": "$.EKS.NodeSelector",
+          "Tolerations.$": "$.EKS.Tolerations",
+          "MinimumCapacity.$": "$.EKS.Scaling.MinimumCapacity",
+          "DesiredCapacity.$": "$.EKS.Scaling.TargetCapacity",
+          "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.EnsureNodegroupResult",
+      "Next": "GetDbSecretValue",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EnsureNodegroupError",
+          "Next": "GetDbSecretValue"
+        }
+      ]
+    },
+    "GetDbSecretValue": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:secretsmanager:getSecretValue",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "SecretId.$": "$.ClusterInfo.MasterUserSecret.SecretArn"
+      },
+      "ResultPath": "$.DbSecret",
+      "Next": "FormatSecretString",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+    },
+    "FormatSecretString": {
+      "Type": "Pass",
+      "Parameters": {
+        "SecretString.$": "States.StringToJson($.DbSecret.SecretString)"
+      },
+      "ResultPath": "$.DbSecret",
+      "Next": "CreateImportJob"
+    },
+    "CreateImportJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "createJob",
+          "ClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Job": {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+              "name.$": "States.Format('mysqlimport-{}', $.OrchestratorExecutionName)"
+            },
+            "spec": {
+              "template": {
+                "spec": {
+                  "serviceAccountName": "refresh",
+                  "nodeSelector.$": "$.EKS.NodeSelector",
+                  "tolerations.$": "$.EKS.Tolerations",
+                  "volumes": [{
+                    "name": "shared-data",
+                    "persistentVolumeClaim": { "claimName.$": "$.EfsPvcName" }
+                  }],
+                  "containers": [{
+                    "name": "mysqlimport",
+                    "image": "akirosit/mysql-s3:latest",
+                    "imagePullPolicy": "Always",
+                    "command": ["/import.sh"],
+                    "volumeMounts": [{
+                      "name": "shared-data",
+                      "mountPath": "/refresh",
+                      "subPath.$": "$.DumpSubPath"
+                    }],
+                    "env": [
+                      { "name": "TZ", "value": "Europe/Paris" },
+                      { "name": "MYSQL_HOST", "value.$": "$.ClusterInfo.Endpoint" },
+                      { "name": "MYSQL_USER", "value.$": "$.DbSecret.SecretString.username" },
+                      { "name": "MYSQL_PASSWORD", "value.$": "$.DbSecret.SecretString.password" },
+                      { "name": "MYSQL_DATABASE", "value.$": "$.DatabaseName" },
+                      { "name": "LOCAL_DIR", "value": "/refresh" },
+                      { "name": "S3_SYNC", "value": "true" },
+                      { "name": "S3_BUCKET", "value.$": "$.RefreshBucket" },
+                      { "name": "S3_PREFIX", "value.$": "$.RefreshBucketPrefix" }
+                    ]
+                  }],
+                  "restartPolicy": "Never"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "JobName.$": "$.Payload.JobName",
+        "Namespace.$": "$.Payload.Namespace",
+        "ClusterName.$": "$.Payload.ClusterName"
+      },
+      "ResultPath": "$.JobInfo",
+      "Next": "WaitForImportJob",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CreateJobError",
+          "Next": "ImportFailed"
+        }
+      ]
+    },
+    "WaitForImportJob": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckImportJobStatus"
+    },
+    "CheckImportJobStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "getJobStatus",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "Status.$": "$.Payload.Status",
+        "JobName.$": "$.Payload.JobName",
+        "Message.$": "$.Payload.Message"
+      },
+      "ResultPath": "$.JobStatus",
+      "Next": "ImportJobStatusChoice",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CheckStatusError",
+          "Next": "DeleteImportJobOnError"
+        }
+      ]
+    },
+    "ImportJobStatusChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.JobStatus.Status",
+          "StringEquals": "Complete",
+          "Next": "DeleteImportJob"
+        },
+        {
+          "Variable": "$.JobStatus.Status",
+          "StringEquals": "Failed",
+          "Next": "DeleteImportJobOnError"
+        }
+      ],
+      "Default": "WaitForImportJob"
+    },
+    "DeleteImportJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "deleteJob",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "PrepareOutput"
+    },
+    "DeleteImportJobOnError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "deleteJob",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "ImportJobFailed"
+    },
+    "ImportJobFailed": {
+      "Type": "Fail",
+      "Error": "ImportJobFailed",
+      "Cause": "The mysqlimport K8s job failed or could not be monitored."
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "run_mysqlimport_on_eks",
+        "PrimaryIdentifier.$": "$.EKS.ClusterName"
+      },
+      "Next": "ImportSucceeded"
+    },
+    "ImportFailed": {
+      "Type": "Fail",
+      "Error": "ImportFailed",
+      "Cause": "The mysqlimport EKS job process failed."
+    },
+    "ImportSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

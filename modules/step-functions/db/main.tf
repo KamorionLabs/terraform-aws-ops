@@ -4,6 +4,8 @@
 # -----------------------------------------------------------------------------
 
 locals {
+  _eks_suffix = var.eks_access_mode == "private" ? "_private" : ""
+
   step_functions = {
     # Core Operations
     restore_cluster           = "restore_cluster.asl.json"
@@ -31,9 +33,9 @@ locals {
     run_sql_lambda           = "run_sql_lambda.asl.json"
     run_sql_from_s3          = "run_sql_from_s3.asl.json"
 
-    # EKS Integration
-    run_mysqldump_on_eks   = "run_mysqldump_on_eks.asl.json"
-    run_mysqlimport_on_eks = "run_mysqlimport_on_eks.asl.json"
+    # EKS Integration (private variant)
+    run_mysqldump_on_eks   = "run_mysqldump_on_eks${local._eks_suffix}.asl.json"
+    run_mysqlimport_on_eks = "run_mysqlimport_on_eks${local._eks_suffix}.asl.json"
   }
 
   # Naming: pascal = "DB-RestoreCluster", kebab = "db-restore-cluster"

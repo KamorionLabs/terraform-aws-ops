@@ -1,0 +1,198 @@
+{
+  "Comment": "Cross-account: Verifies that EKS services are using the correct EFS subpath and restarts them if needed. Private variant using k8s-proxy Lambda instead of eks:call.",
+  "StartAt": "GetExpectedSubPath",
+  "States": {
+    "GetExpectedSubPath": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name.$": "$.SSMParameters.EfsSubPath"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "SubPath.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.ExpectedSubPath",
+      "Next": "VerifyServicesMap",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SubPathError",
+          "Next": "VerificationFailed"
+        }
+      ]
+    },
+    "VerifyServicesMap": {
+      "Type": "Map",
+      "ItemsPath": "$.Services",
+      "MaxConcurrency": 3,
+      "ItemSelector": {
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+        "EksClusterName.$": "$.EksClusterName",
+        "Namespace.$": "$.Namespace",
+        "ServiceName.$": "$$.Map.Item.Value.ServiceName",
+        "ServiceType.$": "$$.Map.Item.Value.ServiceType",
+        "ExpectedSubPath.$": "$.ExpectedSubPath.SubPath",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "GetService",
+        "States": {
+          "GetService": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "call",
+                "ClusterName.$": "$.EksClusterName",
+                "Method": "GET",
+                "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)"
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultSelector": {
+              "ResponseBody.$": "$.Payload.ResponseBody",
+              "StatusCode.$": "$.Payload.StatusCode"
+            },
+            "ResultPath": "$.ServiceDetails",
+            "Next": "ExtractCurrentSubPath",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "ResultPath": "$.ServiceError",
+                "Next": "ServiceNotFound"
+              }
+            ]
+          },
+          "ExtractCurrentSubPath": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EksClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
+            "Next": "DecideIfRestartNeeded"
+          },
+          "DecideIfRestartNeeded": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.CurrentSubPath",
+                "IsPresent": false,
+                "Next": "SubPathCorrect"
+              },
+              {
+                "Variable": "$.CurrentSubPath",
+                "StringEqualsPath": "$.ExpectedSubPath",
+                "Next": "SubPathCorrect"
+              }
+            ],
+            "Default": "RestartService"
+          },
+          "RestartService": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "call",
+                "ClusterName.$": "$.EksClusterName",
+                "Method": "PATCH",
+                "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)",
+                "RequestBody": {
+                  "spec": {
+                    "template": {
+                      "metadata": {
+                        "annotations": {
+                          "kubectl.kubernetes.io/restartedAt.$": "$$.State.EnteredTime"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultSelector": {
+              "ResponseBody.$": "$.Payload.ResponseBody",
+              "StatusCode.$": "$.Payload.StatusCode"
+            },
+            "ResultPath": "$.RestartResult",
+            "Next": "WaitForRestart",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.RestartError",
+                "Next": "RestartFailed"
+              }
+            ]
+          },
+          "WaitForRestart": {
+            "Type": "Wait",
+            "Seconds": 10,
+            "Next": "ServiceRestarted"
+          },
+          "ServiceRestarted": {
+            "Type": "Pass",
+            "Parameters": {
+              "ServiceName.$": "$.ServiceName",
+              "Status": "Restarted",
+              "Reason": "Subpath mismatch detected"
+            },
+            "End": true
+          },
+          "SubPathCorrect": {
+            "Type": "Pass",
+            "Parameters": {
+              "ServiceName.$": "$.ServiceName",
+              "Status": "OK",
+              "Reason": "Subpath already correct"
+            },
+            "End": true
+          },
+          "ServiceNotFound": {
+            "Type": "Pass",
+            "Parameters": {
+              "ServiceName.$": "$.ServiceName",
+              "Status": "NotFound",
+              "Reason": "Service does not exist"
+            },
+            "End": true
+          },
+          "RestartFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "ServiceName.$": "$.ServiceName",
+              "Status": "Failed",
+              "Reason": "Restart operation failed"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.VerificationResults",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Output": "{% { \"Status\": \"Completed\", \"ModuleName\": \"verify_and_restart_services\", \"PrimaryIdentifier\": $states.input.EksClusterName, \"Summary\": { \"TotalServices\": $count($states.input.VerificationResults), \"Restarted\": $count($states.input.VerificationResults[Status='Restarted']), \"OK\": $count($states.input.VerificationResults[Status='OK']), \"NotFound\": $count($states.input.VerificationResults[Status='NotFound']), \"Failed\": $count($states.input.VerificationResults[Status='Failed']), \"RestartedServices\": $states.input.VerificationResults[Status='Restarted'].ServiceName } } %}",
+      "Next": "VerificationSucceeded"
+    },
+    "VerificationFailed": {
+      "Type": "Fail",
+      "Error": "VerificationFailed",
+      "Cause": "Failed to verify or restart services"
+    },
+    "VerificationSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

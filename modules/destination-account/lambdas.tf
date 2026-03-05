@@ -256,7 +256,7 @@ resource "aws_iam_role_policy" "lambda" {
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "lambda" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
+  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   name        = "${local.prefixes.security_group}-lambda-sg"
   description = "Security group for Lambda functions"
@@ -272,7 +272,7 @@ resource "aws_security_group" "lambda" {
 }
 
 resource "aws_security_group_rule" "lambda_https_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
+  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -284,7 +284,7 @@ resource "aws_security_group_rule" "lambda_https_egress" {
 }
 
 resource "aws_security_group_rule" "lambda_mysql_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
+  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -296,7 +296,7 @@ resource "aws_security_group_rule" "lambda_mysql_egress" {
 }
 
 resource "aws_security_group_rule" "lambda_nfs_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group && var.enable_efs ? 1 : 0
+  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group && var.enable_efs ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -318,4 +318,60 @@ resource "aws_cloudwatch_log_group" "lambda" {
   retention_in_days = var.log_retention_days
 
   tags = var.tags
+}
+
+# -----------------------------------------------------------------------------
+# K8s Proxy Lambda - uses destination role (not lambda role)
+# Deployed in VPC to access EKS private endpoints
+# -----------------------------------------------------------------------------
+
+data "archive_file" "k8s_proxy" {
+  count = var.enable_k8s_proxy ? 1 : 0
+
+  type             = "zip"
+  source_file      = coalesce(var.k8s_proxy_lambda_path, "${local.lambdas_path}/k8s-proxy/k8s_proxy.py")
+  output_file_mode = "0666"
+  output_path      = "${local.lambdas_path}/k8s-proxy.zip"
+}
+
+resource "aws_cloudwatch_log_group" "k8s_proxy" {
+  count = var.enable_k8s_proxy ? 1 : 0
+
+  name              = "/aws/lambda/${local.prefixes.log_group}-k8s-proxy"
+  retention_in_days = var.log_retention_days
+
+  tags = var.tags
+}
+
+resource "aws_lambda_function" "k8s_proxy" {
+  count = var.enable_k8s_proxy ? 1 : 0
+
+  function_name    = "${local.prefixes.lambda}-k8s-proxy"
+  description      = "K8s API proxy for EKS private endpoint access"
+  role             = local.role_arn # Uses destination role!
+  filename         = data.archive_file.k8s_proxy[0].output_path
+  source_code_hash = data.archive_file.k8s_proxy[0].output_base64sha256
+  handler          = "k8s_proxy.lambda_handler"
+  runtime          = local.python_version_long
+  architectures    = ["arm64"]
+  timeout          = 300
+  memory_size      = 256
+
+  vpc_config {
+    security_group_ids = var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+    subnet_ids         = var.lambda_subnet_ids
+  }
+
+  environment {
+    variables = {
+      LOG_LEVEL = var.lambda_log_level
+    }
+  }
+
+  tags = var.tags
+
+  depends_on = [
+    aws_iam_role_policy.k8s_proxy_lambda,
+    aws_cloudwatch_log_group.k8s_proxy
+  ]
 }

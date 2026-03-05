@@ -342,3 +342,20 @@ variable "eks_pod_identity_s3_arns" {
   type        = list(string)
   default     = []
 }
+
+# -----------------------------------------------------------------------------
+# K8s Proxy Lambda Configuration
+# For EKS clusters with private-only API endpoints
+# -----------------------------------------------------------------------------
+
+variable "enable_k8s_proxy" {
+  description = "Deploy k8s-proxy Lambda for EKS private endpoint access. Uses the destination role as Lambda execution role."
+  type        = bool
+  default     = false
+}
+
+variable "k8s_proxy_lambda_path" {
+  description = "Path to k8s-proxy Lambda source file (optional, uses bundled if not provided)"
+  type        = string
+  default     = null
+}

@@ -65,24 +65,33 @@ resource "aws_iam_role" "destination" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      merge(
-        {
-          Effect = "Allow"
-          Principal = {
-            AWS = local.all_trust_principals
-          }
-          Action = "sts:AssumeRole"
-        },
-        var.aws_organization_id != null ? {
-          Condition = {
-            StringEquals = {
-              "aws:PrincipalOrgID" = var.aws_organization_id
+    Statement = concat(
+      [
+        merge(
+          {
+            Effect = "Allow"
+            Principal = {
+              AWS = local.all_trust_principals
             }
-          }
-        } : {}
-      )
-    ]
+            Action = "sts:AssumeRole"
+          },
+          var.aws_organization_id != null ? {
+            Condition = {
+              StringEquals = {
+                "aws:PrincipalOrgID" = var.aws_organization_id
+              }
+            }
+          } : {}
+        )
+      ],
+      var.enable_k8s_proxy ? [{
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }] : []
+    )
   })
 
   tags = var.tags
@@ -497,6 +506,45 @@ resource "aws_iam_role_policy" "sns_access" {
           "sns:Publish"
         ]
         Resource = var.sns_topic_arn
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# IAM Policy - K8s Proxy Lambda (VPC + CloudWatch)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "k8s_proxy_lambda" {
+  count = local.should_attach_policies && var.enable_k8s_proxy ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-k8s-proxy-lambda"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
+      },
+      {
+        Sid    = "VPCAccess"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
+        ]
+        Resource = "*"
       }
     ]
   })
