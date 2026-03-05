@@ -151,6 +151,12 @@
           "Next": "GetExistingCopiedSnapshot"
         },
         {
+          "ErrorEquals": ["Rds.RdsException"],
+          "Comment": "Handles 'snapshot X has already been copied to snapshot Y' - find the existing copy by SourceSnapshot tag",
+          "Output": "{% $states.input %}",
+          "Next": "FindExistingCopyBySource"
+        },
+        {
           "ErrorEquals": ["States.ALL"],
           "Next": "PrepareFailed"
         }
@@ -169,6 +175,37 @@
       },
       "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshots[0].Status}}]) %}",
       "Next": "IsCopyComplete"
+    },
+
+    "FindExistingCopyBySource": {
+      "Type": "Task",
+      "Comment": "Find existing manual snapshot that was already copied from the same source automated snapshot (by SourceSnapshot tag)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "SnapshotType": "manual"
+      },
+      "Output": "{% ( $src := $states.input.SourceSnapshot.SourceSnapshotId; $match := $states.result.DbClusterSnapshots[TagList[Key='SourceSnapshot'].Value = $src][-1]; $match ? $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $match.DbClusterSnapshotArn, 'SnapshotIdentifier': $match.DbClusterSnapshotIdentifier, 'Status': $match.Status}}]) : $merge([$states.input, {'CopiedSnapshot': null}]) ) %}",
+      "Next": "CheckExistingCopyFound",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
+    },
+
+    "CheckExistingCopyFound": {
+      "Type": "Choice",
+      "Comment": "Check if an existing copy was found by SourceSnapshot tag",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.CopiedSnapshot != null %}",
+          "Next": "IsCopyComplete"
+        }
+      ],
+      "Default": "PrepareFailed"
     },
 
     "WaitCopySnapshot": {
