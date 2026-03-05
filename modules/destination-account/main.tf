@@ -546,3 +546,71 @@ resource "aws_eks_access_policy_association" "destination" {
 
   depends_on = [aws_eks_access_entry.destination]
 }
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity - IAM Role for Kubernetes refresh jobs
+# Separate from the destination role (which is for Step Functions cross-account)
+# This role is assumed by EKS pods via Pod Identity (pods.eks.amazonaws.com)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "eks_pod_identity" {
+  count = var.create_eks_pod_identity ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-eks-job"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "pods.eks.amazonaws.com"
+        }
+        Action = ["sts:AssumeRole", "sts:TagSession"]
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "eks_pod_identity_s3" {
+  count = var.create_eks_pod_identity && length(var.eks_pod_identity_s3_arns) > 0 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-eks-job-s3"
+  role = aws_iam_role.eks_pod_identity[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3RefreshBucketRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = var.eks_pod_identity_s3_arns
+      }
+    ]
+  })
+}
+
+# Pod Identity Associations - one per namespace/service_account pair
+locals {
+  pod_identity_map = var.create_eks_pod_identity && var.eks_cluster_name != null ? {
+    for assoc in var.eks_pod_identity_associations :
+    "${assoc.namespace}/${assoc.service_account}" => assoc
+  } : {}
+}
+
+resource "aws_eks_pod_identity_association" "refresh" {
+  for_each = local.pod_identity_map
+
+  cluster_name    = var.eks_cluster_name
+  namespace       = each.value.namespace
+  service_account = each.value.service_account
+  role_arn        = aws_iam_role.eks_pod_identity[0].arn
+
+  tags = var.tags
+}

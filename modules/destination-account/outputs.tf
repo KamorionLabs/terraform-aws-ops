@@ -103,3 +103,17 @@ output "eks_access_entry_created" {
   description = "Whether the EKS access entry was created"
   value       = var.create_eks_access_entry && var.eks_cluster_name != null
 }
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity Outputs
+# -----------------------------------------------------------------------------
+
+output "eks_pod_identity_role_arn" {
+  description = "ARN of the EKS Pod Identity IAM role for refresh jobs"
+  value       = var.create_eks_pod_identity ? aws_iam_role.eks_pod_identity[0].arn : null
+}
+
+output "eks_pod_identity_role_name" {
+  description = "Name of the EKS Pod Identity IAM role for refresh jobs"
+  value       = var.create_eks_pod_identity ? aws_iam_role.eks_pod_identity[0].name : null
+}

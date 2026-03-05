@@ -316,3 +316,29 @@ variable "ssm_parameter_prefixes" {
   type        = list(string)
   default     = []
 }
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity Configuration
+# For Kubernetes refresh jobs that need AWS access (e.g., S3 for SQL scripts)
+# -----------------------------------------------------------------------------
+
+variable "create_eks_pod_identity" {
+  description = "Create EKS Pod Identity IAM role and associations for refresh jobs"
+  type        = bool
+  default     = false
+}
+
+variable "eks_pod_identity_associations" {
+  description = "List of namespace/service_account pairs for Pod Identity associations"
+  type = list(object({
+    namespace       = string
+    service_account = string
+  }))
+  default = []
+}
+
+variable "eks_pod_identity_s3_arns" {
+  description = "S3 ARNs for Pod Identity role (refresh bucket read access)"
+  type        = list(string)
+  default     = []
+}
