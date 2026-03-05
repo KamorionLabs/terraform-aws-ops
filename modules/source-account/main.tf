@@ -593,6 +593,7 @@ resource "aws_iam_role_policy" "backup_efs" {
         Effect = "Allow"
         Action = [
           "kms:Decrypt",
+          "kms:GenerateDataKey",
           "kms:DescribeKey",
           "kms:CreateGrant"
         ]
