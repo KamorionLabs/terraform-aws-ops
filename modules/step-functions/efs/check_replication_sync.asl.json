@@ -4,7 +4,7 @@
   "States": {
     "InitializeState": {
       "Type": "Pass",
-      "Comment": "Initialize state and build Lambda names. Optional SourceSubpathSSMParameter/DestinationSubpathSSMParameter specify SSM parameters containing subpaths for flag file operations.",
+      "Comment": "Initialize state and build Lambda names. SSM subpath params are handled in SetSubpathDefaults.",
       "Parameters": {
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "DestinationFileSystemId.$": "$.DestinationFileSystemId",
@@ -18,10 +18,60 @@
         "Mode.$": "States.ArrayGetItem(States.Array($.Mode, 'wait'), 0)",
         "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.SourceLambdaPrefix, $.Context)",
         "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)",
-        "SourceSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.SourceSubpathSSMParameter, ''), 0)",
-        "DestinationSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.DestinationSubpathSSMParameter, ''), 0)",
         "SourceSubpath": "",
         "DestinationSubpath": ""
+      },
+      "Next": "SetSubpathDefaults"
+    },
+    "SetSubpathDefaults": {
+      "Type": "Choice",
+      "Comment": "Check if optional SourceSubpathSSMParameter was provided in input",
+      "Choices": [
+        {
+          "Variable": "$$.Execution.Input.SourceSubpathSSMParameter",
+          "IsPresent": true,
+          "Next": "ApplySubpathSSMParams"
+        }
+      ],
+      "Default": "SetEmptySubpathSSMParams"
+    },
+    "SetEmptySubpathSSMParams": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceSubpathSSMParameter": "",
+        "DestinationSubpathSSMParameter": ""
+      },
+      "ResultPath": "$.SSMParams",
+      "Next": "MergeSubpathParams"
+    },
+    "ApplySubpathSSMParams": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceSubpathSSMParameter.$": "$$.Execution.Input.SourceSubpathSSMParameter",
+        "DestinationSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($$.Execution.Input.DestinationSubpathSSMParameter, ''), 0)"
+      },
+      "ResultPath": "$.SSMParams",
+      "Next": "MergeSubpathParams"
+    },
+    "MergeSubpathParams": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "Context.$": "$.Context",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "Mode.$": "$.Mode",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "SourceSubpathSSMParameter.$": "$.SSMParams.SourceSubpathSSMParameter",
+        "DestinationSubpathSSMParameter.$": "$.SSMParams.DestinationSubpathSSMParameter",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath"
       },
       "Next": "CheckIfSubpathConfigured"
     },
