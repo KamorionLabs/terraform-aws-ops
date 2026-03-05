@@ -34,7 +34,8 @@
         "ResourceName.$": "$.ClusterInfo.ClusterArn"
       },
       "ResultSelector": {
-        "RefreshTagValue.$": "$.TagList[?(@.Key=='refresh')].Value"
+        "RefreshTagValue.$": "$.TagList[?(@.Key=='refresh')].Value",
+        "AllTags.$": "$.TagList"
       },
       "ResultPath": "$.Tags",
       "Next": "IsRefreshAllowed",
@@ -47,10 +48,19 @@
     },
     "IsRefreshAllowed": {
       "Type": "Choice",
+      "Comment": "Allow delete if refresh:true tag OR zero tags (temporary/restore cluster)",
       "Choices": [
         {
-          "Variable": "$.Tags.RefreshTagValue[0]",
-          "StringEquals": "true",
+          "And": [
+            { "Variable": "$.Tags.RefreshTagValue[0]", "IsPresent": true },
+            { "Variable": "$.Tags.RefreshTagValue[0]", "StringEquals": "true" }
+          ],
+          "Next": "EnsureClusterAvailable"
+        },
+        {
+          "Comment": "No tags at all = temporary cluster from failed restore, safe to delete",
+          "Variable": "$.Tags.AllTags[0]",
+          "IsPresent": false,
           "Next": "EnsureClusterAvailable"
         }
       ],
