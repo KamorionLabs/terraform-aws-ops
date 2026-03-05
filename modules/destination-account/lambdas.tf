@@ -258,7 +258,7 @@ resource "aws_iam_role_policy" "lambda" {
 resource "aws_security_group" "lambda" {
   count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
-  name        = "${local.prefixes.security_group}-lambda-sg"
+  name        = "${local.prefixes.security_group}-dest-lambda-sg"
   description = "Security group for Lambda functions"
   vpc_id      = var.vpc_id
 
@@ -267,7 +267,7 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = merge(var.tags, {
-    Name = "${local.prefixes.security_group}-lambda-sg"
+    Name = "${local.prefixes.security_group}-dest-lambda-sg"
   })
 }
 
