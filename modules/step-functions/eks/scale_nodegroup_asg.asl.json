@@ -204,7 +204,33 @@
       "Comment": "Prepare input for ASG scaling - MinSize/MaxSize are optional",
       "QueryLanguage": "JSONata",
       "Output": "{% $merge([$states.input, { \"ScalingConfig\": $merge([{ \"AsgName\": $states.input.FilteredResults.MatchedNodeGroups[0].AsgName, \"NodeGroupName\": $states.input.FilteredResults.MatchedNodeGroups[0].NodeGroupName, \"CurrentCapacity\": $states.input.CurrentAsgInfo.DesiredCapacity, \"DesiredCapacity\": $states.input.DesiredCapacity }, $exists($states.input.MinSize) ? { \"MinSize\": $states.input.MinSize } : {}, $exists($states.input.MaxSize) ? { \"MaxSize\": $states.input.MaxSize } : {} ]) }]) %}",
-      "Next": "CheckMinMaxProvided"
+      "Next": "CheckScaleDirection"
+    },
+    "CheckScaleDirection": {
+      "Type": "Choice",
+      "Comment": "Only scale UP, never scale down - skip if current capacity already sufficient",
+      "Choices": [
+        {
+          "Variable": "$.ScalingConfig.DesiredCapacity",
+          "NumericGreaterThanPath": "$.ScalingConfig.CurrentCapacity",
+          "Next": "CheckMinMaxProvided"
+        }
+      ],
+      "Default": "NoScaleDownNeeded"
+    },
+    "NoScaleDownNeeded": {
+      "Type": "Pass",
+      "Comment": "Current capacity already meets or exceeds desired - no scale-down performed",
+      "Parameters": {
+        "Status": "AlreadySufficient",
+        "ModuleName": "scale_nodegroup_asg",
+        "NodeGroupName.$": "$.ScalingConfig.NodeGroupName",
+        "AsgName.$": "$.ScalingConfig.AsgName",
+        "CurrentCapacity.$": "$.ScalingConfig.CurrentCapacity",
+        "RequestedCapacity.$": "$.ScalingConfig.DesiredCapacity",
+        "Action": "No scale-down performed"
+      },
+      "Next": "ScaleSucceeded"
     },
     "CheckMinMaxProvided": {
       "Type": "Choice",
