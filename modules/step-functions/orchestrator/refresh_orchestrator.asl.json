@@ -47,6 +47,7 @@
           "EKS.$": "$.EKS",
           "SourceAccount.$": "$.SourceAccount",
           "DestinationAccount.$": "$.DestinationAccount",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "StepFunctions.$": "$.StepFunctions",
           "Notifications.$": "$.Notifications",
           "Tags.$": "$.Tags"
