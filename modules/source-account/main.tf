@@ -543,7 +543,7 @@ resource "aws_iam_role_policy" "ssm_access" {
 resource "aws_iam_role" "backup_efs" {
   count = var.enable_efs ? 1 : 0
 
-  name = "${local.prefixes.iam_role}-backup-efs-role"
+  name = "${local.prefixes.iam_role}-backup-efs-copy-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -562,7 +562,7 @@ resource "aws_iam_role" "backup_efs" {
 resource "aws_iam_role_policy" "backup_efs" {
   count = var.enable_efs ? 1 : 0
 
-  name = "${local.prefixes.iam_policy}-backup-efs"
+  name = "${local.prefixes.iam_policy}-backup-efs-copy"
   role = aws_iam_role.backup_efs[0].id
 
   policy = jsonencode({
