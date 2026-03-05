@@ -20,7 +20,8 @@
                   "And": [
                     {"Variable": "$.SourceAccount.RoleArn", "IsPresent": true},
                     {"Variable": "$.DestinationAccount.RoleArn", "IsPresent": true},
-                    {"Variable": "$.DestinationAccount.AccountId", "IsPresent": true}
+                    {"Variable": "$.DestinationAccount.AccountId", "IsPresent": true},
+                    {"Variable": "$.DestinationAccount.Region", "IsPresent": true}
                   ],
                   "Next": "CheckDatabaseSourceFields"
                 }
@@ -29,7 +30,7 @@
             },
             "ConfigMissing_Accounts": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId", "DestinationAccount.Region"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -65,7 +66,9 @@
                     {"Variable": "$.Database.Target.ClusterIdentifier", "IsPresent": true},
                     {"Variable": "$.Database.Target.InstanceIdentifierPrefix", "IsPresent": true},
                     {"Variable": "$.Database.Target.InstanceClass", "IsPresent": true},
-                    {"Variable": "$.Database.Target.Instances", "IsPresent": true}
+                    {"Variable": "$.Database.Target.Instances", "IsPresent": true},
+                    {"Variable": "$.Database.Target.ServerlessConfig.MinCapacity", "IsPresent": true},
+                    {"Variable": "$.Database.Target.ServerlessConfig.MaxCapacity", "IsPresent": true}
                   ],
                   "Next": "CheckDatabaseNetworkFields"
                 }
@@ -447,7 +450,41 @@
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
                     {"Variable": "$.EFS.Name", "IsPresent": true},
-                    {"Variable": "$.EFS.Tags", "IsPresent": true}
+                    {"Variable": "$.EFS.Tags", "IsPresent": true},
+                    {"Variable": "$.EFS.Lifecycle", "IsPresent": true},
+                    {"Variable": "$.EFS.Context", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSFields3"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSFields3": {
+              "Type": "Choice",
+              "Comment": "Verify EFS remaining fields (LambdaConfig, Replication, Backup, Security)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.LambdaConfig", "IsPresent": true},
+                    {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
+                    {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Source.Name", "IsPresent": true},
+                    {"Variable": "$.EFS.Security.KmsKeyId", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSFields4"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSFields4": {
+              "Type": "Choice",
+              "Comment": "Verify EFS Backup fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Backup.RoleArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Backup.ItemsToRestore", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.RestoreFromBackup", "IsPresent": true}
                   ],
                   "Next": "CheckEFSSSMConditional"
                 }
@@ -456,7 +493,7 @@
             },
             "ConfigMissing_EFS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Name", "Tags"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Replication.DestinationRegion", "Replication.RoleArn", "Name", "Tags", "Lifecycle", "Context", "LambdaConfig", "Source.Name", "Security.KmsKeyId", "Backup.RoleArn", "Backup.ItemsToRestore"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
