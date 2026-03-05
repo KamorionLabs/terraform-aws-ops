@@ -787,7 +787,47 @@
           "Next": "EnsureOldClusterNotExists"
         }
       ],
-      "Default": "EnsureTargetClusterAvailable"
+      "Default": "CheckDeleteOldClusterOption"
+    },
+    "CheckDeleteOldClusterOption": {
+      "Type": "Choice",
+      "Comment": "If not renaming, check if we should delete old cluster to free target name. If neither rename nor delete, skip cluster switch entirely (test mode).",
+      "Choices": [
+        {
+          "Variable": "$.Database.Options.DeleteOldCluster",
+          "BooleanEquals": true,
+          "Next": "DeleteOldCluster"
+        }
+      ],
+      "Default": "SkipClusterSwitch"
+    },
+    "DeleteOldCluster": {
+      "Type": "Task",
+      "Comment": "Delete old cluster to free up target name for rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.DeleteOldClusterResult",
+      "Next": "EnsureTargetClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DeleteOldClusterError",
+          "Next": "SendFailureNotification"
+        }
+      ]
+    },
+    "SkipClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Test mode: both RenameOldCluster and DeleteOldCluster are false. Restored cluster keeps its temporary name.",
+      "Result": "SKIPPED",
+      "ResultPath": "$.ClusterSwitchResult",
+      "Next": "CheckRotateSecretsOption"
     },
     "EnsureOldClusterNotExists": {
       "Type": "Task",
