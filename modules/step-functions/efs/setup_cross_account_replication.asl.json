@@ -254,25 +254,45 @@
 
     "CreateDestinationFileSystem": {
       "Type": "Task",
-      "Comment": "Create destination EFS with replication overwrite protection DISABLED",
+      "Comment": "Create destination EFS with replication overwrite protection DISABLED (tags applied separately)",
       "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
       "Parameters": {
         "CreationToken.$": "States.UUID()",
         "PerformanceMode.$": "$.PerformanceMode",
         "Encrypted.$": "$.Encrypted",
-        "KmsKeyId.$": "$.DestinationKmsKeyId",
-        "Tags.$": "$.Tags"
+        "KmsKeyId.$": "$.DestinationKmsKeyId"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.DestinationEFS",
-      "Next": "WaitDestinationCreating",
+      "Next": "TagDestinationFileSystem",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CreateError",
           "Next": "SetupFailed"
+        }
+      ]
+    },
+    "TagDestinationFileSystem": {
+      "Type": "Task",
+      "Comment": "Tag destination EFS using resourcegroupstaggingapi (accepts map format)",
+      "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+      "Parameters": {
+        "ResourceARNList.$": "States.Array($.DestinationEFS.FileSystemArn)",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.TagResult",
+      "Next": "WaitDestinationCreating",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TagError",
+          "Next": "WaitDestinationCreating"
         }
       ]
     },

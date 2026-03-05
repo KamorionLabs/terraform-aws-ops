@@ -23,19 +23,19 @@
     },
     "CreateFileSystem": {
       "Type": "Task",
+      "Comment": "Create EFS without tags (tags applied separately to accept map format)",
       "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
       "Parameters": {
         "CreationToken.$": "States.UUID()",
         "PerformanceMode.$": "$.PerformanceMode",
         "Encrypted.$": "$.Encrypted",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "Tags.$": "$.Tags"
+        "KmsKeyId.$": "$.KmsKeyId"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.CreatedFileSystem",
-      "Next": "WaitFileSystemAvailable",
+      "Next": "TagFileSystem",
       "Retry": [
         {
           "ErrorEquals": ["EFS.FileSystemAlreadyExists"],
@@ -53,6 +53,27 @@
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.Error",
           "Next": "CreateFailed"
+        }
+      ]
+    },
+    "TagFileSystem": {
+      "Type": "Task",
+      "Comment": "Tag EFS using resourcegroupstaggingapi (accepts map format)",
+      "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+      "Parameters": {
+        "ResourceARNList.$": "States.Array($.CreatedFileSystem.FileSystemArn)",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.TagResult",
+      "Next": "WaitFileSystemAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TagError",
+          "Next": "WaitFileSystemAvailable"
         }
       ]
     },
