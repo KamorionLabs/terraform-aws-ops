@@ -444,47 +444,15 @@
             },
             "CheckEFSFields2": {
               "Type": "Choice",
-              "Comment": "Verify EFS additional fields (Name, Tags, Lifecycle, Replication, SSMParameters)",
+              "Comment": "Verify EFS replication and naming fields (always required when EFS enabled)",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
-                    {"Variable": "$.EFS.Name", "IsPresent": true},
-                    {"Variable": "$.EFS.Tags", "IsPresent": true},
-                    {"Variable": "$.EFS.Lifecycle", "IsPresent": true},
-                    {"Variable": "$.EFS.Context", "IsPresent": true}
-                  ],
-                  "Next": "CheckEFSFields3"
-                }
-              ],
-              "Default": "ConfigMissing_EFS"
-            },
-            "CheckEFSFields3": {
-              "Type": "Choice",
-              "Comment": "Verify EFS remaining fields (LambdaConfig, Replication, Backup, Security)",
-              "Choices": [
-                {
-                  "And": [
-                    {"Variable": "$.EFS.LambdaConfig", "IsPresent": true},
                     {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
                     {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true},
-                    {"Variable": "$.EFS.Source.Name", "IsPresent": true},
-                    {"Variable": "$.EFS.Security.KmsKeyId", "IsPresent": true}
-                  ],
-                  "Next": "CheckEFSFields4"
-                }
-              ],
-              "Default": "ConfigMissing_EFS"
-            },
-            "CheckEFSFields4": {
-              "Type": "Choice",
-              "Comment": "Verify EFS Backup fields",
-              "Choices": [
-                {
-                  "And": [
-                    {"Variable": "$.EFS.Backup.RoleArn", "IsPresent": true},
-                    {"Variable": "$.EFS.Backup.ItemsToRestore", "IsPresent": true},
-                    {"Variable": "$.StepFunctions.EFS.RestoreFromBackup", "IsPresent": true}
+                    {"Variable": "$.EFS.Name", "IsPresent": true},
+                    {"Variable": "$.EFS.Tags", "IsPresent": true}
                   ],
                   "Next": "CheckEFSSSMConditional"
                 }
@@ -493,7 +461,7 @@
             },
             "ConfigMissing_EFS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Replication.DestinationRegion", "Replication.RoleArn", "Name", "Tags", "Lifecycle", "Context", "LambdaConfig", "Source.Name", "Security.KmsKeyId", "Backup.RoleArn", "Backup.ItemsToRestore"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Replication.DestinationRegion", "Replication.RoleArn", "Name", "Tags"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
