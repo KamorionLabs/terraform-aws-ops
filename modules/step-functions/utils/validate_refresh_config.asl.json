@@ -24,7 +24,7 @@
                     {"Variable": "$.DestinationAccount.Region", "IsPresent": true},
                     {"Variable": "$.K8sProxyLambdaArn", "IsPresent": true}
                   ],
-                  "Next": "CheckDatabaseSourceFields"
+                  "Next": "CheckDatabaseEnabled"
                 }
               ],
               "Default": "ConfigMissing_Accounts"
@@ -34,6 +34,24 @@
               "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId", "DestinationAccount.Region", "K8sProxyLambdaArn"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseEnabled": {
+              "Type": "Choice",
+              "Comment": "Skip DB field validation if Database.Enabled is false",
+              "Choices": [
+                {
+                  "Variable": "$.Database.Enabled",
+                  "IsPresent": false,
+                  "Next": "CheckDatabaseSourceFields"
+                },
+                {
+                  "Variable": "$.Database.Enabled",
+                  "BooleanEquals": false,
+                  "Next": "CheckSFNEFSConditional"
+                }
+              ],
+              "Default": "CheckDatabaseSourceFields"
             },
 
             "CheckDatabaseSourceFields": {
@@ -751,8 +769,30 @@
 
         {
           "Comment": "Branch 2: Database - Validate source cluster, destination network, parameters and KMS",
-          "StartAt": "InitDBChecks",
+          "StartAt": "CheckDBEnabled_V",
           "States": {
+            "CheckDBEnabled_V": {
+              "Type": "Choice",
+              "Comment": "Skip DB validation if Database.Enabled is false",
+              "Choices": [
+                {
+                  "Variable": "$.Database.Enabled",
+                  "IsPresent": false,
+                  "Next": "InitDBChecks"
+                },
+                {
+                  "Variable": "$.Database.Enabled",
+                  "BooleanEquals": false,
+                  "Next": "DBSkipped"
+                }
+              ],
+              "Default": "InitDBChecks"
+            },
+            "DBSkipped": {
+              "Type": "Pass",
+              "Result": {"Category": "Database", "Status": "SKIPPED"},
+              "End": true
+            },
             "InitDBChecks": {
               "Type": "Pass",
               "Result": {

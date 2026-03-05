@@ -212,8 +212,22 @@
         },
         {
           "Comment": "Branch B: Database Restore chain",
-          "StartAt": "EnsureRestoreClusterNotExists",
+          "StartAt": "CheckDatabaseEnabled_Restore",
           "States": {
+            "CheckDatabaseEnabled_Restore": {
+              "Type": "Choice",
+              "Comment": "Skip DB restore if Database.Enabled is false",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Enabled", "IsPresent": true},
+                    {"Variable": "$.Database.Enabled", "BooleanEquals": false}
+                  ],
+                  "Next": "DatabaseRefreshComplete"
+                }
+              ],
+              "Default": "EnsureRestoreClusterNotExists"
+            },
             "EnsureRestoreClusterNotExists": {
               "Type": "Task",
               "Comment": "Clean up any leftover -restore cluster from failed refresh",
