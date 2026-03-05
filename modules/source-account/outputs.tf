@@ -59,3 +59,12 @@ output "efs_replication_role_name" {
   description = "Name of the EFS replication role"
   value       = var.enable_efs ? aws_iam_role.efs_replication[0].name : null
 }
+
+# -----------------------------------------------------------------------------
+# AWS Backup EFS Outputs
+# -----------------------------------------------------------------------------
+
+output "backup_efs_role_arn" {
+  description = "ARN of the AWS Backup role for EFS cross-account copy"
+  value       = var.enable_efs ? aws_iam_role.backup_efs[0].arn : null
+}

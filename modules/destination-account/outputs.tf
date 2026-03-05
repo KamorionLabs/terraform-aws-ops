@@ -131,3 +131,12 @@ output "k8s_proxy_lambda_name" {
   description = "Name of the k8s-proxy Lambda function"
   value       = var.enable_k8s_proxy ? aws_lambda_function.k8s_proxy[0].function_name : null
 }
+
+# -----------------------------------------------------------------------------
+# AWS Backup EFS Outputs
+# -----------------------------------------------------------------------------
+
+output "backup_efs_role_arn" {
+  description = "ARN of the AWS Backup role for EFS restore operations"
+  value       = var.enable_efs ? aws_iam_role.backup_efs[0].arn : null
+}

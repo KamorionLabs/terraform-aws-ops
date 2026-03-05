@@ -652,6 +652,79 @@ locals {
   } : {}
 }
 
+# -----------------------------------------------------------------------------
+# AWS Backup Role - Dedicated role for EFS backup restore operations
+# This role is assumed by the AWS Backup service to restore EFS filesystems
+# (cross-account copy lands in local vault, then restore creates new EFS)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-backup-efs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "backup.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-backup-efs"
+  role = aws_iam_role.backup_efs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BackupRestoreOperations"
+        Effect = "Allow"
+        Action = [
+          "backup:DescribeRestoreJob",
+          "backup:GetRecoveryPointRestoreMetadata"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EFSRestoreOperations"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:CreateFileSystem",
+          "elasticfilesystem:Restore",
+          "elasticfilesystem:DescribeFileSystems",
+          "elasticfilesystem:CreateMountTarget",
+          "elasticfilesystem:DescribeMountTargets",
+          "elasticfilesystem:TagResource",
+          "elasticfilesystem:CreateTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "KMSForBackup"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey",
+          "kms:CreateGrant"
+        ]
+        Resource = var.kms_key_arns
+      }
+    ]
+  })
+}
+
 resource "aws_eks_pod_identity_association" "refresh" {
   for_each = local.pod_identity_map
 

@@ -535,6 +535,73 @@ resource "aws_iam_role_policy" "ssm_access" {
 # This role is assumed by the EFS service to perform replication operations
 # -----------------------------------------------------------------------------
 
+# -----------------------------------------------------------------------------
+# AWS Backup Role - Dedicated role for cross-account EFS backup copy
+# This role is assumed by the AWS Backup service to perform copy operations
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-backup-efs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "backup.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-backup-efs"
+  role = aws_iam_role.backup_efs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BackupCopyOperations"
+        Effect = "Allow"
+        Action = [
+          "backup:CopyIntoBackupVault",
+          "backup:DescribeCopyJob",
+          "backup:GetRecoveryPointRestoreMetadata"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "BackupVaultRead"
+        Effect = "Allow"
+        Action = [
+          "backup:DescribeBackupVault",
+          "backup:ListRecoveryPointsByBackupVault",
+          "backup:ListRecoveryPointsByResource"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "KMSForBackup"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:DescribeKey",
+          "kms:CreateGrant"
+        ]
+        Resource = var.kms_key_arns
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role" "efs_replication" {
   count = var.enable_efs ? 1 : 0
 
