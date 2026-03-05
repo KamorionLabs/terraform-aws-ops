@@ -115,7 +115,7 @@
                     {"Variable": "$.Database.Options.RunMysqlImportCluster", "IsPresent": true},
                     {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true}
                   ],
-                  "Next": "CheckMysqlOpsConditional"
+                  "Next": "CheckDatabaseAlwaysRequired"
                 }
               ],
               "Default": "ConfigMissing_DBOptions"
@@ -123,6 +123,28 @@
             "ConfigMissing_DBOptions": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "Database.Options", "Required": ["DeleteOldCluster", "RenameOldCluster", "RunMysqlDumpOldCluster", "RunMysqlImportCluster", "RunSqlScripts"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseAlwaysRequired": {
+              "Type": "Choice",
+              "Comment": "Verify fields always consumed by orchestrator (EnableMasterSecret, ConfigureS3Integration, CreateDBInstance)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Secrets.MasterUserSecretKmsKeyId", "IsPresent": true},
+                    {"Variable": "$.Database.S3Integration.RoleArn", "IsPresent": true},
+                    {"Variable": "$.Database.Target.Tags", "IsPresent": true}
+                  ],
+                  "Next": "CheckMysqlOpsConditional"
+                }
+              ],
+              "Default": "ConfigMissing_DBAlwaysRequired"
+            },
+            "ConfigMissing_DBAlwaysRequired": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.AlwaysRequired", "Required": ["Database.Secrets.MasterUserSecretKmsKeyId", "Database.S3Integration.RoleArn", "Database.Target.Tags"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -152,7 +174,7 @@
                     {"Variable": "$.Database.MySQLOperations.DumpSubPath", "IsPresent": true},
                     {"Variable": "$.Database.MySQLOperations.TablesToDump", "IsPresent": true}
                   ],
-                  "Next": "CheckSFNUtilsFields"
+                  "Next": "CheckMysqlImportConditional"
                 }
               ],
               "Default": "ConfigMissing_MySQLOps"
@@ -160,6 +182,111 @@
             "ConfigMissing_MySQLOps": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "Database.MySQLOperations", "Required": ["DatabaseName", "EfsPvcName", "DumpSubPath", "TablesToDump"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckMysqlImportConditional": {
+              "Type": "Choice",
+              "Comment": "If MySQLImport enabled, check import-specific fields",
+              "Choices": [
+                {
+                  "Variable": "$.Database.Options.RunMysqlImportCluster",
+                  "BooleanEquals": true,
+                  "Next": "CheckMysqlImportFields"
+                }
+              ],
+              "Default": "CheckSqlScriptsConditional"
+            },
+            "CheckMysqlImportFields": {
+              "Type": "Choice",
+              "Comment": "Verify import-specific MySQLOperations fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.MySQLOperations.ImportDatabaseName", "IsPresent": true},
+                    {"Variable": "$.Database.MySQLOperations.RefreshBucket", "IsPresent": true},
+                    {"Variable": "$.Database.MySQLOperations.RefreshBucketPrefix", "IsPresent": true}
+                  ],
+                  "Next": "CheckSqlScriptsConditional"
+                }
+              ],
+              "Default": "ConfigMissing_MySQLImport"
+            },
+            "ConfigMissing_MySQLImport": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.MySQLOperations.Import", "Required": ["ImportDatabaseName", "RefreshBucket", "RefreshBucketPrefix"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSqlScriptsConditional": {
+              "Type": "Choice",
+              "Comment": "If RunSqlScripts enabled, check SqlScripts fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunSqlScripts", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckSqlScriptsFields"
+                }
+              ],
+              "Default": "CheckRotateSecretsConditional"
+            },
+            "CheckSqlScriptsFields": {
+              "Type": "Choice",
+              "Comment": "Verify SqlScripts fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.SqlScripts.LambdaFunctionName", "IsPresent": true},
+                    {"Variable": "$.Database.SqlScripts.Bucket", "IsPresent": true},
+                    {"Variable": "$.Database.SqlScripts.Prefix", "IsPresent": true}
+                  ],
+                  "Next": "CheckRotateSecretsConditional"
+                }
+              ],
+              "Default": "ConfigMissing_SqlScripts"
+            },
+            "ConfigMissing_SqlScripts": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.SqlScripts", "Required": ["LambdaFunctionName", "Bucket", "Prefix"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckRotateSecretsConditional": {
+              "Type": "Choice",
+              "Comment": "If RotateSecrets enabled, check secrets rotation fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RotateSecrets", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RotateSecrets", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckRotateSecretsFields"
+                }
+              ],
+              "Default": "CheckSFNUtilsFields"
+            },
+            "CheckRotateSecretsFields": {
+              "Type": "Choice",
+              "Comment": "Verify RotateSecrets fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Secrets.UserSecrets", "IsPresent": true},
+                    {"Variable": "$.Database.Secrets.RotationLambdaName", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNUtilsFields"
+                }
+              ],
+              "Default": "ConfigMissing_RotateSecrets"
+            },
+            "ConfigMissing_RotateSecrets": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Secrets.Rotation", "Required": ["UserSecrets", "RotationLambdaName"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -214,16 +341,69 @@
                     {"Variable": "$.StepFunctions.Database.RenameCluster", "IsPresent": true},
                     {"Variable": "$.StepFunctions.Database.DeleteCluster", "IsPresent": true},
                     {"Variable": "$.StepFunctions.Database.StopCluster", "IsPresent": true},
-                    {"Variable": "$.StepFunctions.Database.ShareSnapshot", "IsPresent": true}
+                    {"Variable": "$.StepFunctions.Database.ShareSnapshot", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.EnsureClusterNotExists", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.ConfigureS3Integration", "IsPresent": true}
                   ],
-                  "Next": "CheckSFNEFSConditional"
+                  "Next": "CheckSFNDatabaseConditionalArns"
                 }
               ],
               "Default": "ConfigMissing_SFNDatabase"
             },
             "ConfigMissing_SFNDatabase": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.Database", "Required": ["RestoreCluster", "PrepareSnapshotForRestore", "CreateInstance", "EnableMasterSecret", "EnsureClusterAvailable", "RenameCluster", "DeleteCluster", "StopCluster", "ShareSnapshot"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.Database", "Required": ["RestoreCluster", "PrepareSnapshotForRestore", "CreateInstance", "EnableMasterSecret", "EnsureClusterAvailable", "RenameCluster", "DeleteCluster", "StopCluster", "ShareSnapshot", "EnsureClusterNotExists", "ConfigureS3Integration"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSFNDatabaseConditionalArns": {
+              "Type": "Choice",
+              "Comment": "Check conditional SFN ARNs: dump if RunMysqlDumpOldCluster, import if RunMysqlImportCluster",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "BooleanEquals": true},
+                    {"Variable": "$.StepFunctions.Database.RunMysqldumpOnEks", "IsPresent": false}
+                  ],
+                  "Next": "ConfigMissing_SFNDatabaseConditional"
+                },
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RunMysqlImportCluster", "BooleanEquals": true},
+                    {"Variable": "$.StepFunctions.Database.RunMysqlimportOnEks", "IsPresent": false}
+                  ],
+                  "Next": "ConfigMissing_SFNDatabaseConditional"
+                }
+              ],
+              "Default": "CheckSFNDatabaseConditionalArns2"
+            },
+            "CheckSFNDatabaseConditionalArns2": {
+              "Type": "Choice",
+              "Comment": "Check conditional SFN ARNs: sql scripts and rotate secrets",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunSqlScripts", "BooleanEquals": true},
+                    {"Variable": "$.StepFunctions.Database.RunSqlFromS3", "IsPresent": false}
+                  ],
+                  "Next": "ConfigMissing_SFNDatabaseConditional"
+                },
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.RotateSecrets", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RotateSecrets", "BooleanEquals": true},
+                    {"Variable": "$.StepFunctions.Database.RotateSecrets", "IsPresent": false}
+                  ],
+                  "Next": "ConfigMissing_SFNDatabaseConditional"
+                }
+              ],
+              "Default": "CheckSFNEFSConditional"
+            },
+            "ConfigMissing_SFNDatabaseConditional": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.Database.Conditional", "Required": ["RunMysqldumpOnEks (if dump)", "RunMysqlimportOnEks (if import)", "RunSqlFromS3 (if sql)", "RotateSecrets (if rotate)"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -250,18 +430,68 @@
                   "And": [
                     {"Variable": "$.EFS.Source.FileSystemId", "IsPresent": true},
                     {"Variable": "$.EFS.Source.Account.RoleArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
                     {"Variable": "$.EFS.Network.SubnetIds", "IsPresent": true},
-                    {"Variable": "$.EFS.Network.SecurityGroupIds", "IsPresent": true},
-                    {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true}
+                    {"Variable": "$.EFS.Network.SecurityGroupIds", "IsPresent": true}
                   ],
-                  "Next": "CheckSFNEFSFields"
+                  "Next": "CheckEFSFields2"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSFields2": {
+              "Type": "Choice",
+              "Comment": "Verify EFS additional fields (Name, Tags, Lifecycle, Replication, SSMParameters)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
+                    {"Variable": "$.EFS.Name", "IsPresent": true},
+                    {"Variable": "$.EFS.Tags", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSSSMConditional"
                 }
               ],
               "Default": "ConfigMissing_EFS"
             },
             "ConfigMissing_EFS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Name", "Tags"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEFSSSMConditional": {
+              "Type": "Choice",
+              "Comment": "If StoreInSSM enabled, verify SSMParameters fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Options.StoreInSSM", "IsPresent": true},
+                    {"Variable": "$.EFS.Options.StoreInSSM", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEFSSSMFields"
+                }
+              ],
+              "Default": "CheckSFNEFSFields"
+            },
+            "CheckEFSSSMFields": {
+              "Type": "Choice",
+              "Comment": "Verify EFS SSMParameters fields when StoreInSSM enabled",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.SSMParameters.EfsId", "IsPresent": true},
+                    {"Variable": "$.EFS.SSMParameters.EfsSubPath", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNEFSFields"
+                }
+              ],
+              "Default": "ConfigMissing_EFSSSM"
+            },
+            "ConfigMissing_EFSSSM": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.SSM", "Required": ["SSMParameters.EfsId", "SSMParameters.EfsSubPath", "StepFunctions.EFS.GetSubpathAndStoreInSSM"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -313,16 +543,107 @@
                     {"Variable": "$.EKS.Namespace", "IsPresent": true},
                     {"Variable": "$.EKS.Services", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.ScaleServices", "IsPresent": true},
-                    {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true}
+                    {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EKS.VerifyAndRestartServices", "IsPresent": true}
                   ],
-                  "Next": "ConfigPassed"
+                  "Next": "CheckEKSConditionalArns"
                 }
               ],
               "Default": "ConfigMissing_EKS"
             },
             "ConfigMissing_EKS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EKS", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.ManageStorage"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.ManageStorage", "StepFunctions.EKS.VerifyAndRestartServices"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEKSConditionalArns": {
+              "Type": "Choice",
+              "Comment": "If RunArchiveJob enabled, check SFN ARN and ScaleNodegroupAsg",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.Options.RunArchiveJob", "IsPresent": true},
+                    {"Variable": "$.EKS.Options.RunArchiveJob", "BooleanEquals": true},
+                    {"Variable": "$.StepFunctions.Utils.RunArchiveJob", "IsPresent": false}
+                  ],
+                  "Next": "ConfigMissing_EKSConditional"
+                }
+              ],
+              "Default": "CheckEKSScalingConditional"
+            },
+            "ConfigMissing_EKSConditional": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.Conditional", "Required": ["StepFunctions.Utils.RunArchiveJob (if RunArchiveJob=true)"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEKSScalingConditional": {
+              "Type": "Choice",
+              "Comment": "If dump or import enabled, check EKS scaling fields and ScaleNodegroupAsg ARN",
+              "Choices": [
+                {
+                  "Or": [
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "BooleanEquals": true},
+                    {"Variable": "$.Database.Options.RunMysqlImportCluster", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEKSScalingFields"
+                }
+              ],
+              "Default": "CheckNotifyConditional"
+            },
+            "CheckEKSScalingFields": {
+              "Type": "Choice",
+              "Comment": "Verify EKS scaling fields when dump/import uses ScaleNodegroupAsg",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.Scaling.MinimumCapacity", "IsPresent": true},
+                    {"Variable": "$.EKS.Scaling.TargetCapacity", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EKS.ScaleNodegroupAsg", "IsPresent": true}
+                  ],
+                  "Next": "CheckNotifyConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EKSScaling"
+            },
+            "ConfigMissing_EKSScaling": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.Scaling", "Required": ["Scaling.MinimumCapacity", "Scaling.TargetCapacity", "StepFunctions.EKS.ScaleNodegroupAsg"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckNotifyConditional": {
+              "Type": "Choice",
+              "Comment": "If Notifications enabled, verify DynamoDB and SNS fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Notifications.Enabled", "IsPresent": true},
+                    {"Variable": "$.Notifications.Enabled", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckNotifyFields"
+                }
+              ],
+              "Default": "ConfigPassed"
+            },
+            "CheckNotifyFields": {
+              "Type": "Choice",
+              "Comment": "Verify Notification fields when enabled",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Notifications.DynamoDB.TableName", "IsPresent": true},
+                    {"Variable": "$.Notifications.SNS.TopicArn", "IsPresent": true}
+                  ],
+                  "Next": "ConfigPassed"
+                }
+              ],
+              "Default": "ConfigMissing_Notifications"
+            },
+            "ConfigMissing_Notifications": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Notifications", "Required": ["DynamoDB.TableName", "SNS.TopicArn"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },

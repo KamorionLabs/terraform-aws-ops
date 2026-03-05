@@ -47,7 +47,9 @@
           "EKS.$": "$.EKS",
           "SourceAccount.$": "$.SourceAccount",
           "DestinationAccount.$": "$.DestinationAccount",
-          "StepFunctions.$": "$.StepFunctions"
+          "StepFunctions.$": "$.StepFunctions",
+          "Notifications.$": "$.Notifications",
+          "Tags.$": "$.Tags"
         }
       },
       "ResultSelector": {
