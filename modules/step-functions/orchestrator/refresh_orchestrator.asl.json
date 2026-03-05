@@ -179,6 +179,7 @@
                   "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
                   "DumpSubPath.$": "$.Database.MySQLOperations.DumpSubPath",
                   "EKS.$": "$.EKS",
+                  "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
                   "StepFunctions.$": "$.StepFunctions",
                   "OrchestratorExecutionName.$": "$$.Execution.Name",
                   "DestinationAccount.$": "$.DestinationAccount"
@@ -626,6 +627,7 @@
           "RefreshBucket.$": "$.Database.MySQLOperations.RefreshBucket",
           "RefreshBucketPrefix.$": "$.Database.MySQLOperations.RefreshBucketPrefix",
           "EKS.$": "$.EKS",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "StepFunctions.$": "$.StepFunctions",
           "OrchestratorExecutionName.$": "$$.Execution.Name",
           "DestinationAccount.$": "$.DestinationAccount"
@@ -671,6 +673,7 @@
           "Namespace.$": "$.EKS.Namespace",
           "Services.$": "$.EKS.Services",
           "Replicas": 0,
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -695,6 +698,7 @@
           "Namespace.$": "$.EKS.Namespace",
           "FileSystemName.$": "$.EFS.Name",
           "Action": "Delete",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -1008,6 +1012,7 @@
           "FileSystemName.$": "$.EFS.Name",
           "Action": "Create",
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -1033,6 +1038,7 @@
           "Services.$": "$.EKS.Services",
           "Replicas": 1,
           "CleanupSecret": true,
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -1059,6 +1065,7 @@
           "SSMParameters": {
             "EfsSubPath.$": "$.EFS.SSMParameters.EfsSubPath"
           },
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },
@@ -1094,6 +1101,7 @@
         "Input": {
           "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "EKS.$": "$.EKS",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         }

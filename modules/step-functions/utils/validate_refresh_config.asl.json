@@ -14,14 +14,15 @@
           "States": {
             "CheckAccountFields": {
               "Type": "Choice",
-              "Comment": "Verify SourceAccount and DestinationAccount fields",
+              "Comment": "Verify SourceAccount, DestinationAccount, and K8sProxyLambdaArn fields",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.SourceAccount.RoleArn", "IsPresent": true},
                     {"Variable": "$.DestinationAccount.RoleArn", "IsPresent": true},
                     {"Variable": "$.DestinationAccount.AccountId", "IsPresent": true},
-                    {"Variable": "$.DestinationAccount.Region", "IsPresent": true}
+                    {"Variable": "$.DestinationAccount.Region", "IsPresent": true},
+                    {"Variable": "$.K8sProxyLambdaArn", "IsPresent": true}
                   ],
                   "Next": "CheckDatabaseSourceFields"
                 }
@@ -30,7 +31,7 @@
             },
             "ConfigMissing_Accounts": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId", "DestinationAccount.Region"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId", "DestinationAccount.Region", "K8sProxyLambdaArn"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
