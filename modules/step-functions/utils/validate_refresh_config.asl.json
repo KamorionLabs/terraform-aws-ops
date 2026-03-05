@@ -1,15 +1,355 @@
 {
-  "Comment": "Validates refresh configuration by checking required resources exist and are accessible across accounts. Always succeeds with a validation report.",
+  "Comment": "Validates refresh configuration: structure (required fields) + resources (exist and accessible). Always succeeds with a validation report.",
   "StartAt": "ValidateAll",
   "States": {
 
     "ValidateAll": {
       "Type": "Parallel",
-      "Comment": "Run all validation checks in parallel across 4 categories",
+      "Comment": "Run all validation checks in parallel across 5 categories",
       "Branches": [
 
         {
-          "Comment": "Branch 0: IAM - Validate cross-account role assumption",
+          "Comment": "Branch 0: Config Structure - Validate all required fields are present",
+          "StartAt": "CheckAccountFields",
+          "States": {
+            "CheckAccountFields": {
+              "Type": "Choice",
+              "Comment": "Verify SourceAccount and DestinationAccount fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.SourceAccount.RoleArn", "IsPresent": true},
+                    {"Variable": "$.DestinationAccount.RoleArn", "IsPresent": true},
+                    {"Variable": "$.DestinationAccount.AccountId", "IsPresent": true}
+                  ],
+                  "Next": "CheckDatabaseSourceFields"
+                }
+              ],
+              "Default": "ConfigMissing_Accounts"
+            },
+            "ConfigMissing_Accounts": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Accounts", "Required": ["SourceAccount.RoleArn", "DestinationAccount.RoleArn", "DestinationAccount.AccountId"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseSourceFields": {
+              "Type": "Choice",
+              "Comment": "Verify Database.Source fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Source.ClusterIdentifier", "IsPresent": true},
+                    {"Variable": "$.Database.Source.RestoreType", "IsPresent": true},
+                    {"Variable": "$.Database.Source.SnapshotMode", "IsPresent": true}
+                  ],
+                  "Next": "CheckDatabaseTargetFields"
+                }
+              ],
+              "Default": "ConfigMissing_DBSource"
+            },
+            "ConfigMissing_DBSource": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Source", "Required": ["Database.Source.ClusterIdentifier", "Database.Source.RestoreType", "Database.Source.SnapshotMode"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseTargetFields": {
+              "Type": "Choice",
+              "Comment": "Verify Database.Target fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Target.ClusterIdentifier", "IsPresent": true},
+                    {"Variable": "$.Database.Target.InstanceIdentifierPrefix", "IsPresent": true},
+                    {"Variable": "$.Database.Target.InstanceClass", "IsPresent": true},
+                    {"Variable": "$.Database.Target.Instances", "IsPresent": true}
+                  ],
+                  "Next": "CheckDatabaseNetworkFields"
+                }
+              ],
+              "Default": "ConfigMissing_DBTarget"
+            },
+            "ConfigMissing_DBTarget": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Target", "Required": ["Database.Target.ClusterIdentifier", "Database.Target.InstanceIdentifierPrefix", "Database.Target.InstanceClass", "Database.Target.Instances"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseNetworkFields": {
+              "Type": "Choice",
+              "Comment": "Verify Database.Network and Secrets fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Network.SubnetGroupName", "IsPresent": true},
+                    {"Variable": "$.Database.Network.SecurityGroupIds", "IsPresent": true},
+                    {"Variable": "$.Database.Secrets.KmsKeyId", "IsPresent": true},
+                    {"Variable": "$.Database.Parameters.ClusterParameterGroupName", "IsPresent": true},
+                    {"Variable": "$.Database.Parameters.InstanceParameterGroupName", "IsPresent": true}
+                  ],
+                  "Next": "CheckDatabaseOptionsFields"
+                }
+              ],
+              "Default": "ConfigMissing_DBNetwork"
+            },
+            "ConfigMissing_DBNetwork": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Network/Secrets/Parameters", "Required": ["Database.Network.SubnetGroupName", "Database.Network.SecurityGroupIds", "Database.Secrets.KmsKeyId", "Database.Parameters.ClusterParameterGroupName", "Database.Parameters.InstanceParameterGroupName"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckDatabaseOptionsFields": {
+              "Type": "Choice",
+              "Comment": "Verify Database.Options flags exist",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.DeleteOldCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RenameOldCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunMysqlImportCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true}
+                  ],
+                  "Next": "CheckMysqlOpsConditional"
+                }
+              ],
+              "Default": "ConfigMissing_DBOptions"
+            },
+            "ConfigMissing_DBOptions": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Options", "Required": ["DeleteOldCluster", "RenameOldCluster", "RunMysqlDumpOldCluster", "RunMysqlImportCluster", "RunSqlScripts"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckMysqlOpsConditional": {
+              "Type": "Choice",
+              "Comment": "If MySQLDump or MySQLImport enabled, check MySQLOperations fields",
+              "Choices": [
+                {
+                  "Or": [
+                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "BooleanEquals": true},
+                    {"Variable": "$.Database.Options.RunMysqlImportCluster", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckMysqlOpsFields"
+                }
+              ],
+              "Default": "CheckSFNUtilsFields"
+            },
+            "CheckMysqlOpsFields": {
+              "Type": "Choice",
+              "Comment": "Verify MySQLOperations fields when dump/import enabled",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.MySQLOperations.DatabaseName", "IsPresent": true},
+                    {"Variable": "$.Database.MySQLOperations.EfsPvcName", "IsPresent": true},
+                    {"Variable": "$.Database.MySQLOperations.DumpSubPath", "IsPresent": true},
+                    {"Variable": "$.Database.MySQLOperations.TablesToDump", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNUtilsFields"
+                }
+              ],
+              "Default": "ConfigMissing_MySQLOps"
+            },
+            "ConfigMissing_MySQLOps": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.MySQLOperations", "Required": ["DatabaseName", "EfsPvcName", "DumpSubPath", "TablesToDump"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSFNUtilsFields": {
+              "Type": "Choice",
+              "Comment": "Verify StepFunctions.Utils ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.StepFunctions.Utils.ValidateRefreshConfig", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Utils.PrepareRefresh", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Utils.Notify", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Utils.CleanupAndStop", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Utils.TagResources", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNDatabaseFields"
+                }
+              ],
+              "Default": "ConfigMissing_SFNUtils"
+            },
+            "ConfigMissing_SFNUtils": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.Utils", "Required": ["ValidateRefreshConfig", "PrepareRefresh", "Notify", "CleanupAndStop", "TagResources"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSFNDatabaseFields": {
+              "Type": "Choice",
+              "Comment": "Verify StepFunctions.Database ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.StepFunctions.Database.RestoreCluster", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.PrepareSnapshotForRestore", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.CreateInstance", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.EnableMasterSecret", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.EnsureClusterAvailable", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNDatabaseFields2"
+                }
+              ],
+              "Default": "ConfigMissing_SFNDatabase"
+            },
+            "CheckSFNDatabaseFields2": {
+              "Type": "Choice",
+              "Comment": "Verify remaining StepFunctions.Database ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.StepFunctions.Database.RenameCluster", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.DeleteCluster", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.StopCluster", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Database.ShareSnapshot", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNEFSConditional"
+                }
+              ],
+              "Default": "ConfigMissing_SFNDatabase"
+            },
+            "ConfigMissing_SFNDatabase": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.Database", "Required": ["RestoreCluster", "PrepareSnapshotForRestore", "CreateInstance", "EnableMasterSecret", "EnsureClusterAvailable", "RenameCluster", "DeleteCluster", "StopCluster", "ShareSnapshot"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSFNEFSConditional": {
+              "Type": "Choice",
+              "Comment": "If EFS enabled, check EFS config and SFN ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Enabled", "IsPresent": true},
+                    {"Variable": "$.EFS.Enabled", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEFSFields"
+                }
+              ],
+              "Default": "CheckSFNEKSConditional"
+            },
+            "CheckEFSFields": {
+              "Type": "Choice",
+              "Comment": "Verify EFS config fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Source.FileSystemId", "IsPresent": true},
+                    {"Variable": "$.EFS.Source.Account.RoleArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Network.SubnetIds", "IsPresent": true},
+                    {"Variable": "$.EFS.Network.SecurityGroupIds", "IsPresent": true},
+                    {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNEFSFields"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "ConfigMissing_EFS": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckSFNEFSFields": {
+              "Type": "Choice",
+              "Comment": "Verify StepFunctions.EFS ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.StepFunctions.EFS.CreateFilesystem", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.DeleteFilesystem", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.SetupCrossAccountReplication", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.CheckReplicationSync", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EFS.DeleteReplication", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNEKSConditional"
+                }
+              ],
+              "Default": "ConfigMissing_SFNEFS"
+            },
+            "ConfigMissing_SFNEFS": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "StepFunctions.EFS", "Required": ["CreateFilesystem", "DeleteFilesystem", "SetupCrossAccountReplication", "CheckReplicationSync", "DeleteReplication"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckSFNEKSConditional": {
+              "Type": "Choice",
+              "Comment": "If EKS enabled, check EKS config and SFN ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.Enabled", "IsPresent": true},
+                    {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEKSFields"
+                }
+              ],
+              "Default": "ConfigPassed"
+            },
+            "CheckEKSFields": {
+              "Type": "Choice",
+              "Comment": "Verify EKS config fields and SFN ARNs",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.ClusterName", "IsPresent": true},
+                    {"Variable": "$.EKS.Namespace", "IsPresent": true},
+                    {"Variable": "$.EKS.Services", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EKS.ScaleServices", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true}
+                  ],
+                  "Next": "ConfigPassed"
+                }
+              ],
+              "Default": "ConfigMissing_EKS"
+            },
+            "ConfigMissing_EKS": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.ManageStorage"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "ConfigPassed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "Config",
+                "Status": "PASSED",
+                "Checks": {"AllRequiredFields": {"Status": "PASSED"}}
+              },
+              "End": true
+            },
+            "ConfigFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "Category": "Config",
+                "Status": "FAILED",
+                "Checks.$": "$.V"
+              },
+              "End": true
+            }
+          }
+        },
+
+        {
+          "Comment": "Branch 1: IAM - Validate cross-account role assumption",
           "StartAt": "InitIAMChecks",
           "States": {
             "InitIAMChecks": {
@@ -83,7 +423,7 @@
         },
 
         {
-          "Comment": "Branch 1: Database - Validate source cluster, destination network, parameters and KMS",
+          "Comment": "Branch 2: Database - Validate source cluster, destination network, parameters and KMS",
           "StartAt": "InitDBChecks",
           "States": {
             "InitDBChecks": {
@@ -249,7 +589,7 @@
         },
 
         {
-          "Comment": "Branch 2: EFS - Validate source filesystem and destination KMS (if EFS enabled)",
+          "Comment": "Branch 3: EFS - Validate source filesystem and destination KMS (if EFS enabled)",
           "StartAt": "CheckEFSEnabled_V",
           "States": {
             "CheckEFSEnabled_V": {
@@ -348,7 +688,7 @@
         },
 
         {
-          "Comment": "Branch 3: EKS - Validate destination cluster exists (if EKS enabled)",
+          "Comment": "Branch 4: EKS - Validate destination cluster exists (if EKS enabled)",
           "StartAt": "CheckEKSEnabled_V",
           "States": {
             "CheckEKSEnabled_V": {
@@ -434,7 +774,8 @@
         {"Variable": "$[0].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
         {"Variable": "$[1].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
         {"Variable": "$[2].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
-        {"Variable": "$[3].Status", "StringEquals": "FAILED", "Next": "ReportFailed"}
+        {"Variable": "$[3].Status", "StringEquals": "FAILED", "Next": "ReportFailed"},
+        {"Variable": "$[4].Status", "StringEquals": "FAILED", "Next": "ReportFailed"}
       ],
       "Default": "ReportPassed"
     },
