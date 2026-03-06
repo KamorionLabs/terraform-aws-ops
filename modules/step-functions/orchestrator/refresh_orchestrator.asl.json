@@ -272,7 +272,7 @@
                   "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
                 },
-                "Name.$": "States.Format('{}-EnsureRestoreClusterNotExists', $$.Execution.Name)"
+                "Name.$": "States.Format('{}-EnsureNoRestore', $$.Execution.Name)"
               },
               "ResultPath": "$.CleanupResult",
               "Next": "RestoreDatabase",
@@ -385,7 +385,7 @@
                   "RoleArn.$": "$.Database.S3Integration.RoleArn",
                   "DestinationAccount.$": "$.DestinationAccount"
                 },
-                "Name.$": "States.Format('{}-ConfigureS3Integration', $$.Execution.Name)"
+                "Name.$": "States.Format('{}-CfgS3Integration', $$.Execution.Name)"
               },
               "ResultPath": "$.S3IntegrationResult",
               "Next": "DatabaseRefreshComplete",
@@ -471,7 +471,7 @@
                   "Encrypted": true,
                   "Tags.$": "$.EFS.Tags"
                 },
-                "Name.$": "States.Format('{}-SetupCrossAccountReplication', $$.Execution.Name)"
+                "Name.$": "States.Format('{}-SetupReplication', $$.Execution.Name)"
               },
               "ResultPath": "$.ReplicationSetupResult",
               "Next": "CheckReplicationSyncInitial",
@@ -500,7 +500,7 @@
                   "LambdaConfig.$": "$.EFS.LambdaConfig",
                   "Mode": "wait"
                 },
-                "Name.$": "States.Format('{}-CheckReplicationSyncInitial', $$.Execution.Name)"
+                "Name.$": "States.Format('{}-CheckReplSyncInit', $$.Execution.Name)"
               },
               "ResultPath": "$.ReplicationSyncResult",
               "Next": "PrepareEfsResultFromReplication",
@@ -570,7 +570,7 @@
                   "LifecyclePolicies.$": "$.EFS.Lifecycle",
                   "DestinationAccount.$": "$.DestinationAccount"
                 },
-                "Name.$": "States.Format('{}-CreateEFSMountTargets', $$.Execution.Name)"
+                "Name.$": "States.Format('{}-CreateMountTargets', $$.Execution.Name)"
               },
               "ResultPath": "$.EfsConfigureResult",
               "Next": "CheckStoreInSSMOption",
@@ -885,7 +885,7 @@
           "LambdaConfig.$": "$.EFS.LambdaConfig",
           "Mode": "wait"
         },
-        "Name.$": "States.Format('{}-CheckReplicationSyncFinal', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-CheckReplSyncFin', $$.Execution.Name)"
       },
       "ResultPath": "$.FinalSyncResult",
       "Next": "DeleteEFSReplication",
@@ -911,7 +911,7 @@
           "DestinationAccount.$": "$.DestinationAccount",
           "DeleteDestinationFileSystem": false
         },
-        "Name.$": "States.Format('{}-DeleteEFSReplication', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-DelEFSReplication', $$.Execution.Name)"
       },
       "ResultPath": "$.DeleteReplicationResult",
       "Next": "Phase3ClusterSwitch",
@@ -998,7 +998,7 @@
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         },
-        "Name.$": "States.Format('{}-EnsureOldClusterNotExists', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-EnsureNoOldClstr', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureOldNotExistsResult",
       "Next": "RenameOldCluster",
@@ -1050,7 +1050,7 @@
           },
           "DestinationAccount.$": "$.DestinationAccount"
         },
-        "Name.$": "States.Format('{}-TagOldClusterRefreshTrue', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-TagOldCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.TagOldClusterResult",
       "Next": "EnsureTargetClusterAvailable",
@@ -1074,7 +1074,7 @@
           "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
           "DestinationAccount.$": "$.DestinationAccount"
         },
-        "Name.$": "States.Format('{}-EnsureTargetClusterAvailable', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-EnsureTargetAvail', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureTargetAvailableResult",
       "Next": "RenameNewCluster",
@@ -1137,7 +1137,7 @@
           "Region.$": "$.Region",
           "DestinationAccount.$": "$.DestinationAccount"
         },
-        "Name.$": "States.Format('{}-RotateDatabaseSecrets', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-RotateSecrets', $$.Execution.Name)"
       },
       "ResultPath": "$.RotateSecretsResult",
       "Next": "Phase4PostSwitchEKS",
@@ -1249,7 +1249,7 @@
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
         },
-        "Name.$": "States.Format('{}-VerifyAndRestartServices', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-VerifyRestart', $$.Execution.Name)"
       },
       "ResultPath": "$.VerifyResult",
       "Next": "CheckArchiveJobOption",
@@ -1386,7 +1386,7 @@
           "SNSSubject": "Refresh Completed Successfully",
           "SNSMessage.$": "States.Format('Database refresh completed for {}', $.Database.Target.ClusterIdentifier)"
         },
-        "Name.$": "States.Format('{}-SendSuccessNotification', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-NotifySuccess', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshComplete",
@@ -1442,7 +1442,7 @@
           "SNSSubject": "Refresh Failed",
           "SNSMessage.$": "States.Format('Database refresh FAILED for {}', $.Database.Target.ClusterIdentifier)"
         },
-        "Name.$": "States.Format('{}-SendFailureNotification', $$.Execution.Name)"
+        "Name.$": "States.Format('{}-NotifyFailure', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshFailed",
