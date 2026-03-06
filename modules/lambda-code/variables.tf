@@ -25,3 +25,15 @@ variable "cross_account_role_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "create_bucket" {
+  description = "Create S3 bucket for Lambda code. Set to false to use existing_bucket_name."
+  type        = bool
+  default     = true
+}
+
+variable "existing_bucket_name" {
+  description = "Name of existing S3 bucket to upload Lambda code to. Required if create_bucket is false."
+  type        = string
+  default     = null
+}

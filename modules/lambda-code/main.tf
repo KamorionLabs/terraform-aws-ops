@@ -1,6 +1,7 @@
 # -----------------------------------------------------------------------------
 # Lambda Code Module
 # Packages and uploads Lambda code to S3 for dynamic creation by Step Functions
+# Supports creating a new bucket or using an existing one (create_bucket = false)
 # -----------------------------------------------------------------------------
 
 data "aws_caller_identity" "current" {}
@@ -10,8 +11,10 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.id
 
-  # S3 bucket name - use custom name if provided, otherwise fallback to default
-  bucket_name = var.bucket_name != null ? var.bucket_name : "${var.prefix}-lambda-code-${local.account_id}"
+  # S3 bucket name - existing bucket, custom name, or auto-generated
+  bucket_name = var.create_bucket ? (
+    var.bucket_name != null ? var.bucket_name : "${var.prefix}-lambda-code-${local.account_id}"
+  ) : var.existing_bucket_name
 
   # Filter cross-account role ARNs - remove empty/null and validate IAM ARN format
   valid_role_arns = [
@@ -35,10 +38,11 @@ locals {
 }
 
 # -----------------------------------------------------------------------------
-# S3 Bucket for Lambda Code
+# S3 Bucket for Lambda Code (only when create_bucket = true)
 # -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "lambda_code" {
+  count  = var.create_bucket ? 1 : 0
   bucket = local.bucket_name
 
   tags = merge(var.tags, {
@@ -48,14 +52,16 @@ resource "aws_s3_bucket" "lambda_code" {
 }
 
 resource "aws_s3_bucket_versioning" "lambda_code" {
-  bucket = aws_s3_bucket.lambda_code.id
+  count  = var.create_bucket ? 1 : 0
+  bucket = aws_s3_bucket.lambda_code[0].id
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "lambda_code" {
-  bucket = aws_s3_bucket.lambda_code.id
+  count  = var.create_bucket ? 1 : 0
+  bucket = aws_s3_bucket.lambda_code[0].id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -65,7 +71,8 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "lambda_code" {
 }
 
 resource "aws_s3_bucket_public_access_block" "lambda_code" {
-  bucket = aws_s3_bucket.lambda_code.id
+  count  = var.create_bucket ? 1 : 0
+  bucket = aws_s3_bucket.lambda_code[0].id
 
   block_public_acls       = true
   block_public_policy     = true
@@ -74,12 +81,12 @@ resource "aws_s3_bucket_public_access_block" "lambda_code" {
 }
 
 # -----------------------------------------------------------------------------
-# S3 Bucket Policy for Cross-Account Access
+# S3 Bucket Policy for Cross-Account Access (only when create_bucket = true)
 # -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket_policy" "lambda_code" {
-  count  = length(local.valid_role_arns) > 0 ? 1 : 0
-  bucket = aws_s3_bucket.lambda_code.id
+  count  = var.create_bucket && length(local.valid_role_arns) > 0 ? 1 : 0
+  bucket = aws_s3_bucket.lambda_code[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -94,7 +101,7 @@ resource "aws_s3_bucket_policy" "lambda_code" {
           "s3:GetObject",
           "s3:GetObjectVersion"
         ]
-        Resource = "${aws_s3_bucket.lambda_code.arn}/*"
+        Resource = "${aws_s3_bucket.lambda_code[0].arn}/*"
       },
       {
         Sid    = "AllowCrossAccountListBucket"
@@ -103,7 +110,7 @@ resource "aws_s3_bucket_policy" "lambda_code" {
           AWS = local.valid_role_arns
         }
         Action   = "s3:ListBucket"
-        Resource = aws_s3_bucket.lambda_code.arn
+        Resource = aws_s3_bucket.lambda_code[0].arn
       }
     ]
   })
@@ -129,7 +136,7 @@ data "archive_file" "lambda_functions" {
 resource "aws_s3_object" "lambda_code" {
   for_each = data.archive_file.lambda_functions
 
-  bucket = aws_s3_bucket.lambda_code.id
+  bucket = local.bucket_name
   key    = "lambdas/${each.key}.zip"
   source = each.value.output_path
   etag   = each.value.output_md5
