@@ -878,7 +878,7 @@
         "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
         "Input": {
           "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
-          "DestinationFileSystemId.$": "$.Phase1Results[1].EfsRestoreResult.Output.FileSystemId",
+          "DestinationFileSystemId.$": "$.Phase1Results[2].EfsRestoreResult.Output.FileSystemId",
           "SourceAccount.$": "$.EFS.Source.Account",
           "DestinationAccount.$": "$.DestinationAccount",
           "Context.$": "$.EFS.Context",
