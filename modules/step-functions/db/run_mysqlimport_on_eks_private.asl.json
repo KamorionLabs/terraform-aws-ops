@@ -119,7 +119,7 @@
                     "name": "mysqlimport",
                     "image": "akirosit/mysql-s3:latest",
                     "imagePullPolicy": "Always",
-                    "command": ["/bin/bash", "-c", "D=/refresh/_debug.txt; DD=/refresh/_debug_s3.txt; echo '=== DEBUG ===' > $D; date >> $D; id >> $D 2>&1; echo '--- env AWS ---' >> $D; env | grep -i aws >> $D 2>&1; echo '--- token file ---' >> $D; ls -la /var/run/secrets/pods.eks.amazonaws.com/serviceaccount/ >> $D 2>&1; echo '--- sts ---' >> $D; aws sts get-caller-identity >> $D 2>&1; echo sts_exit=$? >> $D; echo '--- s3 ls debug ---' >> $D; aws s3 ls s3://$S3_BUCKET/$S3_PREFIX/ --debug > $DD 2>&1; echo s3ls_exit=$? >> $D; tail -100 $DD >> $D; echo '--- s3api list-objects ---' >> $D; aws s3api list-objects-v2 --bucket $S3_BUCKET --prefix $S3_PREFIX --max-items 5 >> $D 2>&1; echo s3api_exit=$? >> $D; echo '=== END ===' >> $D; cat $D"],
+                    "command": ["/import.sh"],
                     "volumeMounts": [{
                       "name": "shared-data",
                       "mountPath": "/refresh",
