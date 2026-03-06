@@ -143,7 +143,8 @@
         "CurrentEfsTags.$": "$.PrepareResult.CurrentEfsTags",
         "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId",
         "MergedDatabaseTags.$": "$.Tags",
-        "MergedEfsTags.$": "$.Tags"
+        "MergedEfsTags.$": "$.Tags",
+        "ComputedDumpSubPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $$.Execution.Name)"
       },
       "Next": "Phase1DataRefresh"
     },
@@ -179,7 +180,7 @@
                   "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
                   "TablesToDump.$": "$.Database.MySQLOperations.TablesToDump",
                   "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
-                  "DumpSubPath.$": "$.Database.MySQLOperations.DumpSubPath",
+                  "DumpSubPath.$": "$.ComputedDumpSubPath",
                   "EKS.$": "$.EKS",
                   "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
                   "StepFunctions.$": "$.StepFunctions",
@@ -639,7 +640,7 @@
           "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
           "DatabaseName.$": "$.Database.MySQLOperations.ImportDatabaseName",
           "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
-          "DumpSubPath.$": "$.Database.MySQLOperations.DumpSubPath",
+          "DumpSubPath.$": "$.ComputedDumpSubPath",
           "RefreshBucket.$": "$.Database.MySQLOperations.RefreshBucket",
           "RefreshBucketPrefix.$": "$.Database.MySQLOperations.RefreshBucketPrefix",
           "EKS.$": "$.EKS",
