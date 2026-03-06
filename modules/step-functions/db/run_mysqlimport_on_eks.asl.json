@@ -121,6 +121,7 @@
             "name.$": "States.Format('mysqlimport-{}', $.OrchestratorExecutionName)"
           },
           "spec": {
+            "ttlSecondsAfterFinished": 3600,
             "template": {
               "spec": {
                 "serviceAccountName": "refresh",

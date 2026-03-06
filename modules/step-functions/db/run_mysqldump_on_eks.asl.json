@@ -145,6 +145,7 @@
                   "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
                 },
                 "spec": {
+                  "ttlSecondsAfterFinished": 3600,
                   "template": {
                     "spec": {
                       "serviceAccountName": "refresh",
