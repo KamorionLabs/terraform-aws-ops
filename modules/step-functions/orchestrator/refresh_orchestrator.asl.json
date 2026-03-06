@@ -2,7 +2,6 @@
   "Comment": "Cross-Account Refresh Orchestrator - Full 5-phase flow with database, EFS, and EKS operations",
   "StartAt": "LoadConfiguration",
   "States": {
-
     "LoadConfiguration": {
       "Type": "Choice",
       "Choices": [
@@ -28,13 +27,14 @@
       "Next": "ValidateInputs",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ConfigLoadFailed"
         }
       ]
     },
-
     "ValidateInputs": {
       "Type": "Task",
       "Comment": "Validate all inputs and required resources before starting refresh",
@@ -51,7 +51,8 @@
           "StepFunctions.$": "$.StepFunctions",
           "Notifications.$": "$.Notifications",
           "Tags.$": "$.Tags"
-        }
+        },
+        "Name.$": "States.Format('{}-ValidateInputs', $$.Execution.Name)"
       },
       "ResultSelector": {
         "ValidationStatus.$": "$.Output.ValidationStatus",
@@ -59,32 +60,46 @@
       },
       "ResultPath": "$.ValidationResult",
       "Next": "CheckValidationStatus",
-      "Catch": [{
-        "ErrorEquals": ["States.ALL"],
-        "ResultPath": "$.ValidationError",
-        "Next": "CheckNotifyEnabled_Failure"
-      }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ValidationError",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
     },
     "CheckValidationStatus": {
       "Type": "Choice",
       "Comment": "If validation failed, route to failure notification. Otherwise check DryRun mode.",
-      "Choices": [{
-        "Variable": "$.ValidationResult.ValidationStatus",
-        "StringEquals": "FAILED",
-        "Next": "CheckNotifyEnabled_Failure"
-      }],
+      "Choices": [
+        {
+          "Variable": "$.ValidationResult.ValidationStatus",
+          "StringEquals": "FAILED",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ],
       "Default": "CheckDryRunMode"
     },
     "CheckDryRunMode": {
       "Type": "Choice",
       "Comment": "If DryRun=true, return validation report without executing refresh",
-      "Choices": [{
-        "And": [
-          {"Variable": "$.DryRun", "IsPresent": true},
-          {"Variable": "$.DryRun", "BooleanEquals": true}
-        ],
-        "Next": "DryRunComplete"
-      }],
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.DryRun",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.DryRun",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "DryRunComplete"
+        }
+      ],
       "Default": "PrepareRefresh"
     },
     "DryRunComplete": {
@@ -96,7 +111,6 @@
       },
       "Next": "RefreshComplete"
     },
-
     "PrepareRefresh": {
       "Type": "Task",
       "Comment": "Prepare resource names and retrieve current tags from destination account",
@@ -108,7 +122,8 @@
           "EFS.$": "$.EFS",
           "Tags.$": "$.Tags",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-PrepareRefresh', $$.Execution.Name)"
       },
       "ResultSelector": {
         "ResourceNames.$": "$.Output.ResourceNames",
@@ -120,7 +135,9 @@
       "Next": "MergePrepareResults",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.PrepareError",
           "Next": "Phase1DataRefresh"
         }
@@ -148,7 +165,6 @@
       },
       "Next": "Phase1DataRefresh"
     },
-
     "Phase1DataRefresh": {
       "Type": "Parallel",
       "Comment": "Phase 1: Restore database and EFS in parallel, optionally run mysqldump on old cluster",
@@ -162,8 +178,14 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "IsPresent": true},
-                    {"Variable": "$.Database.Options.RunMysqlDumpOldCluster", "BooleanEquals": true}
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "BooleanEquals": true
+                    }
                   ],
                   "Next": "RunMysqlDump"
                 }
@@ -186,13 +208,16 @@
                   "StepFunctions.$": "$.StepFunctions",
                   "OrchestratorExecutionName.$": "$$.Execution.Name",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-RunMysqlDump', $$.Execution.Name)"
               },
               "ResultPath": null,
               "Next": "MysqlDumpComplete",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.DumpError",
                   "Next": "MysqlDumpFailed"
                 }
@@ -221,8 +246,14 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.Database.Enabled", "IsPresent": true},
-                    {"Variable": "$.Database.Enabled", "BooleanEquals": false}
+                    {
+                      "Variable": "$.Database.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.Database.Enabled",
+                      "BooleanEquals": false
+                    }
                   ],
                   "Next": "DatabaseRefreshComplete"
                 }
@@ -240,13 +271,16 @@
                   "OrchestratorExecutionName.$": "$$.Execution.Name",
                   "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-EnsureRestoreClusterNotExists', $$.Execution.Name)"
               },
               "ResultPath": "$.CleanupResult",
               "Next": "RestoreDatabase",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.CleanupError",
                   "Next": "RestoreDatabase"
                 }
@@ -273,13 +307,16 @@
                   "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-RestoreDatabase', $$.Execution.Name)"
               },
               "ResultPath": "$.RestoreResult",
               "Next": "CreateDBInstance",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -298,13 +335,16 @@
                   "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
                   "Tags.$": "$.Database.Target.Tags",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-CreateDBInstance', $$.Execution.Name)"
               },
               "ResultPath": "$.CreateInstanceResult",
               "Next": "EnableMasterSecret",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -319,13 +359,16 @@
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
                   "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.MasterUserSecretKmsKeyId",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-EnableMasterSecret', $$.Execution.Name)"
               },
               "ResultPath": "$.EnableSecretResult",
               "Next": "ConfigureS3Integration",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -341,13 +384,16 @@
                   "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "RoleArn.$": "$.Database.S3Integration.RoleArn",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-ConfigureS3Integration', $$.Execution.Name)"
               },
               "ResultPath": "$.S3IntegrationResult",
               "Next": "DatabaseRefreshComplete",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.S3Error",
                   "Next": "DatabaseRefreshComplete"
                 }
@@ -372,8 +418,14 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.EFS.Enabled", "IsPresent": true},
-                    {"Variable": "$.EFS.Enabled", "BooleanEquals": false}
+                    {
+                      "Variable": "$.EFS.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.EFS.Enabled",
+                      "BooleanEquals": false
+                    }
                   ],
                   "Next": "EFSRefreshComplete"
                 }
@@ -386,8 +438,16 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
-                    {"Not": {"Variable": "$.EFS.Source.Account.AccountId", "StringEqualsPath": "$.DestinationAccount.AccountId"}}
+                    {
+                      "Variable": "$.EFS.Source.Account.AccountId",
+                      "IsPresent": true
+                    },
+                    {
+                      "Not": {
+                        "Variable": "$.EFS.Source.Account.AccountId",
+                        "StringEqualsPath": "$.DestinationAccount.AccountId"
+                      }
+                    }
                   ],
                   "Next": "SetupCrossAccountReplication"
                 }
@@ -410,13 +470,16 @@
                   "PerformanceMode": "generalPurpose",
                   "Encrypted": true,
                   "Tags.$": "$.EFS.Tags"
-                }
+                },
+                "Name.$": "States.Format('{}-SetupCrossAccountReplication', $$.Execution.Name)"
               },
               "ResultPath": "$.ReplicationSetupResult",
               "Next": "CheckReplicationSyncInitial",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
                 }
@@ -436,13 +499,16 @@
                   "Context.$": "$.EFS.Context",
                   "LambdaConfig.$": "$.EFS.LambdaConfig",
                   "Mode": "wait"
-                }
+                },
+                "Name.$": "States.Format('{}-CheckReplicationSyncInitial', $$.Execution.Name)"
               },
               "ResultPath": "$.ReplicationSyncResult",
               "Next": "PrepareEfsResultFromReplication",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
                 }
@@ -477,13 +543,16 @@
                   "Tags.$": "$.EFS.Tags",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-RestoreEFS', $$.Execution.Name)"
               },
               "ResultPath": "$.EfsRestoreResult",
               "Next": "CreateEFSMountTargets",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
                 }
@@ -500,13 +569,16 @@
                   "SecurityGroupIds.$": "$.EFS.Network.SecurityGroupIds",
                   "LifecyclePolicies.$": "$.EFS.Lifecycle",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-CreateEFSMountTargets', $$.Execution.Name)"
               },
               "ResultPath": "$.EfsConfigureResult",
               "Next": "CheckStoreInSSMOption",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
                 }
@@ -517,8 +589,14 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.EFS.Options.StoreInSSM", "IsPresent": true},
-                    {"Variable": "$.EFS.Options.StoreInSSM", "BooleanEquals": true}
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "BooleanEquals": true
+                    }
                   ],
                   "Next": "StoreSubpathInSSM"
                 }
@@ -539,13 +617,16 @@
                   "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
                   "EfsSubPathSSMParameterName.$": "$.EFS.SSMParameters.EfsSubPath",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-StoreSubpathInSSM', $$.Execution.Name)"
               },
               "ResultPath": "$.StoreSSMResult",
               "Next": "EFSRefreshComplete",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.StoreSSMError",
                   "Next": "EFSRefreshComplete"
                 }
@@ -566,21 +647,28 @@
       "Next": "CheckRunSqlScriptsOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Phase1Error",
           "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
-
     "CheckRunSqlScriptsOption": {
       "Type": "Choice",
       "Comment": "Phase 1 post-process: optionally run SQL scripts on restored cluster",
       "Choices": [
         {
           "And": [
-            {"Variable": "$.Database.Options.RunSqlScripts", "IsPresent": true},
-            {"Variable": "$.Database.Options.RunSqlScripts", "BooleanEquals": true}
+            {
+              "Variable": "$.Database.Options.RunSqlScripts",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Database.Options.RunSqlScripts",
+              "BooleanEquals": true
+            }
           ],
           "Next": "RunSqlScripts"
         }
@@ -604,13 +692,16 @@
           "ExportBucket": "",
           "ExportPrefix": "",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RunSqlScripts', $$.Execution.Name)"
       },
       "ResultPath": "$.SqlScriptsResult",
       "Next": "CheckMysqlImportOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.SqlScriptsError",
           "Next": "CheckMysqlImportOption"
         }
@@ -622,8 +713,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.Database.Options.RunMysqlImportCluster", "IsPresent": true},
-            {"Variable": "$.Database.Options.RunMysqlImportCluster", "BooleanEquals": true}
+            {
+              "Variable": "$.Database.Options.RunMysqlImportCluster",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Database.Options.RunMysqlImportCluster",
+              "BooleanEquals": true
+            }
           ],
           "Next": "RunMysqlImport"
         }
@@ -648,19 +745,21 @@
           "StepFunctions.$": "$.StepFunctions",
           "OrchestratorExecutionName.$": "$$.Execution.Name",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RunMysqlImport', $$.Execution.Name)"
       },
       "ResultPath": "$.MysqlImportResult",
       "Next": "Phase2PreSwitchEKS",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.MysqlImportError",
           "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
-
     "Phase2PreSwitchEKS": {
       "Type": "Pass",
       "Comment": "Phase 2: Scale down EKS services and delete storage before cluster switch",
@@ -671,8 +770,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.EKS.Enabled", "IsPresent": true},
-            {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+            {
+              "Variable": "$.EKS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Enabled",
+              "BooleanEquals": true
+            }
           ],
           "Next": "ScaleDownServices"
         }
@@ -692,13 +797,16 @@
           "Replicas": 0,
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-ScaleDownServices', $$.Execution.Name)"
       },
       "ResultPath": "$.ScaleDownResult",
       "Next": "DeleteEKSStorage",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.ScaleDownError",
           "Next": "DeleteEKSStorage"
         }
@@ -717,29 +825,45 @@
           "Action": "Delete",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-DeleteEKSStorage', $$.Execution.Name)"
       },
       "ResultPath": "$.DeleteStorageResult",
       "Next": "CheckEFSCrossAccountFinalSync",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.DeleteStorageError",
           "Next": "CheckEFSCrossAccountFinalSync"
         }
       ]
     },
-
     "CheckEFSCrossAccountFinalSync": {
       "Type": "Choice",
       "Comment": "Check if EFS cross-account replication needs final sync and deletion before switch",
       "Choices": [
         {
           "And": [
-            {"Variable": "$.EFS.Enabled", "IsPresent": true},
-            {"Variable": "$.EFS.Enabled", "BooleanEquals": true},
-            {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
-            {"Not": {"Variable": "$.EFS.Source.Account.AccountId", "StringEqualsPath": "$.DestinationAccount.AccountId"}}
+            {
+              "Variable": "$.EFS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EFS.Enabled",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.EFS.Source.Account.AccountId",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.EFS.Source.Account.AccountId",
+                "StringEqualsPath": "$.DestinationAccount.AccountId"
+              }
+            }
           ],
           "Next": "CheckReplicationSyncFinal"
         }
@@ -760,13 +884,16 @@
           "Context.$": "$.EFS.Context",
           "LambdaConfig.$": "$.EFS.LambdaConfig",
           "Mode": "wait"
-        }
+        },
+        "Name.$": "States.Format('{}-CheckReplicationSyncFinal', $$.Execution.Name)"
       },
       "ResultPath": "$.FinalSyncResult",
       "Next": "DeleteEFSReplication",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.FinalSyncError",
           "Next": "DeleteEFSReplication"
         }
@@ -783,19 +910,21 @@
           "SourceAccount.$": "$.EFS.Source.Account",
           "DestinationAccount.$": "$.DestinationAccount",
           "DeleteDestinationFileSystem": false
-        }
+        },
+        "Name.$": "States.Format('{}-DeleteEFSReplication', $$.Execution.Name)"
       },
       "ResultPath": "$.DeleteReplicationResult",
       "Next": "Phase3ClusterSwitch",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.DeleteReplicationError",
           "Next": "Phase3ClusterSwitch"
         }
       ]
     },
-
     "Phase3ClusterSwitch": {
       "Type": "Pass",
       "Comment": "Phase 3: Switch clusters (rename old to -old, tag, rename new to target)",
@@ -833,13 +962,16 @@
         "Input": {
           "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-DeleteOldCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.DeleteOldClusterResult",
       "Next": "EnsureTargetClusterAvailable",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.DeleteOldClusterError",
           "Next": "CheckNotifyEnabled_Failure"
         }
@@ -865,13 +997,16 @@
           "OrchestratorExecutionName.$": "$$.Execution.Name",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-EnsureOldClusterNotExists', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureOldNotExistsResult",
       "Next": "RenameOldCluster",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.EnsureOldError",
           "Next": "EnsureTargetClusterAvailable"
         }
@@ -887,13 +1022,16 @@
           "NewDbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
           "NewInstanceIdentifierPrefix.$": "$.ResourceNames.OldInstanceIdentifierPrefix",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RenameOldCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.RenameOldResult",
       "Next": "TagOldClusterRefreshTrue",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.RenameOldError",
           "Next": "EnsureTargetClusterAvailable"
         }
@@ -911,13 +1049,16 @@
             "refresh": "true"
           },
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-TagOldClusterRefreshTrue', $$.Execution.Name)"
       },
       "ResultPath": "$.TagOldClusterResult",
       "Next": "EnsureTargetClusterAvailable",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.TagOldClusterError",
           "Next": "EnsureTargetClusterAvailable"
         }
@@ -932,13 +1073,16 @@
         "Input": {
           "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-EnsureTargetClusterAvailable', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureTargetAvailableResult",
       "Next": "RenameNewCluster",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.EnsureTargetAvailableError",
           "Next": "RenameNewCluster"
         }
@@ -954,13 +1098,16 @@
           "NewDbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "NewInstanceIdentifierPrefix.$": "$.Database.Target.InstanceIdentifierPrefix",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RenameNewCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.RenameNewResult",
       "Next": "CheckRotateSecretsOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.RenameNewError",
           "Next": "CheckNotifyEnabled_Failure"
         }
@@ -989,19 +1136,21 @@
           "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
           "Region.$": "$.Region",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RotateDatabaseSecrets', $$.Execution.Name)"
       },
       "ResultPath": "$.RotateSecretsResult",
       "Next": "Phase4PostSwitchEKS",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.RotateSecretsError",
           "Next": "Phase4PostSwitchEKS"
         }
       ]
     },
-
     "Phase4PostSwitchEKS": {
       "Type": "Pass",
       "Comment": "Phase 4: Create new EKS storage, scale up services, verify and restart",
@@ -1012,8 +1161,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.EKS.Enabled", "IsPresent": true},
-            {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+            {
+              "Variable": "$.EKS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Enabled",
+              "BooleanEquals": true
+            }
           ],
           "Next": "CreateEKSStorage"
         }
@@ -1034,13 +1189,16 @@
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-CreateEKSStorage', $$.Execution.Name)"
       },
       "ResultPath": "$.CreateStorageResult",
       "Next": "ScaleUpServices",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.CreateStorageError",
           "Next": "Phase5Cleanup"
         }
@@ -1060,13 +1218,16 @@
           "CleanupSecret": true,
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-ScaleUpServices', $$.Execution.Name)"
       },
       "ResultPath": "$.ScaleUpResult",
       "Next": "VerifyAndRestartServices",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.ScaleUpError",
           "Next": "Phase5Cleanup"
         }
@@ -1087,13 +1248,16 @@
           },
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-VerifyAndRestartServices', $$.Execution.Name)"
       },
       "ResultPath": "$.VerifyResult",
       "Next": "CheckArchiveJobOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.VerifyError",
           "Next": "CheckArchiveJobOption"
         }
@@ -1104,8 +1268,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.EKS.Options.RunArchiveJob", "IsPresent": true},
-            {"Variable": "$.EKS.Options.RunArchiveJob", "BooleanEquals": true}
+            {
+              "Variable": "$.EKS.Options.RunArchiveJob",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Options.RunArchiveJob",
+              "BooleanEquals": true
+            }
           ],
           "Next": "RunArchiveJob"
         }
@@ -1124,19 +1294,21 @@
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RunArchiveJob', $$.Execution.Name)"
       },
       "ResultPath": "$.ArchiveResult",
       "Next": "Phase5Cleanup",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.ArchiveError",
           "Next": "Phase5Cleanup"
         }
       ]
     },
-
     "Phase5Cleanup": {
       "Type": "Task",
       "Comment": "Phase 5: Cleanup old resources (delete/stop old cluster, delete old EFS, scale down nodegroup)",
@@ -1157,27 +1329,35 @@
           "OrchestratorExecutionName.$": "$$.Execution.Name",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-Phase5Cleanup', $$.Execution.Name)"
       },
       "ResultPath": "$.CleanupResult",
       "Next": "CheckNotifyEnabled_Success",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.CleanupError",
           "Next": "CheckNotifyEnabled_Success"
         }
       ]
     },
-
     "CheckNotifyEnabled_Success": {
       "Type": "Choice",
       "Comment": "Skip notification if Notifications.Enabled is false or absent",
       "Choices": [
         {
           "And": [
-            {"Variable": "$.Notifications.Enabled", "IsPresent": true},
-            {"Variable": "$.Notifications.Enabled", "BooleanEquals": true}
+            {
+              "Variable": "$.Notifications.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Notifications.Enabled",
+              "BooleanEquals": true
+            }
           ],
           "Next": "SendSuccessNotification"
         }
@@ -1192,20 +1372,29 @@
         "Input": {
           "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
           "Item": {
-            "ExecutionId": {"S.$": "$$.Execution.Id"},
-            "Timestamp": {"S.$": "$$.State.EnteredTime"},
-            "Status": {"S": "COMPLETED"}
+            "ExecutionId": {
+              "S.$": "$$.Execution.Id"
+            },
+            "Timestamp": {
+              "S.$": "$$.State.EnteredTime"
+            },
+            "Status": {
+              "S": "COMPLETED"
+            }
           },
           "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
           "SNSSubject": "Refresh Completed Successfully",
           "SNSMessage.$": "States.Format('Database refresh completed for {}', $.Database.Target.ClusterIdentifier)"
-        }
+        },
+        "Name.$": "States.Format('{}-SendSuccessNotification', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshComplete",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.NotifyError",
           "Next": "RefreshComplete"
         }
@@ -1217,8 +1406,14 @@
       "Choices": [
         {
           "And": [
-            {"Variable": "$.Notifications.Enabled", "IsPresent": true},
-            {"Variable": "$.Notifications.Enabled", "BooleanEquals": true}
+            {
+              "Variable": "$.Notifications.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Notifications.Enabled",
+              "BooleanEquals": true
+            }
           ],
           "Next": "SendFailureNotification"
         }
@@ -1233,26 +1428,34 @@
         "Input": {
           "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
           "Item": {
-            "ExecutionId": {"S.$": "$$.Execution.Id"},
-            "Timestamp": {"S.$": "$$.State.EnteredTime"},
-            "Status": {"S": "FAILED"}
+            "ExecutionId": {
+              "S.$": "$$.Execution.Id"
+            },
+            "Timestamp": {
+              "S.$": "$$.State.EnteredTime"
+            },
+            "Status": {
+              "S": "FAILED"
+            }
           },
           "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
           "SNSSubject": "Refresh Failed",
           "SNSMessage.$": "States.Format('Database refresh FAILED for {}', $.Database.Target.ClusterIdentifier)"
-        }
+        },
+        "Name.$": "States.Format('{}-SendFailureNotification', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshFailed",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.NotifyError",
           "Next": "RefreshFailed"
         }
       ]
     },
-
     "ConfigLoadFailed": {
       "Type": "Fail",
       "Error": "ConfigLoadFailed",
