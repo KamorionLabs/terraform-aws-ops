@@ -219,7 +219,7 @@
         {
           "Variable": "$.JobStatus.Status",
           "StringEquals": "Complete",
-          "Next": "DeleteImportJob"
+          "Next": "CheckSkipDeletion"
         },
         {
           "Variable": "$.JobStatus.Status",
@@ -228,6 +228,20 @@
         }
       ],
       "Default": "WaitForImportJob"
+    },
+    "CheckSkipDeletion": {
+      "Type": "Choice",
+      "Comment": "If DebugKeepJob is true, skip job deletion to allow log inspection",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.DebugKeepJob", "IsPresent": true},
+            {"Variable": "$.DebugKeepJob", "BooleanEquals": true}
+          ],
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "DeleteImportJob"
     },
     "DeleteImportJob": {
       "Type": "Task",
