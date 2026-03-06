@@ -848,8 +848,11 @@
     "SkipClusterSwitch": {
       "Type": "Pass",
       "Comment": "Test mode: both RenameOldCluster and DeleteOldCluster are false. Restored cluster keeps its temporary name.",
-      "Result": "SKIPPED",
-      "ResultPath": "$.ClusterSwitchResult",
+      "Parameters": {
+        "Status": "SKIPPED",
+        "ModuleName": "skip_cluster_switch"
+      },
+      "ResultPath": "$.RenameNewResult",
       "Next": "CheckRotateSecretsOption"
     },
     "EnsureOldClusterNotExists": {
