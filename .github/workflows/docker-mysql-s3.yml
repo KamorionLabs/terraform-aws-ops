@@ -157,6 +157,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     permissions:
+      packages: read
       security-events: write
     strategy:
       fail-fast: false
