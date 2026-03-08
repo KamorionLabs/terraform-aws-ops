@@ -53,12 +53,12 @@ output "lambda_role_name" {
 
 output "lambda_security_group_id" {
   description = "ID of the Lambda security group (created by this module)"
-  value       = var.deploy_lambdas && var.create_lambda_security_group ? aws_security_group.lambda[0].id : null
+  value       = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? aws_security_group.lambda[0].id : null
 }
 
 output "lambda_security_group_ids" {
   description = "Security group IDs for Lambda VPC configuration (created or provided)"
-  value       = var.deploy_lambdas && var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+  value       = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
 }
 
 output "lambda_subnet_ids" {
@@ -102,4 +102,41 @@ output "eks_access_entry_arn" {
 output "eks_access_entry_created" {
   description = "Whether the EKS access entry was created"
   value       = var.create_eks_access_entry && var.eks_cluster_name != null
+}
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity Outputs
+# -----------------------------------------------------------------------------
+
+output "eks_pod_identity_role_arn" {
+  description = "ARN of the EKS Pod Identity IAM role for refresh jobs"
+  value       = var.create_eks_pod_identity ? aws_iam_role.eks_pod_identity[0].arn : null
+}
+
+output "eks_pod_identity_role_name" {
+  description = "Name of the EKS Pod Identity IAM role for refresh jobs"
+  value       = var.create_eks_pod_identity ? aws_iam_role.eks_pod_identity[0].name : null
+}
+
+# -----------------------------------------------------------------------------
+# K8s Proxy Lambda Outputs
+# -----------------------------------------------------------------------------
+
+output "k8s_proxy_lambda_arn" {
+  description = "ARN of the k8s-proxy Lambda function"
+  value       = var.enable_k8s_proxy ? aws_lambda_function.k8s_proxy[0].arn : null
+}
+
+output "k8s_proxy_lambda_name" {
+  description = "Name of the k8s-proxy Lambda function"
+  value       = var.enable_k8s_proxy ? aws_lambda_function.k8s_proxy[0].function_name : null
+}
+
+# -----------------------------------------------------------------------------
+# AWS Backup EFS Outputs
+# -----------------------------------------------------------------------------
+
+output "backup_efs_role_arn" {
+  description = "ARN of the AWS Backup role for EFS restore operations"
+  value       = var.enable_efs ? aws_iam_role.backup_efs[0].arn : null
 }

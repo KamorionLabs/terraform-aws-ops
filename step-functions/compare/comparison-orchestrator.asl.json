@@ -1,0 +1,495 @@
+{
+  "Comment": "Orchestrator for environment comparison. Single entry point that coordinates checkers and comparisons.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.SourceEnv", "IsPresent": true},
+            {"Variable": "$.DestinationEnv", "IsPresent": true}
+          ],
+          "Next": "RunAllSourceCheckers"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, SourceEnv, and DestinationEnv are required"
+    },
+
+    "RunAllSourceCheckers": {
+      "Type": "Parallel",
+      "Comment": "Run all source environment checkers in parallel",
+      "Branches": [
+        {
+          "StartAt": "RunSourcePodsChecker",
+          "States": {
+            "RunSourcePodsChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPodsCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.SourceEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pods", "env": "source", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SourcePodsCheckerFailed"}]
+            },
+            "SourcePodsCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pods", "env": "source", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSourceServicesChecker",
+          "States": {
+            "RunSourceServicesChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sServicesCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.SourceEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:services", "env": "source", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SourceServicesCheckerFailed"}]
+            },
+            "SourceServicesCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:services", "env": "source", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSourceIngressChecker",
+          "States": {
+            "RunSourceIngressChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sIngressCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.SourceEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:ingress", "env": "source", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SourceIngressCheckerFailed"}]
+            },
+            "SourceIngressCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:ingress", "env": "source", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSourcePvcChecker",
+          "States": {
+            "RunSourcePvcChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPvcCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.SourceEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pvc", "env": "source", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SourcePvcCheckerFailed"}]
+            },
+            "SourcePvcCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pvc", "env": "source", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSourceSecretsChecker",
+          "States": {
+            "RunSourceSecretsChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sSecretsCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.SourceEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:secrets", "env": "source", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SourceSecretsCheckerFailed"}]
+            },
+            "SourceSecretsCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:secrets", "env": "source", "status": "FAILED"},
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.SourceCheckerResults",
+      "Next": "RunAllDestinationCheckers",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SourceCheckersError",
+          "Next": "SourceCheckersFailed"
+        }
+      ]
+    },
+
+    "SourceCheckersFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SourceCheckersFailed",
+        "message.$": "States.Format('Source checkers failed: {}', $.SourceCheckersError.Error)"
+      },
+      "End": true
+    },
+
+    "RunAllDestinationCheckers": {
+      "Type": "Parallel",
+      "Comment": "Run all destination environment checkers in parallel",
+      "Branches": [
+        {
+          "StartAt": "RunDestPodsChecker",
+          "States": {
+            "RunDestPodsChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPodsCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.DestinationEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pods", "env": "destination", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "DestPodsCheckerFailed"}]
+            },
+            "DestPodsCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pods", "env": "destination", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunDestServicesChecker",
+          "States": {
+            "RunDestServicesChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sServicesCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.DestinationEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:services", "env": "destination", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "DestServicesCheckerFailed"}]
+            },
+            "DestServicesCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:services", "env": "destination", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunDestIngressChecker",
+          "States": {
+            "RunDestIngressChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sIngressCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.DestinationEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:ingress", "env": "destination", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "DestIngressCheckerFailed"}]
+            },
+            "DestIngressCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:ingress", "env": "destination", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunDestPvcChecker",
+          "States": {
+            "RunDestPvcChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPvcCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.DestinationEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pvc", "env": "destination", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "DestPvcCheckerFailed"}]
+            },
+            "DestPvcCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pvc", "env": "destination", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunDestSecretsChecker",
+          "States": {
+            "RunDestSecretsChecker": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sSecretsCheckerArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "Env.$": "$.DestinationEnv"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:secrets", "env": "destination", "status.$": "$.Status"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "DestSecretsCheckerFailed"}]
+            },
+            "DestSecretsCheckerFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:secrets", "env": "destination", "status": "FAILED"},
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.DestinationCheckerResults",
+      "Next": "RunAllCompares",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DestCheckersError",
+          "Next": "DestCheckersFailed"
+        }
+      ]
+    },
+
+    "DestCheckersFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "DestinationCheckersFailed",
+        "message.$": "States.Format('Destination checkers failed: {}', $.DestCheckersError.Error)"
+      },
+      "End": true
+    },
+
+    "RunAllCompares": {
+      "Type": "Parallel",
+      "Comment": "Run all comparisons in parallel",
+      "Branches": [
+        {
+          "StartAt": "RunPodsCompare",
+          "States": {
+            "RunPodsCompare": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPodsCompareArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "SourceEnv.$": "$.SourceEnv",
+                  "DestinationEnv.$": "$.DestinationEnv",
+                  "SourceStateKey.$": "States.Format('{}#{}|k8s:pods', $.Project, $.SourceEnv)",
+                  "DestinationStateKey.$": "States.Format('{}#{}|k8s:pods', $.Project, $.DestinationEnv)"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pods", "status.$": "$.Status", "output.$": "$.Output"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "PodsCompareFailed"}]
+            },
+            "PodsCompareFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pods", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunServicesCompare",
+          "States": {
+            "RunServicesCompare": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sServicesCompareArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "SourceEnv.$": "$.SourceEnv",
+                  "DestinationEnv.$": "$.DestinationEnv",
+                  "SourceStateKey.$": "States.Format('{}#{}|k8s:services', $.Project, $.SourceEnv)",
+                  "DestinationStateKey.$": "States.Format('{}#{}|k8s:services', $.Project, $.DestinationEnv)"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:services", "status.$": "$.Status", "output.$": "$.Output"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ServicesCompareFailed"}]
+            },
+            "ServicesCompareFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:services", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunIngressCompare",
+          "States": {
+            "RunIngressCompare": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sIngressCompareArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "SourceEnv.$": "$.SourceEnv",
+                  "DestinationEnv.$": "$.DestinationEnv",
+                  "SourceStateKey.$": "States.Format('{}#{}|k8s:ingress', $.Project, $.SourceEnv)",
+                  "DestinationStateKey.$": "States.Format('{}#{}|k8s:ingress', $.Project, $.DestinationEnv)"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:ingress", "status.$": "$.Status", "output.$": "$.Output"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "IngressCompareFailed"}]
+            },
+            "IngressCompareFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:ingress", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunPvcCompare",
+          "States": {
+            "RunPvcCompare": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sPvcCompareArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "SourceEnv.$": "$.SourceEnv",
+                  "DestinationEnv.$": "$.DestinationEnv",
+                  "SourceStateKey.$": "States.Format('{}#{}|k8s:pvc', $.Project, $.SourceEnv)",
+                  "DestinationStateKey.$": "States.Format('{}#{}|k8s:pvc', $.Project, $.DestinationEnv)"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:pvc", "status.$": "$.Status", "output.$": "$.Output"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "PvcCompareFailed"}]
+            },
+            "PvcCompareFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:pvc", "status": "FAILED"},
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "RunSecretsCompare",
+          "States": {
+            "RunSecretsCompare": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn": "${K8sSecretsCompareArn}",
+                "Input": {
+                  "Project.$": "$.Project",
+                  "SourceEnv.$": "$.SourceEnv",
+                  "DestinationEnv.$": "$.DestinationEnv",
+                  "SourceStateKey.$": "States.Format('{}#{}|k8s:secrets', $.Project, $.SourceEnv)",
+                  "DestinationStateKey.$": "States.Format('{}#{}|k8s:secrets', $.Project, $.DestinationEnv)"
+                }
+              },
+              "ResultSelector": {"checkType": "k8s:secrets", "status.$": "$.Status", "output.$": "$.Output"},
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "SecretsCompareFailed"}]
+            },
+            "SecretsCompareFailed": {
+              "Type": "Pass",
+              "Parameters": {"checkType": "k8s:secrets", "status": "FAILED"},
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.CompareResults",
+      "Next": "FormatFinalResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CompareError",
+          "Next": "ComparesFailed"
+        }
+      ]
+    },
+
+    "ComparesFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ComparesFailed",
+        "message.$": "States.Format('Comparisons failed: {}', $.CompareError.Error)"
+      },
+      "End": true
+    },
+
+    "FormatFinalResult": {
+      "Type": "Pass",
+      "Comment": "Format final aggregated result",
+      "Parameters": {
+        "status": "completed",
+        "project.$": "$.Project",
+        "sourceEnv.$": "$.SourceEnv",
+        "destinationEnv.$": "$.DestinationEnv",
+        "sourceCheckers.$": "$.SourceCheckerResults",
+        "destinationCheckers.$": "$.DestinationCheckerResults",
+        "comparisons.$": "$.CompareResults"
+      },
+      "End": true
+    }
+  }
+}

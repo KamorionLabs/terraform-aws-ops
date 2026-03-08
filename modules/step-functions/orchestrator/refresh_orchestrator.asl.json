@@ -1,5 +1,5 @@
 {
-  "Comment": "Cross-Account Refresh Orchestrator - Orchestrates database and EFS refresh from source to destination account",
+  "Comment": "Cross-Account Refresh Orchestrator - Full 5-phase flow with database, EFS, and EKS operations",
   "StartAt": "LoadConfiguration",
   "States": {
     "LoadConfiguration": {
@@ -11,7 +11,7 @@
           "Next": "LoadConfigFromS3"
         }
       ],
-      "Default": "PrepareRefresh"
+      "Default": "ValidateInputs"
     },
     "LoadConfigFromS3": {
       "Type": "Task",
@@ -24,14 +24,92 @@
         "config.$": "States.StringToJson($.Body)"
       },
       "OutputPath": "$.config",
-      "Next": "PrepareRefresh",
+      "Next": "ValidateInputs",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ConfigLoadFailed"
         }
       ]
+    },
+    "ValidateInputs": {
+      "Type": "Task",
+      "Comment": "Validate all inputs and required resources before starting refresh",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.ValidateRefreshConfig",
+        "Input": {
+          "Database.$": "$.Database",
+          "EFS.$": "$.EFS",
+          "EKS.$": "$.EKS",
+          "SourceAccount.$": "$.SourceAccount",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "StepFunctions.$": "$.StepFunctions",
+          "Notifications.$": "$.Notifications",
+          "Tags.$": "$.Tags"
+        },
+        "Name.$": "States.Format('{}-ValidateInputs', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "ValidationStatus.$": "$.Output.ValidationStatus",
+        "Results.$": "$.Output.Results"
+      },
+      "ResultPath": "$.ValidationResult",
+      "Next": "CheckValidationStatus",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ValidationError",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
+    },
+    "CheckValidationStatus": {
+      "Type": "Choice",
+      "Comment": "If validation failed, route to failure notification. Otherwise check DryRun mode.",
+      "Choices": [
+        {
+          "Variable": "$.ValidationResult.ValidationStatus",
+          "StringEquals": "FAILED",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ],
+      "Default": "CheckDryRunMode"
+    },
+    "CheckDryRunMode": {
+      "Type": "Choice",
+      "Comment": "If DryRun=true, return validation report without executing refresh",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.DryRun",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.DryRun",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "DryRunComplete"
+        }
+      ],
+      "Default": "PrepareRefresh"
+    },
+    "DryRunComplete": {
+      "Type": "Pass",
+      "Comment": "Return validation report for dry-run mode",
+      "Parameters": {
+        "Status": "DRY_RUN_COMPLETE",
+        "ValidationResult.$": "$.ValidationResult"
+      },
+      "Next": "RefreshComplete"
     },
     "PrepareRefresh": {
       "Type": "Task",
@@ -44,7 +122,8 @@
           "EFS.$": "$.EFS",
           "Tags.$": "$.Tags",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-PrepareRefresh', $$.Execution.Name)"
       },
       "ResultSelector": {
         "ResourceNames.$": "$.Output.ResourceNames",
@@ -56,7 +135,9 @@
       "Next": "MergePrepareResults",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.PrepareError",
           "Next": "Phase1DataRefresh"
         }
@@ -71,22 +152,625 @@
         "Tags.$": "$.Tags",
         "SourceAccount.$": "$.SourceAccount",
         "DestinationAccount.$": "$.DestinationAccount",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
         "StepFunctions.$": "$.StepFunctions",
         "Notifications.$": "$.Notifications",
         "ResourceNames.$": "$.PrepareResult.ResourceNames",
         "CurrentDatabaseTags.$": "$.PrepareResult.CurrentDatabaseTags",
         "CurrentEfsTags.$": "$.PrepareResult.CurrentEfsTags",
-        "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId"
+        "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId",
+        "MergedDatabaseTags.$": "$.Tags",
+        "MergedEfsTags.$": "$.Tags",
+        "ComputedDumpSubPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $$.Execution.Name)"
       },
-      "Next": "Phase1DataRefresh"
+      "Next": "CheckEFSReplicationMode"
+    },
+    "CheckEFSReplicationMode": {
+      "Type": "Choice",
+      "Comment": "When EFS cross-account replication is active, use synchronized cutoff flow to ensure DB snapshot and EFS data are from the same point in time. Otherwise use standard parallel flow.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EFS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EFS.Enabled",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.EFS.Source.Account.AccountId",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.EFS.Source.Account.AccountId",
+                "StringEqualsPath": "$.DestinationAccount.AccountId"
+              }
+            }
+          ],
+          "Next": "Phase1WithReplication"
+        }
+      ],
+      "Default": "Phase1DataRefresh"
+    },
+    "Phase1WithReplication": {
+      "Type": "Parallel",
+      "Comment": "Phase 1 (replication mode): Run mysqldump and EFS replication+sync in parallel. DB restore is deferred to SynchronizedCutoffAndRestore to ensure temporal consistency between DB snapshot and EFS data.",
+      "Branches": [
+        {
+          "Comment": "Branch A: MySQLDump on old cluster (same as standard path)",
+          "StartAt": "CheckMysqlDumpOption_Repl",
+          "States": {
+            "CheckMysqlDumpOption_Repl": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "RunMysqlDump_Repl"
+                }
+              ],
+              "Default": "MysqlDumpSkipped_Repl"
+            },
+            "RunMysqlDump_Repl": {
+              "Type": "Task",
+              "Comment": "Dump tables from old cluster to EFS before restore",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.RunMysqldumpOnEks",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "TablesToDump.$": "$.Database.MySQLOperations.TablesToDump",
+                  "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
+                  "DumpSubPath.$": "$.ComputedDumpSubPath",
+                  "EKS.$": "$.EKS",
+                  "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+                  "StepFunctions.$": "$.StepFunctions",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-RunMysqlDump', $$.Execution.Name)"
+              },
+              "ResultPath": null,
+              "Next": "MysqlDumpComplete_Repl",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.DumpError",
+                  "Next": "MysqlDumpFailed_Repl"
+                }
+              ]
+            },
+            "MysqlDumpComplete_Repl": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpSkipped_Repl": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpFailed_Repl": {
+              "Type": "Fail",
+              "Error": "MysqlDumpFailed",
+              "Cause": "MySQLDump on old cluster failed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch B: EFS cross-account replication setup, wait for sync, create mount targets, and optionally store SSM",
+          "StartAt": "SetupCrossAccountReplication_Repl",
+          "States": {
+            "SetupCrossAccountReplication_Repl": {
+              "Type": "Task",
+              "Comment": "Setup EFS replication from source to destination account",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.SetupCrossAccountReplication",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "DestinationRegion.$": "$.EFS.Replication.DestinationRegion",
+                  "DestinationKmsKeyId.$": "$.EFS.Replication.DestinationKmsKeyId",
+                  "ReplicationRoleArn.$": "$.EFS.Replication.RoleArn",
+                  "PerformanceMode": "generalPurpose",
+                  "Encrypted": true,
+                  "Tags.$": "$.EFS.Tags"
+                },
+                "Name.$": "States.Format('{}-SetupReplication', $$.Execution.Name)"
+              },
+              "ResultPath": "$.ReplicationSetupResult",
+              "Next": "CheckReplicationSync_Repl",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSReplicationFailed_Repl"
+                }
+              ]
+            },
+            "CheckReplicationSync_Repl": {
+              "Type": "Task",
+              "Comment": "Wait for EFS replication to reach near-realtime sync before cutoff",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "DestinationFileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "Context.$": "$.EFS.Context",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "Mode": "wait"
+                },
+                "Name.$": "States.Format('{}-CheckReplSync', $$.Execution.Name)"
+              },
+              "ResultPath": "$.ReplicationSyncResult",
+              "Next": "PrepareEfsResult_Repl",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSReplicationFailed_Repl"
+                }
+              ]
+            },
+            "PrepareEfsResult_Repl": {
+              "Type": "Pass",
+              "Comment": "Format replication result to match standard EFS output structure",
+              "Parameters": {
+                "Output": {
+                  "FileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.EFS.Replication.DestinationRegion, $.DestinationAccount.AccountId, $.ReplicationSetupResult.Output.DestinationFileSystemId)",
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "Mode": "cross-account-replication"
+                }
+              },
+              "ResultPath": "$.EfsRestoreResult",
+              "Next": "CreateEFSMountTargets_Repl"
+            },
+            "CreateEFSMountTargets_Repl": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.CreateFilesystem",
+                "Input": {
+                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
+                  "SubnetIds.$": "$.EFS.Network.SubnetIds",
+                  "SecurityGroupIds.$": "$.EFS.Network.SecurityGroupIds",
+                  "LifecyclePolicies.$": "$.EFS.Lifecycle",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-CreateMountTargets', $$.Execution.Name)"
+              },
+              "ResultPath": "$.EfsConfigureResult",
+              "Next": "CheckStoreInSSM_Repl",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSReplicationFailed_Repl"
+                }
+              ]
+            },
+            "CheckStoreInSSM_Repl": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "StoreSubpathInSSM_Repl"
+                }
+              ],
+              "Default": "EFSReplicationComplete_Repl"
+            },
+            "StoreSubpathInSSM_Repl": {
+              "Type": "Task",
+              "Comment": "Find EFS subpath and store both EFS ID and subpath in SSM",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM",
+                "Input": {
+                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.DestinationAccount.Region, $.DestinationAccount.AccountId, $.EfsRestoreResult.Output.FileSystemId)",
+                  "Context.$": "$.EFS.Context",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+                  "EfsSubPathSSMParameterName.$": "$.EFS.SSMParameters.EfsSubPath",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-StoreSubpathInSSM', $$.Execution.Name)"
+              },
+              "ResultPath": "$.StoreSSMResult",
+              "Next": "EFSReplicationComplete_Repl",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.StoreSSMError",
+                  "Next": "EFSReplicationComplete_Repl"
+                }
+              ]
+            },
+            "EFSReplicationComplete_Repl": {
+              "Type": "Succeed"
+            },
+            "EFSReplicationFailed_Repl": {
+              "Type": "Fail",
+              "Error": "EFSReplicationFailed",
+              "Cause": "EFS replication process failed"
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ReplicationPhase1",
+      "Next": "SynchronizedCutoffAndRestore",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.Phase1Error",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
+    },
+    "SynchronizedCutoffAndRestore": {
+      "Type": "Parallel",
+      "Comment": "Synchronized cutoff: delete EFS replication and create manual DB snapshot simultaneously, then restore DB from that snapshot. Both operations start at the same instant T, ensuring DB and EFS data are temporally consistent.",
+      "Branches": [
+        {
+          "Comment": "Branch A: Delete EFS replication to freeze EFS data at time T",
+          "StartAt": "DeleteEFSReplication_Sync",
+          "States": {
+            "DeleteEFSReplication_Sync": {
+              "Type": "Task",
+              "Comment": "Delete replication to make destination EFS writable and freeze data at time T",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.DeleteReplication",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "DeleteDestinationFileSystem": false
+                },
+                "Name.$": "States.Format('{}-DelReplSync', $$.Execution.Name)"
+              },
+              "ResultPath": "$.DeleteReplicationResult",
+              "Next": "ReplicationDeleteComplete_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.DeleteReplicationError",
+                  "Next": "ReplicationDeleteFailed_Sync"
+                }
+              ]
+            },
+            "ReplicationDeleteComplete_Sync": {
+              "Type": "Succeed"
+            },
+            "ReplicationDeleteFailed_Sync": {
+              "Type": "Fail",
+              "Error": "DeleteReplicationFailed",
+              "Cause": "Failed to delete EFS replication during synchronized cutoff"
+            }
+          }
+        },
+        {
+          "Comment": "Branch B: Clean up leftover restore cluster, then restore DB from a fresh manual snapshot created at time T",
+          "StartAt": "EnsureRestoreClusterNotExists_Sync",
+          "States": {
+            "EnsureRestoreClusterNotExists_Sync": {
+              "Type": "Task",
+              "Comment": "Clean up any leftover -restore cluster from failed refresh",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "StepFunctions.$": "$.StepFunctions",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-EnsureNoRestore', $$.Execution.Name)"
+              },
+              "ResultPath": "$.CleanupResult",
+              "Next": "RestoreDatabase_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.CleanupError",
+                  "Next": "RestoreDatabase_Sync"
+                }
+              ]
+            },
+            "RestoreDatabase_Sync": {
+              "Type": "Task",
+              "Comment": "Restore database from a fresh manual snapshot - snapshot is created NOW at time T, synchronized with EFS replication cutoff",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
+                "Input": {
+                  "RestoreType.$": "$.Database.Source.RestoreType",
+                  "SnapshotMode": "create-manual",
+                  "PrepareSnapshotStateMachineArn.$": "$.StepFunctions.Database.PrepareSnapshotForRestore",
+                  "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
+                  "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbInstanceClass.$": "$.Database.Target.InstanceClass",
+                  "AuroraServerlessMinCapacity.$": "$.Database.Target.ServerlessConfig.MinCapacity",
+                  "AuroraServerlessMaxCapacity.$": "$.Database.Target.ServerlessConfig.MaxCapacity",
+                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
+                  "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
+                  "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "SourceAccount.$": "$.SourceAccount",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-RestoreDatabase', $$.Execution.Name)"
+              },
+              "ResultPath": "$.RestoreResult",
+              "Next": "CreateDBInstance_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed_Sync"
+                }
+              ]
+            },
+            "CreateDBInstance_Sync": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.CreateInstance",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbInstanceIdentifierPrefix.$": "$.ResourceNames.TmpInstanceIdentifierPrefix",
+                  "DbInstances.$": "$.Database.Target.Instances",
+                  "DbParameterGroupName.$": "$.Database.Parameters.InstanceParameterGroupName",
+                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
+                  "Tags.$": "$.Database.Target.Tags",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-CreateDBInstance', $$.Execution.Name)"
+              },
+              "ResultPath": "$.CreateInstanceResult",
+              "Next": "EnableMasterSecret_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed_Sync"
+                }
+              ]
+            },
+            "EnableMasterSecret_Sync": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.EnableMasterSecret",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.MasterUserSecretKmsKeyId",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-EnableMasterSecret', $$.Execution.Name)"
+              },
+              "ResultPath": "$.EnableSecretResult",
+              "Next": "ConfigureS3Integration_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed_Sync"
+                }
+              ]
+            },
+            "ConfigureS3Integration_Sync": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.ConfigureS3Integration",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
+                  "RoleArn.$": "$.Database.S3Integration.RoleArn",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-CfgS3Integration', $$.Execution.Name)"
+              },
+              "ResultPath": "$.S3IntegrationResult",
+              "Next": "DatabaseRefreshComplete_Sync",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.S3Error",
+                  "Next": "DatabaseRefreshComplete_Sync"
+                }
+              ]
+            },
+            "DatabaseRefreshComplete_Sync": {
+              "Type": "Succeed"
+            },
+            "DatabaseRefreshFailed_Sync": {
+              "Type": "Fail",
+              "Error": "DatabaseRestoreFailed",
+              "Cause": "Database restore process failed during synchronized cutoff"
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.SyncCutoffResults",
+      "Next": "MergeResultsFromReplication",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.SyncCutoffError",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
+    },
+    "MergeResultsFromReplication": {
+      "Type": "Pass",
+      "Comment": "Normalize results from replication path to match standard Phase1Results format: [0]=mysqldump, [1]=DB, [2]=EFS. This allows downstream states to use the same JSONPath references regardless of which path was taken.",
+      "Parameters": {
+        "Phase1Results.$": "States.Array($.ReplicationPhase1[0], $.SyncCutoffResults[1], $.ReplicationPhase1[1])",
+        "ReplicationAlreadyDeleted": true,
+        "Database.$": "$.Database",
+        "EFS.$": "$.EFS",
+        "EKS.$": "$.EKS",
+        "Tags.$": "$.Tags",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+        "StepFunctions.$": "$.StepFunctions",
+        "Notifications.$": "$.Notifications",
+        "ResourceNames.$": "$.ResourceNames",
+        "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
+        "CurrentEfsTags.$": "$.CurrentEfsTags",
+        "OldEfsFileSystemId.$": "$.OldEfsFileSystemId",
+        "MergedDatabaseTags.$": "$.MergedDatabaseTags",
+        "MergedEfsTags.$": "$.MergedEfsTags",
+        "ComputedDumpSubPath.$": "$.ComputedDumpSubPath"
+      },
+      "Next": "CheckRunSqlScriptsOption"
     },
     "Phase1DataRefresh": {
       "Type": "Parallel",
-      "Comment": "Phase 1: Restore database and EFS in parallel",
+      "Comment": "Phase 1: Restore database and EFS in parallel, optionally run mysqldump on old cluster",
       "Branches": [
         {
-          "StartAt": "EnsureRestoreClusterNotExists",
+          "Comment": "Branch A: MySQLDump on old cluster (optional, runs in parallel with restore)",
+          "StartAt": "CheckMysqlDumpOption",
           "States": {
+            "CheckMysqlDumpOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.Database.Options.RunMysqlDumpOldCluster",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "RunMysqlDump"
+                }
+              ],
+              "Default": "MysqlDumpSkipped"
+            },
+            "RunMysqlDump": {
+              "Type": "Task",
+              "Comment": "Dump tables from old cluster to EFS before restore completes",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.RunMysqldumpOnEks",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "TablesToDump.$": "$.Database.MySQLOperations.TablesToDump",
+                  "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
+                  "DumpSubPath.$": "$.ComputedDumpSubPath",
+                  "EKS.$": "$.EKS",
+                  "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+                  "StepFunctions.$": "$.StepFunctions",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-RunMysqlDump', $$.Execution.Name)"
+              },
+              "ResultPath": null,
+              "Next": "MysqlDumpComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.DumpError",
+                  "Next": "MysqlDumpFailed"
+                }
+              ]
+            },
+            "MysqlDumpComplete": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpSkipped": {
+              "Type": "Succeed"
+            },
+            "MysqlDumpFailed": {
+              "Type": "Fail",
+              "Error": "MysqlDumpFailed",
+              "Cause": "MySQLDump on old cluster failed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch B: Database Restore chain",
+          "StartAt": "CheckDatabaseEnabled_Restore",
+          "States": {
+            "CheckDatabaseEnabled_Restore": {
+              "Type": "Choice",
+              "Comment": "Skip DB restore if Database.Enabled is false",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.Database.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.Database.Enabled",
+                      "BooleanEquals": false
+                    }
+                  ],
+                  "Next": "DatabaseRefreshComplete"
+                }
+              ],
+              "Default": "EnsureRestoreClusterNotExists"
+            },
             "EnsureRestoreClusterNotExists": {
               "Type": "Task",
               "Comment": "Clean up any leftover -restore cluster from failed refresh",
@@ -95,14 +779,19 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "StepFunctions.$": "$.StepFunctions",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-EnsureNoRestore', $$.Execution.Name)"
               },
               "ResultPath": "$.CleanupResult",
               "Next": "RestoreDatabase",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.CleanupError",
                   "Next": "RestoreDatabase"
                 }
@@ -115,21 +804,30 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
                 "Input": {
+                  "RestoreType.$": "$.Database.Source.RestoreType",
+                  "SnapshotMode.$": "$.Database.Source.SnapshotMode",
+                  "PrepareSnapshotStateMachineArn.$": "$.StepFunctions.Database.PrepareSnapshotForRestore",
                   "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
                   "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
                   "DbInstanceClass.$": "$.Database.Target.InstanceClass",
+                  "AuroraServerlessMinCapacity.$": "$.Database.Target.ServerlessConfig.MinCapacity",
+                  "AuroraServerlessMaxCapacity.$": "$.Database.Target.ServerlessConfig.MaxCapacity",
                   "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
                   "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-RestoreDatabase', $$.Execution.Name)"
               },
               "ResultPath": "$.RestoreResult",
               "Next": "CreateDBInstance",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -144,14 +842,20 @@
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
                   "DbInstanceIdentifierPrefix.$": "$.ResourceNames.TmpInstanceIdentifierPrefix",
                   "DbInstances.$": "$.Database.Target.Instances",
+                  "DbParameterGroupName.$": "$.Database.Parameters.InstanceParameterGroupName",
+                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
+                  "Tags.$": "$.Database.Target.Tags",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-CreateDBInstance', $$.Execution.Name)"
               },
               "ResultPath": "$.CreateInstanceResult",
               "Next": "EnableMasterSecret",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -164,15 +868,18 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.EnableMasterSecret",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
-                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.MasterUserSecretKmsKeyId",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-EnableMasterSecret', $$.Execution.Name)"
               },
               "ResultPath": "$.EnableSecretResult",
               "Next": "ConfigureS3Integration",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "DatabaseRefreshFailed"
                 }
@@ -185,15 +892,19 @@
                 "StateMachineArn.$": "$.StepFunctions.Database.ConfigureS3Integration",
                 "Input": {
                   "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "RoleArn.$": "$.Database.S3Integration.RoleArn",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-CfgS3Integration', $$.Execution.Name)"
               },
               "ResultPath": "$.S3IntegrationResult",
               "Next": "DatabaseRefreshComplete",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.S3Error",
                   "Next": "DatabaseRefreshComplete"
                 }
@@ -210,6 +921,7 @@
           }
         },
         {
+          "Comment": "Branch C: EFS Restore chain with optional SSM subpath storage",
           "StartAt": "CheckEFSEnabled",
           "States": {
             "CheckEFSEnabled": {
@@ -217,13 +929,115 @@
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.EFS.Enabled", "IsPresent": true},
-                    {"Variable": "$.EFS.Enabled", "BooleanEquals": false}
+                    {
+                      "Variable": "$.EFS.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.EFS.Enabled",
+                      "BooleanEquals": false
+                    }
                   ],
                   "Next": "EFSRefreshComplete"
                 }
               ],
+              "Default": "CheckEFSCrossAccount"
+            },
+            "CheckEFSCrossAccount": {
+              "Type": "Choice",
+              "Comment": "Check if EFS is cross-account by comparing Source.Account.AccountId with DestinationAccount.AccountId",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.EFS.Source.Account.AccountId",
+                      "IsPresent": true
+                    },
+                    {
+                      "Not": {
+                        "Variable": "$.EFS.Source.Account.AccountId",
+                        "StringEqualsPath": "$.DestinationAccount.AccountId"
+                      }
+                    }
+                  ],
+                  "Next": "SetupCrossAccountReplication"
+                }
+              ],
               "Default": "RestoreEFS"
+            },
+            "SetupCrossAccountReplication": {
+              "Type": "Task",
+              "Comment": "Cross-account: Setup EFS replication from source to destination",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.SetupCrossAccountReplication",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "DestinationRegion.$": "$.EFS.Replication.DestinationRegion",
+                  "DestinationKmsKeyId.$": "$.EFS.Replication.DestinationKmsKeyId",
+                  "ReplicationRoleArn.$": "$.EFS.Replication.RoleArn",
+                  "PerformanceMode": "generalPurpose",
+                  "Encrypted": true,
+                  "Tags.$": "$.EFS.Tags"
+                },
+                "Name.$": "States.Format('{}-SetupReplication', $$.Execution.Name)"
+              },
+              "ResultPath": "$.ReplicationSetupResult",
+              "Next": "CheckReplicationSyncInitial",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "CheckReplicationSyncInitial": {
+              "Type": "Task",
+              "Comment": "Cross-account: Wait for initial replication to complete",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
+                "Input": {
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "DestinationFileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "SourceAccount.$": "$.EFS.Source.Account",
+                  "DestinationAccount.$": "$.DestinationAccount",
+                  "Context.$": "$.EFS.Context",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "Mode": "wait"
+                },
+                "Name.$": "States.Format('{}-CheckReplSyncInit', $$.Execution.Name)"
+              },
+              "ResultPath": "$.ReplicationSyncResult",
+              "Next": "PrepareEfsResultFromReplication",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "PrepareEfsResultFromReplication": {
+              "Type": "Pass",
+              "Comment": "Format replication result to match RestoreEFS output structure",
+              "Parameters": {
+                "Output": {
+                  "FileSystemId.$": "$.ReplicationSetupResult.Output.DestinationFileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.EFS.Replication.DestinationRegion, $.DestinationAccount.AccountId, $.ReplicationSetupResult.Output.DestinationFileSystemId)",
+                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+                  "Mode": "cross-account-replication"
+                }
+              },
+              "ResultPath": "$.EfsRestoreResult",
+              "Next": "CreateEFSMountTargets"
             },
             "RestoreEFS": {
               "Type": "Task",
@@ -231,22 +1045,25 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.EFS.RestoreFromBackup",
                 "Input": {
-                  "SourceEFSName.$": "$.EFS.Source",
+                  "SourceEFSName.$": "$.EFS.Source.Name",
                   "AWSBackupRoleArn.$": "$.EFS.Backup.RoleArn",
                   "Encrypted": "true",
                   "KmsKeyId.$": "$.EFS.Security.KmsKeyId",
                   "NewFileSystem": "true",
                   "ItemsToRestore.$": "$.EFS.Backup.ItemsToRestore",
-                  "Tags.$": "$.Tags",
+                  "Tags.$": "$.EFS.Tags",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-RestoreEFS', $$.Execution.Name)"
               },
               "ResultPath": "$.EfsRestoreResult",
               "Next": "CreateEFSMountTargets",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
                   "ResultPath": "$.Error",
                   "Next": "EFSRefreshFailed"
                 }
@@ -263,15 +1080,66 @@
                   "SecurityGroupIds.$": "$.EFS.Network.SecurityGroupIds",
                   "LifecyclePolicies.$": "$.EFS.Lifecycle",
                   "DestinationAccount.$": "$.DestinationAccount"
-                }
+                },
+                "Name.$": "States.Format('{}-CreateMountTargets', $$.Execution.Name)"
               },
               "ResultPath": "$.EfsConfigureResult",
+              "Next": "CheckStoreInSSMOption",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "CheckStoreInSSMOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.EFS.Options.StoreInSSM",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "StoreSubpathInSSM"
+                }
+              ],
+              "Default": "EFSRefreshComplete"
+            },
+            "StoreSubpathInSSM": {
+              "Type": "Task",
+              "Comment": "Find EFS subpath and store both EFS ID and subpath in SSM",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM",
+                "Input": {
+                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
+                  "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.DestinationAccount.Region, $.DestinationAccount.AccountId, $.EfsRestoreResult.Output.FileSystemId)",
+                  "Context.$": "$.EFS.Context",
+                  "LambdaConfig.$": "$.EFS.LambdaConfig",
+                  "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+                  "EfsSubPathSSMParameterName.$": "$.EFS.SSMParameters.EfsSubPath",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-StoreSubpathInSSM', $$.Execution.Name)"
+              },
+              "ResultPath": "$.StoreSSMResult",
               "Next": "EFSRefreshComplete",
               "Catch": [
                 {
-                  "ErrorEquals": ["States.ALL"],
-                  "ResultPath": "$.Error",
-                  "Next": "EFSRefreshFailed"
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.StoreSSMError",
+                  "Next": "EFSRefreshComplete"
                 }
               ]
             },
@@ -287,18 +1155,303 @@
         }
       ],
       "ResultPath": "$.Phase1Results",
-      "Next": "Phase2ClusterSwitch",
+      "Next": "CheckRunSqlScriptsOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Phase1Error",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
-    "Phase2ClusterSwitch": {
+    "CheckRunSqlScriptsOption": {
+      "Type": "Choice",
+      "Comment": "Phase 1 post-process: optionally run SQL scripts on restored cluster",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Database.Options.RunSqlScripts",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Database.Options.RunSqlScripts",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "RunSqlScripts"
+        }
+      ],
+      "Default": "CheckMysqlImportOption"
+    },
+    "RunSqlScripts": {
+      "Type": "Task",
+      "Comment": "Execute SQL scripts from S3 on the restored cluster via run-sql Lambda",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RunSqlFromS3",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DatabaseName.$": "$.Database.MySQLOperations.DatabaseName",
+          "MasterUserSecretArn.$": "$.Phase1Results[1].EnableSecretResult.Output.SecretArn",
+          "LambdaFunctionName.$": "$.Database.SqlScripts.LambdaFunctionName",
+          "S3Bucket.$": "$.Database.SqlScripts.Bucket",
+          "S3Prefix.$": "$.Database.SqlScripts.Prefix",
+          "ExportResults": false,
+          "ExportBucket": "",
+          "ExportPrefix": "",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-RunSqlScripts', $$.Execution.Name)"
+      },
+      "ResultPath": "$.SqlScriptsResult",
+      "Next": "CheckMysqlImportOption",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.SqlScriptsError",
+          "Next": "CheckMysqlImportOption"
+        }
+      ]
+    },
+    "CheckMysqlImportOption": {
+      "Type": "Choice",
+      "Comment": "Phase 1 post-process: optionally import mysqldump data into restored cluster",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Database.Options.RunMysqlImportCluster",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Database.Options.RunMysqlImportCluster",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "RunMysqlImport"
+        }
+      ],
+      "Default": "Phase2PreSwitchEKS"
+    },
+    "RunMysqlImport": {
+      "Type": "Task",
+      "Comment": "Import mysqldump data into restored cluster via EKS job",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RunMysqlimportOnEks",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DatabaseName.$": "$.Database.MySQLOperations.ImportDatabaseName",
+          "EfsPvcName.$": "$.Database.MySQLOperations.EfsPvcName",
+          "DumpSubPath.$": "$.ComputedDumpSubPath",
+          "RefreshBucket.$": "$.Database.MySQLOperations.RefreshBucket",
+          "RefreshBucketPrefix.$": "$.Database.MySQLOperations.RefreshBucketPrefix",
+          "EKS.$": "$.EKS",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "StepFunctions.$": "$.StepFunctions",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-RunMysqlImport', $$.Execution.Name)"
+      },
+      "ResultPath": "$.MysqlImportResult",
+      "Next": "Phase2PreSwitchEKS",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.MysqlImportError",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
+    },
+    "Phase2PreSwitchEKS": {
       "Type": "Pass",
-      "Comment": "Phase 2: Switch clusters (rename old to -old, rename new to target)",
+      "Comment": "Phase 2: Scale down EKS services and delete storage before cluster switch",
+      "Next": "CheckEKSEnabled_PreSwitch"
+    },
+    "CheckEKSEnabled_PreSwitch": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Enabled",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "ScaleDownServices"
+        }
+      ],
+      "Default": "CheckEFSCrossAccountFinalSync"
+    },
+    "ScaleDownServices": {
+      "Type": "Task",
+      "Comment": "Scale down all EKS services to 0 replicas before storage switch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "Replicas": 0,
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-ScaleDownServices', $$.Execution.Name)"
+      },
+      "ResultPath": "$.ScaleDownResult",
+      "Next": "DeleteEKSStorage",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ScaleDownError",
+          "Next": "DeleteEKSStorage"
+        }
+      ]
+    },
+    "DeleteEKSStorage": {
+      "Type": "Task",
+      "Comment": "Delete PVC/PV/StorageClass for old EFS before cluster switch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "FileSystemName.$": "$.EFS.Name",
+          "Action": "Delete",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-DeleteEKSStorage', $$.Execution.Name)"
+      },
+      "ResultPath": "$.DeleteStorageResult",
+      "Next": "CheckEFSCrossAccountFinalSync",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.DeleteStorageError",
+          "Next": "CheckEFSCrossAccountFinalSync"
+        }
+      ]
+    },
+    "CheckEFSCrossAccountFinalSync": {
+      "Type": "Choice",
+      "Comment": "Check if EFS cross-account replication needs final sync and deletion before switch. Skip if replication was already deleted during synchronized cutoff (replication path).",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.ReplicationAlreadyDeleted",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ReplicationAlreadyDeleted",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "Phase3ClusterSwitch"
+        },
+        {
+          "And": [
+            {
+              "Variable": "$.EFS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EFS.Enabled",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.EFS.Source.Account.AccountId",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.EFS.Source.Account.AccountId",
+                "StringEqualsPath": "$.DestinationAccount.AccountId"
+              }
+            }
+          ],
+          "Next": "CheckReplicationSyncFinal"
+        }
+      ],
+      "Default": "Phase3ClusterSwitch"
+    },
+    "CheckReplicationSyncFinal": {
+      "Type": "Task",
+      "Comment": "Cross-account: Final sync check with flag file verification before deleting replication",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EFS.CheckReplicationSync",
+        "Input": {
+          "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+          "DestinationFileSystemId.$": "$.Phase1Results[2].EfsRestoreResult.Output.FileSystemId",
+          "SourceAccount.$": "$.EFS.Source.Account",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "Context.$": "$.EFS.Context",
+          "LambdaConfig.$": "$.EFS.LambdaConfig",
+          "Mode": "wait"
+        },
+        "Name.$": "States.Format('{}-CheckReplSyncFin', $$.Execution.Name)"
+      },
+      "ResultPath": "$.FinalSyncResult",
+      "Next": "DeleteEFSReplication",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.FinalSyncError",
+          "Next": "DeleteEFSReplication"
+        }
+      ]
+    },
+    "DeleteEFSReplication": {
+      "Type": "Task",
+      "Comment": "Cross-account: Delete replication to make destination EFS writable",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EFS.DeleteReplication",
+        "Input": {
+          "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
+          "SourceAccount.$": "$.EFS.Source.Account",
+          "DestinationAccount.$": "$.DestinationAccount",
+          "DeleteDestinationFileSystem": false
+        },
+        "Name.$": "States.Format('{}-DelEFSReplication', $$.Execution.Name)"
+      },
+      "ResultPath": "$.DeleteReplicationResult",
+      "Next": "Phase3ClusterSwitch",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.DeleteReplicationError",
+          "Next": "Phase3ClusterSwitch"
+        }
+      ]
+    },
+    "Phase3ClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Phase 3: Switch clusters (rename old to -old, tag, rename new to target)",
       "Next": "CheckRenameOldClusterOption"
     },
     "CheckRenameOldClusterOption": {
@@ -310,7 +1463,53 @@
           "Next": "EnsureOldClusterNotExists"
         }
       ],
-      "Default": "RenameNewCluster"
+      "Default": "CheckDeleteOldClusterOption"
+    },
+    "CheckDeleteOldClusterOption": {
+      "Type": "Choice",
+      "Comment": "If not renaming, check if we should delete old cluster to free target name. If neither rename nor delete, skip cluster switch entirely (test mode).",
+      "Choices": [
+        {
+          "Variable": "$.Database.Options.DeleteOldCluster",
+          "BooleanEquals": true,
+          "Next": "DeleteOldCluster"
+        }
+      ],
+      "Default": "SkipClusterSwitch"
+    },
+    "DeleteOldCluster": {
+      "Type": "Task",
+      "Comment": "Delete old cluster to free up target name for rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-DeleteOldCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.DeleteOldClusterResult",
+      "Next": "EnsureTargetClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.DeleteOldClusterError",
+          "Next": "CheckNotifyEnabled_Failure"
+        }
+      ]
+    },
+    "SkipClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Test mode: both RenameOldCluster and DeleteOldCluster are false. Restored cluster keeps its temporary name.",
+      "Parameters": {
+        "Status": "SKIPPED",
+        "ModuleName": "skip_cluster_switch"
+      },
+      "ResultPath": "$.RenameNewResult",
+      "Next": "CheckRotateSecretsOption"
     },
     "EnsureOldClusterNotExists": {
       "Type": "Task",
@@ -319,16 +1518,21 @@
         "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
         "Input": {
           "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
+          "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-EnsureNoOldClstr', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureOldNotExistsResult",
       "Next": "RenameOldCluster",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.EnsureOldError",
-          "Next": "RenameNewCluster"
+          "Next": "EnsureTargetClusterAvailable"
         }
       ]
     },
@@ -342,14 +1546,68 @@
           "NewDbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
           "NewInstanceIdentifierPrefix.$": "$.ResourceNames.OldInstanceIdentifierPrefix",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RenameOldCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.RenameOldResult",
+      "Next": "TagOldClusterRefreshTrue",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.RenameOldError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "TagOldClusterRefreshTrue": {
+      "Type": "Task",
+      "Comment": "Fix: Tag renamed -old cluster with refresh:true so next EnsureClusterNotExists can delete it",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.TagResources",
+        "Input": {
+          "ResourceARNList.$": "States.Array($.RenameOldResult.Output.DbClusterArn)",
+          "ConfigTags": {
+            "refresh": "true"
+          },
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-TagOldCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.TagOldClusterResult",
+      "Next": "EnsureTargetClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.TagOldClusterError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "EnsureTargetClusterAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure target cluster is available (start if stopped) before rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-EnsureTargetAvail', $$.Execution.Name)"
+      },
+      "ResultPath": "$.EnsureTargetAvailableResult",
       "Next": "RenameNewCluster",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.RenameOldError",
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.EnsureTargetAvailableError",
           "Next": "RenameNewCluster"
         }
       ]
@@ -364,15 +1622,18 @@
           "NewDbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "NewInstanceIdentifierPrefix.$": "$.Database.Target.InstanceIdentifierPrefix",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RenameNewCluster', $$.Execution.Name)"
       },
       "ResultPath": "$.RenameNewResult",
       "Next": "CheckRotateSecretsOption",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.RenameNewError",
-          "Next": "SendFailureNotification"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
@@ -385,7 +1646,7 @@
           "Next": "RotateDatabaseSecrets"
         }
       ],
-      "Default": "Phase3Cleanup"
+      "Default": "Phase4PostSwitchEKS"
     },
     "RotateDatabaseSecrets": {
       "Type": "Task",
@@ -395,22 +1656,186 @@
         "Input": {
           "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
           "DatabaseUsersSecrets.$": "$.Database.Secrets.UserSecrets",
+          "RotationLambdaName.$": "$.Database.Secrets.RotationLambdaName",
+          "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+          "Region.$": "$.Region",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-RotateSecrets', $$.Execution.Name)"
       },
       "ResultPath": "$.RotateSecretsResult",
-      "Next": "Phase3Cleanup",
+      "Next": "Phase4PostSwitchEKS",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.RotateSecretsError",
-          "Next": "Phase3Cleanup"
+          "Next": "Phase4PostSwitchEKS"
         }
       ]
     },
-    "Phase3Cleanup": {
+    "Phase4PostSwitchEKS": {
+      "Type": "Pass",
+      "Comment": "Phase 4: Create new EKS storage, scale up services, verify and restart",
+      "Next": "CheckEKSEnabled_PostSwitch"
+    },
+    "CheckEKSEnabled_PostSwitch": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Enabled",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "CreateEKSStorage"
+        }
+      ],
+      "Default": "Phase5Cleanup"
+    },
+    "CreateEKSStorage": {
       "Type": "Task",
-      "Comment": "Phase 3: Cleanup old resources and send notifications",
+      "Comment": "Create PVC/PV/StorageClass for new EFS (reads EFS ID from SSM)",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "FileSystemName.$": "$.EFS.Name",
+          "Action": "Create",
+          "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-CreateEKSStorage', $$.Execution.Name)"
+      },
+      "ResultPath": "$.CreateStorageResult",
+      "Next": "ScaleUpServices",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.CreateStorageError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+    "ScaleUpServices": {
+      "Type": "Task",
+      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "Replicas": 1,
+          "CleanupSecret": true,
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-ScaleUpServices', $$.Execution.Name)"
+      },
+      "ResultPath": "$.ScaleUpResult",
+      "Next": "VerifyAndRestartServices",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ScaleUpError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+    "VerifyAndRestartServices": {
+      "Type": "Task",
+      "Comment": "Verify EFS subpath on services and restart if mismatch",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.VerifyAndRestartServices",
+        "Input": {
+          "EksClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Services.$": "$.EKS.Services",
+          "SSMParameters": {
+            "EfsSubPath.$": "$.EFS.SSMParameters.EfsSubPath"
+          },
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-VerifyRestart', $$.Execution.Name)"
+      },
+      "ResultPath": "$.VerifyResult",
+      "Next": "CheckArchiveJobOption",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.VerifyError",
+          "Next": "CheckArchiveJobOption"
+        }
+      ]
+    },
+    "CheckArchiveJobOption": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Options.RunArchiveJob",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Options.RunArchiveJob",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "RunArchiveJob"
+        }
+      ],
+      "Default": "Phase5Cleanup"
+    },
+    "RunArchiveJob": {
+      "Type": "Task",
+      "Comment": "Sync MySQL dumps and media files to S3",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.RunArchiveJob",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "EKS.$": "$.EKS",
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "StepFunctions.$": "$.StepFunctions",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-RunArchiveJob', $$.Execution.Name)"
+      },
+      "ResultPath": "$.ArchiveResult",
+      "Next": "Phase5Cleanup",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ArchiveError",
+          "Next": "Phase5Cleanup"
+        }
+      ]
+    },
+    "Phase5Cleanup": {
+      "Type": "Task",
+      "Comment": "Phase 5: Cleanup old resources (delete/stop old cluster, delete old EFS, scale down nodegroup)",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.Utils.CleanupAndStop",
@@ -422,20 +1847,46 @@
           "RenameNewResult.$": "$.RenameNewResult",
           "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
           "CurrentEfsTags.$": "$.CurrentEfsTags",
+          "MergedEfsTags.$": "$.MergedEfsTags",
           "OldEfsFileSystemId.$": "$.OldEfsFileSystemId",
+          "MergedDatabaseTags.$": "$.MergedDatabaseTags",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
           "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
-        }
+        },
+        "Name.$": "States.Format('{}-Phase5Cleanup', $$.Execution.Name)"
       },
       "ResultPath": "$.CleanupResult",
-      "Next": "SendSuccessNotification",
+      "Next": "CheckNotifyEnabled_Success",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.CleanupError",
-          "Next": "SendSuccessNotification"
+          "Next": "CheckNotifyEnabled_Success"
         }
       ]
+    },
+    "CheckNotifyEnabled_Success": {
+      "Type": "Choice",
+      "Comment": "Skip notification if Notifications.Enabled is false or absent",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Notifications.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Notifications.Enabled",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "SendSuccessNotification"
+        }
+      ],
+      "Default": "RefreshComplete"
     },
     "SendSuccessNotification": {
       "Type": "Task",
@@ -445,24 +1896,53 @@
         "Input": {
           "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
           "Item": {
-            "ExecutionId": {"S.$": "$$.Execution.Id"},
-            "Timestamp": {"S.$": "$$.State.EnteredTime"},
-            "Status": {"S": "COMPLETED"}
+            "ExecutionId": {
+              "S.$": "$$.Execution.Id"
+            },
+            "Timestamp": {
+              "S.$": "$$.State.EnteredTime"
+            },
+            "Status": {
+              "S": "COMPLETED"
+            }
           },
           "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
           "SNSSubject": "Refresh Completed Successfully",
           "SNSMessage.$": "States.Format('Database refresh completed for {}', $.Database.Target.ClusterIdentifier)"
-        }
+        },
+        "Name.$": "States.Format('{}-NotifySuccess', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshComplete",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.NotifyError",
           "Next": "RefreshComplete"
         }
       ]
+    },
+    "CheckNotifyEnabled_Failure": {
+      "Type": "Choice",
+      "Comment": "Skip notification if Notifications.Enabled is false or absent",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Notifications.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Notifications.Enabled",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "SendFailureNotification"
+        }
+      ],
+      "Default": "RefreshFailed"
     },
     "SendFailureNotification": {
       "Type": "Task",
@@ -472,21 +1952,29 @@
         "Input": {
           "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
           "Item": {
-            "ExecutionId": {"S.$": "$$.Execution.Id"},
-            "Timestamp": {"S.$": "$$.State.EnteredTime"},
-            "Status": {"S": "FAILED"},
-            "Error": {"S.$": "States.JsonToString($.Phase1Error)"}
+            "ExecutionId": {
+              "S.$": "$$.Execution.Id"
+            },
+            "Timestamp": {
+              "S.$": "$$.State.EnteredTime"
+            },
+            "Status": {
+              "S": "FAILED"
+            }
           },
           "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
           "SNSSubject": "Refresh Failed",
           "SNSMessage.$": "States.Format('Database refresh FAILED for {}', $.Database.Target.ClusterIdentifier)"
-        }
+        },
+        "Name.$": "States.Format('{}-NotifyFailure', $$.Execution.Name)"
       },
       "ResultPath": null,
       "Next": "RefreshFailed",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.NotifyError",
           "Next": "RefreshFailed"
         }

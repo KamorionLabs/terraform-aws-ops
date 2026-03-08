@@ -1,0 +1,417 @@
+{
+  "Comment": "Fetches Security Groups state and stores in DynamoDB. New format: project/env/category/check_type",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Instance",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Environment",
+              "IsPresent": true
+            }
+          ],
+          "Next": "PrepareExecution"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, Instance, and Environment are required"
+    },
+
+    "PrepareExecution": {
+      "Type": "Pass",
+      "Comment": "Prepare execution context with input data",
+      "Parameters": {
+        "Input.$": "$"
+      },
+      "Next": "CheckCrossAccountRole"
+    },
+
+    "CheckCrossAccountRole": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role is specified",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "DescribeSecurityGroupsWithCredentials"
+        }
+      ],
+      "Default": "DescribeSecurityGroups"
+    },
+
+    "DescribeSecurityGroups": {
+      "Type": "Task",
+      "Comment": "Describe security groups (same account) with filters",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeSecurityGroups",
+      "Parameters": {
+        "Filters.$": "$.Input.Filters"
+      },
+      "ResultSelector": {
+        "SecurityGroups.$": "$.SecurityGroups"
+      },
+      "ResultPath": "$.SecurityGroupsResult",
+      "Next": "CheckSecurityGroupsResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DescribeError",
+          "Next": "DescribeSecurityGroupsFailed"
+        }
+      ]
+    },
+
+    "DescribeSecurityGroupsWithCredentials": {
+      "Type": "Task",
+      "Comment": "Describe security groups (cross-account with assumed credentials)",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeSecurityGroups",
+      "Parameters": {
+        "Filters.$": "$.Input.Filters"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "SecurityGroups.$": "$.SecurityGroups"
+      },
+      "ResultPath": "$.SecurityGroupsResult",
+      "Next": "CheckSecurityGroupsResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DescribeError",
+          "Next": "DescribeSecurityGroupsFailed"
+        }
+      ]
+    },
+
+    "DescribeSecurityGroupsFailed": {
+      "Type": "Pass",
+      "Comment": "Handle describe security groups failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "compliant": 0,
+            "warnings": 0,
+            "violations": 0,
+            "unused": 0
+          },
+          "securityGroups": [],
+          "findings": [],
+          "issues": ["Failed to describe security groups"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-sg-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "CheckSecurityGroupsResult": {
+      "Type": "Choice",
+      "Comment": "Check if we got security groups and route to appropriate ENI call",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.SecurityGroupsResult.SecurityGroups[0]",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Input.CrossAccountRoleArn",
+              "IsPresent": true
+            }
+          ],
+          "Next": "DescribeNetworkInterfacesWithCredentials"
+        },
+        {
+          "Variable": "$.SecurityGroupsResult.SecurityGroups[0]",
+          "IsPresent": true,
+          "Next": "DescribeNetworkInterfaces"
+        }
+      ],
+      "Default": "NoSecurityGroupsFound"
+    },
+
+    "NoSecurityGroupsFound": {
+      "Type": "Pass",
+      "Comment": "Handle case with no security groups matching filters",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg",
+        "payload": {
+          "status": "warning",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "compliant": 0,
+            "warnings": 0,
+            "violations": 0,
+            "unused": 0
+          },
+          "securityGroups": [],
+          "findings": [],
+          "issues": ["No security groups found matching filters"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-sg-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "DescribeNetworkInterfaces": {
+      "Type": "Task",
+      "Comment": "Describe network interfaces to find SG usage (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeNetworkInterfaces",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "vpc-id",
+            "Values.$": "States.Array($.Input.VpcId)"
+          }
+        ]
+      },
+      "ResultSelector": {
+        "NetworkInterfaces.$": "$.NetworkInterfaces"
+      },
+      "ResultPath": "$.NetworkInterfacesResult",
+      "Next": "AnalyzeSecurityGroups",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ENIError",
+          "Next": "AnalyzeSecurityGroupsWithoutENI"
+        }
+      ]
+    },
+
+    "DescribeNetworkInterfacesWithCredentials": {
+      "Type": "Task",
+      "Comment": "Describe network interfaces to find SG usage (cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeNetworkInterfaces",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "vpc-id",
+            "Values.$": "States.Array($.Input.VpcId)"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "NetworkInterfaces.$": "$.NetworkInterfaces"
+      },
+      "ResultPath": "$.NetworkInterfacesResult",
+      "Next": "AnalyzeSecurityGroups",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ENIError",
+          "Next": "AnalyzeSecurityGroupsWithoutENI"
+        }
+      ]
+    },
+
+    "AnalyzeSecurityGroupsWithoutENI": {
+      "Type": "Task",
+      "Comment": "Analyze security groups without ENI data",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AnalyzeSecurityGroupsLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "SecurityGroups.$": "$.SecurityGroupsResult.SecurityGroups",
+          "NetworkInterfaces": []
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.AnalyzeResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AnalyzeError",
+          "Next": "AnalyzeFailed"
+        }
+      ]
+    },
+
+    "AnalyzeSecurityGroups": {
+      "Type": "Task",
+      "Comment": "Analyze security groups for compliance via Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AnalyzeSecurityGroupsLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "SecurityGroups.$": "$.SecurityGroupsResult.SecurityGroups",
+          "NetworkInterfaces.$": "$.NetworkInterfacesResult.NetworkInterfaces"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.AnalyzeResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AnalyzeError",
+          "Next": "AnalyzeFailed"
+        }
+      ]
+    },
+
+    "AnalyzeFailed": {
+      "Type": "Pass",
+      "Comment": "Handle analyze failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "total": 0,
+            "compliant": 0,
+            "warnings": 0,
+            "violations": 0,
+            "unused": 0
+          },
+          "securityGroups": [],
+          "findings": [],
+          "issues": ["Failed to analyze security groups"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-sg-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare final payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "sg",
+        "payload.$": "$.AnalyzeResult.payload",
+        "updated_by": "step-function:net-sg-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

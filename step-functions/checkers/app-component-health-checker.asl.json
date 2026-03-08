@@ -1,0 +1,508 @@
+{
+  "Comment": "Application Component Health Checker - Fetches pods and logs from EKS, runs component-specific health checks via Lambda plugin architecture. Supports SMUI, Hybris, Solr, Apache.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.Component", "IsPresent": true},
+            {"Variable": "$.ClusterName", "IsPresent": true},
+            {"Variable": "$.Namespace", "IsPresent": true}
+          ],
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, Component, ClusterName, and Namespace are required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Fail",
+      "Error": "ClusterAccessFailed",
+      "Cause": "Failed to access EKS cluster - check cluster name and IAM permissions"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "BuildPodPath"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Fail",
+      "Error": "ClusterNotActive",
+      "Cause": "EKS cluster is not in ACTIVE state"
+    },
+
+    "BuildPodPath": {
+      "Type": "Pass",
+      "Comment": "Build the API path for listing pods",
+      "Parameters": {
+        "PodPath.$": "States.Format('/api/v1/namespaces/{}/pods', $.Namespace)",
+        "LabelSelector.$": "States.Format('app.kubernetes.io/name={}', $.Component)"
+      },
+      "ResultPath": "$.Paths",
+      "Next": "CheckLabelSelectorProvided"
+    },
+
+    "CheckLabelSelectorProvided": {
+      "Type": "Choice",
+      "Comment": "Check if custom label selector was provided",
+      "Choices": [
+        {
+          "Variable": "$.LabelSelector",
+          "IsPresent": true,
+          "Next": "UseProvidedLabelSelector"
+        }
+      ],
+      "Default": "CheckCrossAccountForPods"
+    },
+
+    "UseProvidedLabelSelector": {
+      "Type": "Pass",
+      "Comment": "Override with provided label selector",
+      "InputPath": "$.LabelSelector",
+      "ResultPath": "$.Paths.LabelSelector",
+      "Next": "CheckCrossAccountForPods"
+    },
+
+    "CheckCrossAccountForPods": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchPodsCrossAccount"
+        }
+      ],
+      "Default": "FetchPods"
+    },
+
+    "FetchPods": {
+      "Type": "Task",
+      "Comment": "Fetch pods with label selector (same account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.Paths.PodPath",
+        "QueryParameters": {
+          "labelSelector.$": "States.Array($.Paths.LabelSelector)"
+        }
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "CheckPodsFound",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsCrossAccount": {
+      "Type": "Task",
+      "Comment": "Fetch pods with label selector (cross-account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.Paths.PodPath",
+        "QueryParameters": {
+          "labelSelector.$": "States.Array($.Paths.LabelSelector)"
+        }
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "CheckPodsFound",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsFailed": {
+      "Type": "Fail",
+      "Error": "FetchPodsFailed",
+      "Cause": "Failed to fetch pods from Kubernetes API"
+    },
+
+    "CheckPodsFound": {
+      "Type": "Choice",
+      "Comment": "Check if any pods were found",
+      "Choices": [
+        {
+          "Variable": "$.PodsResponse.items[0]",
+          "IsPresent": true,
+          "Next": "ExtractPodNames"
+        }
+      ],
+      "Default": "InvokeCheckerNoPods"
+    },
+
+    "ExtractPodNames": {
+      "Type": "Pass",
+      "Comment": "Extract pod names for log fetching",
+      "Parameters": {
+        "PodNames.$": "$.PodsResponse.items[*].metadata.name"
+      },
+      "ResultPath": "$.PodData",
+      "Next": "FetchLogsForEachPod"
+    },
+
+    "FetchLogsForEachPod": {
+      "Type": "Map",
+      "Comment": "Fetch logs from each pod in parallel",
+      "ItemsPath": "$.PodData.PodNames",
+      "MaxConcurrency": 5,
+      "Parameters": {
+        "PodName.$": "$$.Map.Item.Value",
+        "Namespace.$": "$.Namespace",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "CrossAccountRoleArn.$": "$.CrossAccountRoleArn",
+        "Component.$": "$.Component"
+      },
+      "Iterator": {
+        "StartAt": "DetermineContainerName",
+        "States": {
+          "DetermineContainerName": {
+            "Type": "Choice",
+            "Comment": "Determine container name based on component and pod name",
+            "Choices": [
+              {
+                "Comment": "Solr leader pods",
+                "And": [
+                  {"Variable": "$.Component", "StringEquals": "solr"},
+                  {"Variable": "$.PodName", "StringMatches": "*leader*"}
+                ],
+                "Next": "SetContainerSolrLeader"
+              },
+              {
+                "Comment": "Solr follower pods",
+                "And": [
+                  {"Variable": "$.Component", "StringEquals": "solr"},
+                  {"Variable": "$.PodName", "StringMatches": "*follower*"}
+                ],
+                "Next": "SetContainerSolrFollower"
+              }
+            ],
+            "Default": "SetContainerDefault"
+          },
+          "SetContainerSolrLeader": {
+            "Type": "Pass",
+            "Parameters": {
+              "ContainerName": "solrleader",
+              "PodName.$": "$.PodName",
+              "Namespace.$": "$.Namespace",
+              "ClusterInfo.$": "$.ClusterInfo",
+              "CrossAccountRoleArn.$": "$.CrossAccountRoleArn",
+              "Component.$": "$.Component"
+            },
+            "Next": "CheckLogsCrossAccount"
+          },
+          "SetContainerSolrFollower": {
+            "Type": "Pass",
+            "Parameters": {
+              "ContainerName": "solrfollower",
+              "PodName.$": "$.PodName",
+              "Namespace.$": "$.Namespace",
+              "ClusterInfo.$": "$.ClusterInfo",
+              "CrossAccountRoleArn.$": "$.CrossAccountRoleArn",
+              "Component.$": "$.Component"
+            },
+            "Next": "CheckLogsCrossAccount"
+          },
+          "SetContainerDefault": {
+            "Type": "Pass",
+            "Comment": "Use component name as container name for other components",
+            "Parameters": {
+              "ContainerName.$": "$.Component",
+              "PodName.$": "$.PodName",
+              "Namespace.$": "$.Namespace",
+              "ClusterInfo.$": "$.ClusterInfo",
+              "CrossAccountRoleArn.$": "$.CrossAccountRoleArn",
+              "Component.$": "$.Component"
+            },
+            "Next": "CheckLogsCrossAccount"
+          },
+          "CheckLogsCrossAccount": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.CrossAccountRoleArn",
+                "IsPresent": true,
+                "Next": "FetchPodLogsCrossAccount"
+              }
+            ],
+            "Default": "FetchPodLogs"
+          },
+          "FetchPodLogs": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::eks:call",
+            "Parameters": {
+              "ClusterName.$": "$.ClusterInfo.ClusterName",
+              "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+              "Endpoint.$": "$.ClusterInfo.Endpoint",
+              "Method": "GET",
+              "Path.$": "States.Format('/api/v1/namespaces/{}/pods/{}/log', $.Namespace, $.PodName)",
+              "QueryParameters": {
+                "tailLines": ["100"],
+                "container.$": "States.Array($.ContainerName)"
+              }
+            },
+            "ResultPath": "$.LogResult",
+            "Next": "FormatLogResult",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.LogError",
+                "Next": "LogFetchFailed"
+              }
+            ]
+          },
+          "FetchPodLogsCrossAccount": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::eks:call",
+            "Credentials": {
+              "RoleArn.$": "$.CrossAccountRoleArn"
+            },
+            "Parameters": {
+              "ClusterName.$": "$.ClusterInfo.ClusterName",
+              "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+              "Endpoint.$": "$.ClusterInfo.Endpoint",
+              "Method": "GET",
+              "Path.$": "States.Format('/api/v1/namespaces/{}/pods/{}/log', $.Namespace, $.PodName)",
+              "QueryParameters": {
+                "tailLines": ["100"],
+                "container.$": "States.Array($.ContainerName)"
+              }
+            },
+            "ResultPath": "$.LogResult",
+            "Next": "FormatLogResult",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.LogError",
+                "Next": "LogFetchFailed"
+              }
+            ]
+          },
+          "FormatLogResult": {
+            "Type": "Pass",
+            "Parameters": {
+              "podName.$": "$.PodName",
+              "logs.$": "$.LogResult.ResponseBody"
+            },
+            "End": true
+          },
+          "LogFetchFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "podName.$": "$.PodName",
+              "logs": "",
+              "error": "Failed to fetch logs"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.PodLogs",
+      "Next": "InvokeComponentChecker"
+    },
+
+    "InvokeCheckerNoPods": {
+      "Type": "Task",
+      "Comment": "Invoke component checker with no pods found",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AppComponentCheckerLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Project",
+          "Env.$": "$.Env",
+          "Component.$": "$.Component",
+          "ClusterName.$": "$.ClusterInfo.ClusterName",
+          "Namespace.$": "$.Namespace",
+          "Pods": [],
+          "Logs": []
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "body.$": "$.Payload.body"
+      },
+      "ResultPath": "$.CheckerResult",
+      "Next": "FormatResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckerFailed"
+        }
+      ]
+    },
+
+    "InvokeComponentChecker": {
+      "Type": "Task",
+      "Comment": "Invoke component checker Lambda with pods and logs",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${AppComponentCheckerLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Project",
+          "Env.$": "$.Env",
+          "Component.$": "$.Component",
+          "ClusterName.$": "$.ClusterInfo.ClusterName",
+          "Namespace.$": "$.Namespace",
+          "Pods.$": "$.PodsResponse.items",
+          "Logs.$": "$.PodLogs"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "body.$": "$.Payload.body"
+      },
+      "ResultPath": "$.CheckerResult",
+      "Next": "FormatResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckerFailed"
+        }
+      ]
+    },
+
+    "CheckerFailed": {
+      "Type": "Fail",
+      "Error": "ComponentCheckerFailed",
+      "Cause": "Failed to execute component health checker Lambda"
+    },
+
+    "FormatResult": {
+      "Type": "Pass",
+      "Comment": "Format final result",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "component.$": "$.Component",
+        "cluster.$": "$.ClusterInfo.ClusterName",
+        "namespace.$": "$.Namespace",
+        "result.$": "States.StringToJson($.CheckerResult.body)"
+      },
+      "End": true
+    }
+  }
+}

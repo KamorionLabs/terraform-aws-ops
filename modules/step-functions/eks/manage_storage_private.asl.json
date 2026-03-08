@@ -1,0 +1,349 @@
+{
+  "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account. Private variant using k8s-proxy Lambda instead of eks:call.",
+  "StartAt": "ChooseAction",
+  "States": {
+    "ChooseAction": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Action",
+          "StringEquals": "Create",
+          "Next": "GetEfsIdFromSsm"
+        },
+        {
+          "Variable": "$.Action",
+          "StringEquals": "Delete",
+          "Next": "DeletePvc"
+        }
+      ],
+      "Default": "ProcessFailed"
+    },
+    "DeletePvc": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.Namespace, $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvcDelete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.PvcNotFound",
+          "Next": "DeletePv"
+        }
+      ]
+    },
+    "WaitForPvcDelete": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "DeletePv"
+    },
+    "DeletePv": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvDelete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.PvNotFound",
+          "Next": "DeleteSc"
+        }
+      ]
+    },
+    "WaitForPvDelete": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "DeleteSc"
+    },
+    "DeleteSc": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareDeleteOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.ScNotFound",
+          "Next": "PrepareDeleteOutput"
+        }
+      ]
+    },
+    "PrepareDeleteOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "manage_storage",
+        "Action": "Delete",
+        "EksClusterName.$": "$.EksClusterName"
+      },
+      "Next": "ProcessSucceeded"
+    },
+    "GetEfsIdFromSsm": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name.$": "$.EfsIdSSMParameterName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "Id.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.EfsInfo",
+      "Next": "CreateSc",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "CreateSc": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path": "/apis/storage.k8s.io/v1/storageclasses",
+          "RequestBody": {
+            "apiVersion": "storage.k8s.io/v1",
+            "kind": "StorageClass",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "provisioner": "efs.csi.aws.com",
+            "parameters": {
+              "provisioningMode": "efs-ap",
+              "fileSystemId.$": "$.EfsInfo.Id",
+              "directoryPerms": "0755"
+            },
+            "reclaimPolicy": "Delete",
+            "allowVolumeExpansion": true,
+            "volumeBindingMode": "Immediate"
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForStorageClass",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "WaitForStorageClass": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "CreatePv"
+    },
+    "CreatePv": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path": "/api/v1/persistentvolumes",
+          "RequestBody": {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "spec": {
+              "capacity": {
+                "storage": "20Gi"
+              },
+              "volumeMode": "Filesystem",
+              "accessModes": ["ReadWriteMany"],
+              "persistentVolumeReclaimPolicy": "Retain",
+              "storageClassName.$": "$.FileSystemName",
+              "csi": {
+                "driver": "efs.csi.aws.com",
+                "volumeHandle.$": "$.EfsInfo.Id"
+              }
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPersistentVolume",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "WaitForPersistentVolume": {
+      "Type": "Wait",
+      "Seconds": 3,
+      "Next": "CreatePvc"
+    },
+    "CreatePvc": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.Namespace)",
+          "RequestBody": {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "spec": {
+              "accessModes": ["ReadWriteMany"],
+              "storageClassName.$": "$.FileSystemName",
+              "resources": {
+                "requests": {
+                  "storage": "20Gi"
+                }
+              },
+              "volumeName.$": "$.FileSystemName"
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvcBinding",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "WaitForPvcBinding": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "PrepareCreateOutput"
+    },
+    "PrepareCreateOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "manage_storage",
+        "Action": "Create",
+        "EksClusterName.$": "$.EksClusterName",
+        "EfsFileSystemId.$": "$.EfsInfo.Id"
+      },
+      "Next": "ProcessSucceeded"
+    },
+    "ProcessFailed": {
+      "Type": "Fail",
+      "Error": "ManageStorageFailed",
+      "Cause": "Failed to manage EKS storage resources"
+    },
+    "ProcessSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

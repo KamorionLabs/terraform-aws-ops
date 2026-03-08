@@ -1,0 +1,292 @@
+{
+  "Comment": "Compares DNS resolution between Legacy and New Horizon environments. Reads states from DynamoDB and produces comparison report.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Domain",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Country",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Environment",
+              "IsPresent": true
+            }
+          ],
+          "Next": "PrepareStateKeys"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Domain, Country, and Environment are required"
+    },
+
+    "PrepareStateKeys": {
+      "Type": "Pass",
+      "Comment": "Prepare DynamoDB keys for Legacy and NH states",
+      "Parameters": {
+        "Input.$": "$",
+        "LegacyPk.$": "States.Format('{}#{}', $.Domain, $.LegacyTarget)",
+        "NHPk.$": "States.Format('{}#{}', $.Domain, $.NHTarget)",
+        "Sk": "check:net:dns:current"
+      },
+      "Next": "ParallelFetchStates"
+    },
+
+    "ParallelFetchStates": {
+      "Type": "Parallel",
+      "Comment": "Fetch Legacy and NH states in parallel from DynamoDB",
+      "Branches": [
+        {
+          "StartAt": "GetLegacyState",
+          "States": {
+            "GetLegacyState": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.LegacyPk"
+                  },
+                  "sk": {
+                    "S.$": "$.Sk"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "legacy",
+                "itemData.$": "$.Item"
+              },
+              "ResultPath": "$.LegacyState",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.LegacyState",
+                  "Next": "LegacyStateFailed"
+                }
+              ]
+            },
+            "LegacyStateFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "LegacyState": {
+                  "source": "legacy",
+                  "itemData": false,
+                  "error": "Failed to fetch Legacy state"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GetNHState",
+          "States": {
+            "GetNHState": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::dynamodb:getItem",
+              "Parameters": {
+                "TableName": "${StateTableName}",
+                "Key": {
+                  "pk": {
+                    "S.$": "$.NHPk"
+                  },
+                  "sk": {
+                    "S.$": "$.Sk"
+                  }
+                }
+              },
+              "ResultSelector": {
+                "source": "nh",
+                "itemData.$": "$.Item"
+              },
+              "ResultPath": "$.NHState",
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.NHState",
+                  "Next": "NHStateFailed"
+                }
+              ]
+            },
+            "NHStateFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "NHState": {
+                  "source": "nh",
+                  "itemData": false,
+                  "error": "Failed to fetch NH state"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ParallelResults",
+      "Next": "ProcessComparison",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ParallelError",
+          "Next": "ComparisonFailed"
+        }
+      ]
+    },
+
+    "ComparisonFailed": {
+      "Type": "Pass",
+      "Comment": "Handle parallel fetch failure",
+      "Parameters": {
+        "domain.$": "$.Input.Domain",
+        "target.$": "States.Format('{}-{}-compare', $.Input.Country, $.Input.Environment)",
+        "check_type": "net-dns-compare",
+        "payload": {
+          "status": "error",
+          "summary": {
+            "legacyFound": false,
+            "nhFound": false
+          },
+          "issues": ["Failed to fetch states for comparison"],
+          "timestamp.$": "$$.State.EnteredTime"
+        }
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "ProcessComparison": {
+      "Type": "Task",
+      "Comment": "Process and compare Legacy vs NH DNS states",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CompareDnsLambdaArn}",
+        "Payload": {
+          "Domain.$": "$.Input.Domain",
+          "Country.$": "$.Input.Country",
+          "Environment.$": "$.Input.Environment",
+          "LegacyState.$": "$.ParallelResults[0]",
+          "NHState.$": "$.ParallelResults[1]"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.CompareResult",
+      "Next": "PrepareComparisonPayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CompareError",
+          "Next": "ProcessComparisonFailed"
+        }
+      ]
+    },
+
+    "ProcessComparisonFailed": {
+      "Type": "Pass",
+      "Comment": "Handle comparison processing failure",
+      "Parameters": {
+        "domain.$": "$.Input.Domain",
+        "target.$": "States.Format('{}-{}-compare', $.Input.Country, $.Input.Environment)",
+        "check_type": "net-dns-compare",
+        "payload": {
+          "status": "error",
+          "summary": {
+            "legacyFound": true,
+            "nhFound": true
+          },
+          "issues": ["Failed to process DNS comparison"],
+          "timestamp.$": "$$.State.EnteredTime"
+        }
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "PrepareComparisonPayload": {
+      "Type": "Pass",
+      "Comment": "Prepare comparison payload for DynamoDB",
+      "Parameters": {
+        "domain.$": "$.Input.Domain",
+        "target.$": "States.Format('{}-{}-compare', $.Input.Country, $.Input.Environment)",
+        "check_type": "net-dns-compare",
+        "payload.$": "$.CompareResult.payload",
+        "updated_by": "step-function:net-dns-compare"
+      },
+      "Next": "SaveComparisonState"
+    },
+
+    "SaveComparisonState": {
+      "Type": "Task",
+      "Comment": "Save comparison state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "domain.$": "$.domain",
+        "target.$": "$.target",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "error": "Failed to save comparison state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "domain.$": "$.domain",
+        "target.$": "$.target",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

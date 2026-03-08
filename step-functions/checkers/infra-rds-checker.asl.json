@@ -1,0 +1,471 @@
+{
+  "Comment": "Checks RDS/Aurora cluster status including parameter groups. Stores state in DynamoDB for comparison.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.DbClusterIdentifier", "IsPresent": true}
+          ],
+          "Next": "InitializeState"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, and DbClusterIdentifier are required"
+    },
+
+    "InitializeState": {
+      "Type": "Pass",
+      "Parameters": {
+        "Input.$": "$",
+        "Timestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "CheckCrossAccountRequired"
+    },
+
+    "CheckCrossAccountRequired": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account assume role is required",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "DescribeDBClusterCrossAccount"
+        }
+      ],
+      "Default": "DescribeDBCluster"
+    },
+
+    "DescribeDBCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.Input.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterResult",
+      "Next": "ExtractClusterInfo",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "SetStatusCriticalClusterError"
+        }
+      ]
+    },
+
+    "DescribeDBClusterCrossAccount": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.Input.DbClusterIdentifier"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "ResultPath": "$.ClusterResult",
+      "Next": "ExtractClusterInfo",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "SetStatusCriticalClusterError"
+        }
+      ]
+    },
+
+    "SetStatusCriticalClusterError": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "infra",
+        "check_type": "rds",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "cluster": {
+            "identifier.$": "$.Input.DbClusterIdentifier",
+            "status": "error",
+            "error.$": "$.ClusterError.Error"
+          },
+          "issues": ["Failed to describe DB cluster"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:infra-rds-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ExtractClusterInfo": {
+      "Type": "Pass",
+      "Comment": "Extract cluster info and parameter group name",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Timestamp.$": "$.Timestamp",
+        "Cluster.$": "$.ClusterResult.DbClusters[0]"
+      },
+      "Next": "GetParameterGroupsParallel"
+    },
+
+    "GetParameterGroupsParallel": {
+      "Type": "Parallel",
+      "Comment": "Fetch cluster and instance parameter groups in parallel",
+      "Branches": [
+        {
+          "StartAt": "CheckClusterParamGroupCrossAccount",
+          "States": {
+            "CheckClusterParamGroupCrossAccount": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Input.CrossAccountRoleArn",
+                  "IsPresent": true,
+                  "Next": "GetClusterParametersCrossAccount"
+                }
+              ],
+              "Default": "GetClusterParameters"
+            },
+            "GetClusterParameters": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterParameters",
+              "Parameters": {
+                "DbClusterParameterGroupName.$": "$.Cluster.DbClusterParameterGroup"
+              },
+              "ResultSelector": {
+                "type": "cluster",
+                "parameterGroupName.$": "$.Parameters[0].ParameterName",
+                "parameters.$": "$.Parameters"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "ClusterParamError"
+                }
+              ]
+            },
+            "GetClusterParametersCrossAccount": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterParameters",
+              "Parameters": {
+                "DbClusterParameterGroupName.$": "$.Cluster.DbClusterParameterGroup"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "ResultSelector": {
+                "type": "cluster",
+                "parameters.$": "$.Parameters"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "ClusterParamError"
+                }
+              ]
+            },
+            "ClusterParamError": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "cluster",
+                "error": "Failed to fetch cluster parameters",
+                "parameters": []
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "CheckInstanceParamGroupCrossAccount",
+          "States": {
+            "CheckInstanceParamGroupCrossAccount": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Input.CrossAccountRoleArn",
+                  "IsPresent": true,
+                  "Next": "GetFirstInstanceCrossAccount"
+                }
+              ],
+              "Default": "GetFirstInstance"
+            },
+            "GetFirstInstance": {
+              "Type": "Task",
+              "Comment": "Get first instance to find its parameter group",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+              "Parameters": {
+                "DbInstanceIdentifier.$": "$.Cluster.DbClusterMembers[0].DbInstanceIdentifier"
+              },
+              "ResultPath": "$.InstanceResult",
+              "Next": "GetInstanceParameters",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "InstanceParamError"
+                }
+              ]
+            },
+            "GetFirstInstanceCrossAccount": {
+              "Type": "Task",
+              "Comment": "Get first instance to find its parameter group (cross-account)",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+              "Parameters": {
+                "DbInstanceIdentifier.$": "$.Cluster.DbClusterMembers[0].DbInstanceIdentifier"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "ResultPath": "$.InstanceResult",
+              "Next": "GetInstanceParametersCrossAccount",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "InstanceParamError"
+                }
+              ]
+            },
+            "GetInstanceParameters": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBParameters",
+              "Parameters": {
+                "DbParameterGroupName.$": "$.InstanceResult.DbInstances[0].DbParameterGroups[0].DbParameterGroupName"
+              },
+              "ResultPath": "$.ParamResult",
+              "Next": "FormatInstanceResult",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "InstanceParamErrorWithInstance"
+                }
+              ]
+            },
+            "GetInstanceParametersCrossAccount": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBParameters",
+              "Parameters": {
+                "DbParameterGroupName.$": "$.InstanceResult.DbInstances[0].DbParameterGroups[0].DbParameterGroupName"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "ResultPath": "$.ParamResult",
+              "Next": "FormatInstanceResult",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "InstanceParamErrorWithInstance"
+                }
+              ]
+            },
+            "FormatInstanceResult": {
+              "Type": "Pass",
+              "Comment": "Format instance parameters result with instance info",
+              "Parameters": {
+                "type": "instance",
+                "parameters.$": "$.ParamResult.Parameters",
+                "instanceInfo.$": "$.InstanceResult.DbInstances[0]"
+              },
+              "End": true
+            },
+            "InstanceParamError": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "instance",
+                "error": "Failed to fetch instance info or parameters",
+                "parameters": []
+              },
+              "End": true
+            },
+            "InstanceParamErrorWithInstance": {
+              "Type": "Pass",
+              "Parameters": {
+                "type": "instance",
+                "error": "Failed to fetch instance parameters",
+                "parameters": [],
+                "instanceInfo.$": "$.InstanceResult.DbInstances[0]"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.ParameterGroupResults",
+      "Next": "ProcessResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ParamError",
+          "Next": "ProcessResultsWithParamError"
+        }
+      ]
+    },
+
+    "ProcessResultsWithParamError": {
+      "Type": "Pass",
+      "Comment": "Set empty parameter results on error",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Timestamp.$": "$.Timestamp",
+        "Cluster.$": "$.Cluster",
+        "ParameterGroupResults": [
+          {"type": "cluster", "parameters": [], "error": "Failed to fetch parameters"},
+          {"type": "instance", "parameters": [], "error": "Failed to fetch parameters"}
+        ]
+      },
+      "Next": "ProcessResults"
+    },
+
+    "ProcessResults": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessRdsLambdaArn}",
+        "Payload": {
+          "Input.$": "$.Input",
+          "Timestamp.$": "$.Timestamp",
+          "Cluster.$": "$.Cluster",
+          "ParameterGroupResults.$": "$.ParameterGroupResults"
+        }
+      },
+      "ResultSelector": {
+        "project.$": "$.Payload.project",
+        "env.$": "$.Payload.env",
+        "category.$": "$.Payload.category",
+        "check_type.$": "$.Payload.check_type",
+        "payload.$": "$.Payload.payload",
+        "updated_by.$": "$.Payload.updated_by"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareForSave",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "SetStatusErrorProcessing"
+        }
+      ]
+    },
+
+    "SetStatusErrorProcessing": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "infra",
+        "check_type": "rds",
+        "payload": {
+          "status": "critical",
+          "healthy": false,
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "cluster": {
+            "identifier.$": "$.Input.DbClusterIdentifier",
+            "status": "error"
+          },
+          "issues": ["Lambda processing error"],
+          "timestamp.$": "$.Timestamp"
+        },
+        "updated_by": "step-function:infra-rds-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareForSave": {
+      "Type": "Pass",
+      "Parameters": {
+        "project.$": "$.ProcessedResult.project",
+        "env.$": "$.ProcessedResult.env",
+        "category.$": "$.ProcessedResult.category",
+        "check_type.$": "$.ProcessedResult.check_type",
+        "payload.$": "$.ProcessedResult.payload",
+        "updated_by.$": "$.ProcessedResult.updated_by"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveFailed",
+        "message": "Failed to save state to DynamoDB",
+        "details.$": "$.SaveError"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "result": {
+          "cluster_status.$": "$.payload.status",
+          "cluster_identifier.$": "$.payload.cluster.identifier",
+          "instance_count.$": "$.payload.summary.instanceCount"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

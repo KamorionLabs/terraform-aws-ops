@@ -28,11 +28,12 @@
       "Comment": "Cluster exists from previous failed refresh - delete it to ensure clean state",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterNotExists')",
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.DeleteCluster)",
+        "Name.$": "States.Format('{}-DelOldCluster', $.OrchestratorExecutionName)",
+        "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
         "Input": {
           "DbClusterIdentifier.$": "$.DbClusterIdentifier",
           "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+          "StepFunctions.$": "$.StepFunctions",
           "DestinationAccount.$": "$.DestinationAccount"
         }
       },

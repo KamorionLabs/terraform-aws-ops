@@ -1,0 +1,330 @@
+{
+  "Comment": "CloudFront Checker - Fetches distributions, optionally enriches with tfvars, stores in DynamoDB. New modular architecture.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters: Project, Env required. Either TfvarsSource or DiscoveryMode required.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.TfvarsSource", "IsPresent": true}
+          ],
+          "Next": "PrepareInputWithTfvars"
+        },
+        {
+          "And": [
+            {"Variable": "$.Project", "IsPresent": true},
+            {"Variable": "$.Env", "IsPresent": true},
+            {"Variable": "$.DiscoveryMode", "IsPresent": true},
+            {"Variable": "$.DiscoveryMode", "BooleanEquals": true}
+          ],
+          "Next": "PrepareInputDiscovery"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env required. Either TfvarsSource or DiscoveryMode:true required."
+    },
+
+    "PrepareInputWithTfvars": {
+      "Type": "Pass",
+      "Comment": "Prepare input for tfvars mode",
+      "Parameters": {
+        "Input.$": "States.JsonMerge(States.StringToJson('{\"Country\":null,\"Environment\":null,\"Instance\":null,\"ProjectTagFilter\":null}'), $, false)",
+        "Mode": "tfvars"
+      },
+      "Next": "FetchAdoFile"
+    },
+
+    "PrepareInputDiscovery": {
+      "Type": "Pass",
+      "Comment": "Prepare input for discovery mode (no tfvars)",
+      "Parameters": {
+        "Input.$": "States.JsonMerge(States.StringToJson('{\"Country\":null,\"Environment\":null,\"Instance\":null,\"ProjectTagFilter\":null}'), $, false)",
+        "Mode": "discovery"
+      },
+      "Next": "FetchCloudFront"
+    },
+
+    "FetchAdoFile": {
+      "Type": "Task",
+      "Comment": "Fetch managed_domains from terraform.tfvars via Azure DevOps",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchAdoFileLambdaArn}",
+        "Payload": {
+          "Repository.$": "$.Input.TfvarsSource.repository",
+          "Path.$": "$.Input.TfvarsSource.path",
+          "Project.$": "$.Input.TfvarsSource.project",
+          "Branch.$": "$.Input.TfvarsSource.branch",
+          "Parse": "hcl",
+          "BlockName": "managed_domains"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "block.$": "$.Payload.block",
+        "metadata.$": "$.Payload.metadata",
+        "error.$": "$.Payload.error"
+      },
+      "ResultPath": "$.AdoResult",
+      "Next": "CheckAdoResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AdoError",
+          "Next": "AdoFetchFailed"
+        }
+      ]
+    },
+
+    "CheckAdoResult": {
+      "Type": "Choice",
+      "Comment": "Check if ADO fetch succeeded",
+      "Choices": [
+        {
+          "Variable": "$.AdoResult.statusCode",
+          "NumericEquals": 200,
+          "Next": "FetchCloudFront"
+        }
+      ],
+      "Default": "AdoFetchFailed"
+    },
+
+    "AdoFetchFailed": {
+      "Type": "Pass",
+      "Comment": "Handle ADO fetch failure - continue without enrichment",
+      "Parameters": {
+        "Input.$": "$.Input",
+        "Mode": "discovery",
+        "AdoError": "Failed to fetch tfvars from Azure DevOps"
+      },
+      "Next": "FetchCloudFront"
+    },
+
+    "FetchCloudFront": {
+      "Type": "Task",
+      "Comment": "Fetch CloudFront distributions (AWS native format)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${FetchCloudFrontLambdaArn}",
+        "Payload": {
+          "CrossAccountRoleArn.$": "$.Input.CrossAccountRoleArn",
+          "IncludeTags": true
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "distributions.$": "$.Payload.distributions",
+        "count.$": "$.Payload.count",
+        "error.$": "$.Payload.error"
+      },
+      "ResultPath": "$.CloudFrontResult",
+      "Next": "CheckCloudFrontResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CloudFrontError",
+          "Next": "CloudFrontFetchFailed"
+        }
+      ]
+    },
+
+    "CheckCloudFrontResult": {
+      "Type": "Choice",
+      "Comment": "Check if CloudFront fetch succeeded",
+      "Choices": [
+        {
+          "Variable": "$.CloudFrontResult.statusCode",
+          "NumericEquals": 200,
+          "Next": "ProcessCloudFront"
+        }
+      ],
+      "Default": "CloudFrontFetchFailed"
+    },
+
+    "CloudFrontFetchFailed": {
+      "Type": "Pass",
+      "Comment": "Handle CloudFront fetch failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "cloudfront",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "totalDistributions": 0,
+            "deployed": 0,
+            "enabled": 0,
+            "withWaf": 0
+          },
+          "distributions": [],
+          "issues": ["Failed to fetch CloudFront distributions"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-cloudfront-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "ProcessCloudFront": {
+      "Type": "Task",
+      "Comment": "Process and transform CloudFront data",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessCloudFrontLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Input.Project",
+          "Env.$": "$.Input.Env",
+          "Instance.$": "$.Input.Instance",
+          "Environment.$": "$.Input.Environment",
+          "Country.$": "$.Input.Country",
+          "ProjectTagFilter.$": "$.Input.ProjectTagFilter",
+          "Mode.$": "$.Mode",
+          "Distributions.$": "$.CloudFrontResult.distributions",
+          "ManagedDomains.$": "$.AdoResult.block"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+
+    "ProcessFailed": {
+      "Type": "Pass",
+      "Comment": "Handle process failure",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "cloudfront",
+        "payload": {
+          "status": "critical",
+          "instance.$": "$.Input.Instance",
+          "environment.$": "$.Input.Environment",
+          "summary": {
+            "totalDistributions": 0,
+            "deployed": 0,
+            "enabled": 0,
+            "withWaf": 0
+          },
+          "distributions": [],
+          "issues": ["Failed to process CloudFront distributions"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-cloudfront-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare final payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "net",
+        "check_type": "cloudfront",
+        "payload.$": "$.ProcessResult.payload",
+        "updated_by": "step-function:net-cloudfront-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category.$": "$.category",
+        "check_type.$": "$.check_type",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,527 @@
+{
+  "Comment": "Fetches Kubernetes pods status from EKS cluster and stores in DynamoDB. Uses Project#Env as pk for Dashborion integration.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ClusterName",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Namespace",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, ClusterName, and Namespace are required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account with assumed credentials)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ClusterAccessFailed",
+        "message.$": "States.Format('Failed to access cluster {}: {}', $.ClusterName, $.ClusterError.Error)",
+        "project.$": "$.Project",
+        "env.$": "$.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Comment": "Verify cluster is ACTIVE before querying pods",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "BuildPodPath"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "critical",
+        "error": "ClusterNotActive",
+        "message.$": "States.Format('Cluster {} is not ACTIVE (status: {})', $.ClusterName, $.ClusterInfo.Status)",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "cluster_status.$": "$.ClusterInfo.Status"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "BuildPodPath": {
+      "Type": "Pass",
+      "Comment": "Build the API path for listing pods, optionally with label selector",
+      "Parameters": {
+        "Input.$": "$",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "PodPath.$": "States.Format('/api/v1/namespaces/{}/pods', $.Namespace)"
+      },
+      "Next": "CheckLabelSelector"
+    },
+
+    "CheckLabelSelector": {
+      "Type": "Choice",
+      "Comment": "Check if label selector is provided",
+      "Choices": [
+        {
+          "Variable": "$.Input.LabelSelector",
+          "IsPresent": true,
+          "Next": "FetchPodsWithLabelSelectorChoice"
+        }
+      ],
+      "Default": "FetchPodsChoice"
+    },
+
+    "FetchPodsWithLabelSelectorChoice": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchPodsWithLabelSelectorCrossAccount"
+        }
+      ],
+      "Default": "FetchPodsWithLabelSelector"
+    },
+
+    "FetchPodsChoice": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchPodsCrossAccount"
+        }
+      ],
+      "Default": "FetchPods"
+    },
+
+    "FetchPods": {
+      "Type": "Task",
+      "Comment": "Fetch pods from K8s API (same account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.PodPath"
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "ProcessPods",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchPodsError",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsCrossAccount": {
+      "Type": "Task",
+      "Comment": "Fetch pods from K8s API (cross-account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.PodPath"
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "ProcessPods",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchPodsError",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsWithLabelSelector": {
+      "Type": "Task",
+      "Comment": "Fetch pods with label selector (same account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.PodPath",
+        "QueryParameters": {
+          "labelSelector.$": "$.Input.LabelSelector"
+        }
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "ProcessPods",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchPodsError",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsWithLabelSelectorCrossAccount": {
+      "Type": "Task",
+      "Comment": "Fetch pods with label selector (cross-account)",
+      "Resource": "arn:aws:states:::eks:call",
+      "Credentials": {
+        "RoleArn.$": "$.Input.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "ClusterName.$": "$.ClusterInfo.ClusterName",
+        "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+        "Endpoint.$": "$.ClusterInfo.Endpoint",
+        "Method": "GET",
+        "Path.$": "$.PodPath",
+        "QueryParameters": {
+          "labelSelector.$": "$.Input.LabelSelector"
+        }
+      },
+      "ResultSelector": {
+        "items.$": "$.ResponseBody.items"
+      },
+      "ResultPath": "$.PodsResponse",
+      "Next": "ProcessPods",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchPodsError",
+          "Next": "FetchPodsFailed"
+        }
+      ]
+    },
+
+    "FetchPodsFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchPodsFailed",
+        "message.$": "States.Format('Failed to fetch pods from namespace {}: {}', $.Input.Namespace, $.FetchPodsError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "ProcessPods": {
+      "Type": "Task",
+      "Comment": "Process pods data using Lambda for complex parsing",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessPodsLambdaArn}",
+        "Payload": {
+          "pods.$": "$.PodsResponse.items",
+          "namespace.$": "$.Input.Namespace",
+
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "project.$": "$.Input.Project",
+          "env.$": "$.Input.Env"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "source.$": "$.Payload.source",
+        "namespace.$": "$.Payload.namespace",
+        "summary.$": "$.Payload.summary",
+        "pods.$": "$.Payload.pods",
+        "issues.$": "$.Payload.issues",
+        "healthy.$": "$.Payload.healthy",
+        "timestamp.$": "$.Payload.timestamp"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessPodsError",
+          "Next": "ProcessPodsFailed"
+        }
+      ]
+    },
+
+    "ProcessPodsFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ProcessPodsFailed",
+        "message.$": "States.Format('Failed to process pods: {}', $.ProcessPodsError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB state save - pk is project#env, sk is check:k8s:pods:current",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "k8s",
+        "check_type": "pods",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "source.$": "$.ProcessedResult.source",
+          "namespace.$": "$.ProcessedResult.namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version",
+          "summary.$": "$.ProcessedResult.summary",
+          "pods.$": "$.ProcessedResult.pods",
+          "issues.$": "$.ProcessedResult.issues",
+          "healthy.$": "$.ProcessedResult.healthy",
+          "timestamp.$": "$.ProcessedResult.timestamp"
+        },
+        "updated_by": "step-function:k8s-pods-readiness-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save processed state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateError": {
+      "Type": "Task",
+      "Comment": "Save error state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload": {
+          "project.$": "$.project",
+          "env.$": "$.env",
+          "category": "k8s",
+          "check_type": "pods",
+          "payload": {
+            "status.$": "$.status",
+            "error.$": "$.error",
+            "message.$": "$.message",
+            "healthy": false
+          },
+          "updated_by": "step-function:k8s-pods-readiness-checker"
+        }
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatErrorResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveErrorFailed",
+          "Next": "FinalError"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveStateFailed",
+        "message.$": "States.Format('Failed to save state: {}', $.SaveError.Error)",
+        "project.$": "$.project",
+        "env.$": "$.env"
+      },
+      "Next": "FinalError"
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result for output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "pods",
+        "result": {
+          "status.$": "$.payload.status",
+          "healthy.$": "$.payload.healthy",
+          "summary.$": "$.payload.summary",
+          "issues_count.$": "States.ArrayLength($.payload.issues)"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FormatErrorResult": {
+      "Type": "Pass",
+      "Comment": "Format error result for output",
+      "Parameters": {
+        "status": "error",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "pods",
+        "error": {
+          "type.$": "$.error",
+          "message.$": "$.message"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FinalError": {
+      "Type": "Fail",
+      "Error": "StateMachineExecutionFailed",
+      "Cause": "Failed to execute k8s-pods check and save error state"
+    }
+  }
+}

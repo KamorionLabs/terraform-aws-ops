@@ -1,0 +1,513 @@
+{
+  "Comment": "Fetches Kubernetes services and endpoints from EKS cluster and stores in DynamoDB. Uses Project#Env as pk for Dashborion integration.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ClusterName",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Namespace",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckCrossAccountAccess"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, ClusterName, and Namespace are required"
+    },
+
+    "CheckCrossAccountAccess": {
+      "Type": "Choice",
+      "Comment": "Check if cross-account role assumption is needed",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "GetClusterInfoCrossAccount"
+        }
+      ],
+      "Default": "GetClusterInfo"
+    },
+
+    "GetClusterInfo": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (same account)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "GetClusterInfoCrossAccount": {
+      "Type": "Task",
+      "Comment": "Get EKS cluster endpoint and certificate (cross-account with assumed credentials)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "Parameters": {
+        "Name.$": "$.ClusterName"
+      },
+      "ResultSelector": {
+        "ClusterName.$": "$.Cluster.Name",
+        "Endpoint.$": "$.Cluster.Endpoint",
+        "CertificateAuthority.$": "$.Cluster.CertificateAuthority.Data",
+        "Status.$": "$.Cluster.Status",
+        "Version.$": "$.Cluster.Version"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "CheckClusterActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ClusterError",
+          "Next": "ClusterAccessFailed"
+        }
+      ]
+    },
+
+    "ClusterAccessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ClusterAccessFailed",
+        "message.$": "States.Format('Failed to access cluster {}: {}', $.ClusterName, $.ClusterError.Error)",
+        "project.$": "$.Project",
+        "env.$": "$.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "CheckClusterActive": {
+      "Type": "Choice",
+      "Comment": "Verify cluster is ACTIVE before querying K8s API",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "ACTIVE",
+          "Next": "BuildApiPaths"
+        }
+      ],
+      "Default": "ClusterNotActive"
+    },
+
+    "ClusterNotActive": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "critical",
+        "error": "ClusterNotActive",
+        "message.$": "States.Format('Cluster {} is not ACTIVE (status: {})', $.ClusterName, $.ClusterInfo.Status)",
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "cluster_status.$": "$.ClusterInfo.Status"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "BuildApiPaths": {
+      "Type": "Pass",
+      "Comment": "Build the API paths for services and endpoints",
+      "Parameters": {
+        "Input.$": "$",
+        "ClusterInfo.$": "$.ClusterInfo",
+        "ServicesPath.$": "States.Format('/api/v1/namespaces/{}/services', $.Namespace)",
+        "EndpointsPath.$": "States.Format('/api/v1/namespaces/{}/endpoints', $.Namespace)"
+      },
+      "Next": "CheckCrossAccountForFetch"
+    },
+
+    "CheckCrossAccountForFetch": {
+      "Type": "Choice",
+      "Comment": "Route based on cross-account for parallel fetch",
+      "Choices": [
+        {
+          "Variable": "$.Input.CrossAccountRoleArn",
+          "IsPresent": true,
+          "Next": "FetchServicesAndEndpointsCrossAccount"
+        }
+      ],
+      "Default": "FetchServicesAndEndpoints"
+    },
+
+    "FetchServicesAndEndpoints": {
+      "Type": "Parallel",
+      "Comment": "Fetch services and endpoints in parallel (same account)",
+      "Branches": [
+        {
+          "StartAt": "FetchServices",
+          "States": {
+            "FetchServices": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicesPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchEndpoints",
+          "States": {
+            "FetchEndpoints": {
+              "Type": "Task",
+              "Comment": "Fetch endpoints from K8s API",
+              "Resource": "arn:aws:states:::eks:call",
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.EndpointsPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessServices",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchFailed"
+        }
+      ]
+    },
+
+    "FetchServicesAndEndpointsCrossAccount": {
+      "Type": "Parallel",
+      "Comment": "Fetch services and endpoints in parallel (cross-account)",
+      "Branches": [
+        {
+          "StartAt": "FetchServicesCrossAccount",
+          "States": {
+            "FetchServicesCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch services from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.ServicesPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "FetchEndpointsCrossAccount",
+          "States": {
+            "FetchEndpointsCrossAccount": {
+              "Type": "Task",
+              "Comment": "Fetch endpoints from K8s API (cross-account)",
+              "Resource": "arn:aws:states:::eks:call",
+              "Credentials": {
+                "RoleArn.$": "$.Input.CrossAccountRoleArn"
+              },
+              "Parameters": {
+                "ClusterName.$": "$.ClusterInfo.ClusterName",
+                "CertificateAuthority.$": "$.ClusterInfo.CertificateAuthority",
+                "Endpoint.$": "$.ClusterInfo.Endpoint",
+                "Method": "GET",
+                "Path.$": "$.EndpointsPath"
+              },
+              "ResultSelector": {
+                "items.$": "$.ResponseBody.items"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.FetchResults",
+      "Next": "ProcessServices",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FetchError",
+          "Next": "FetchFailed"
+        }
+      ]
+    },
+
+    "FetchFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "FetchFailed",
+        "message.$": "States.Format('Failed to fetch services/endpoints from namespace {}: {}', $.Input.Namespace, $.FetchError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "ProcessServices": {
+      "Type": "Task",
+      "Comment": "Process services and endpoints data using Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessServicesLambdaArn}",
+        "Payload": {
+          "services.$": "$.FetchResults[0].items",
+          "endpoints.$": "$.FetchResults[1].items",
+          "namespace.$": "$.Input.Namespace",
+
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "project.$": "$.Input.Project",
+          "env.$": "$.Input.Env"
+        }
+      },
+      "ResultSelector": {
+        "status.$": "$.Payload.status",
+        "source.$": "$.Payload.source",
+        "namespace.$": "$.Payload.namespace",
+        "summary.$": "$.Payload.summary",
+        "services.$": "$.Payload.services",
+        "issues.$": "$.Payload.issues",
+        "healthy.$": "$.Payload.healthy",
+        "timestamp.$": "$.Payload.timestamp"
+      },
+      "ResultPath": "$.ProcessedResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+
+    "ProcessFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "ProcessFailed",
+        "message.$": "States.Format('Failed to process services: {}', $.ProcessError.Error)",
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env"
+      },
+      "Next": "SaveStateError"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare payload for DynamoDB state save - pk is project#env, sk is check:k8s:services:current",
+      "Parameters": {
+        "project.$": "$.Input.Project",
+        "env.$": "$.Input.Env",
+        "category": "k8s",
+        "check_type": "services",
+        "payload": {
+          "status.$": "$.ProcessedResult.status",
+          "source.$": "$.ProcessedResult.source",
+          "namespace.$": "$.ProcessedResult.namespace",
+          "cluster_name.$": "$.ClusterInfo.ClusterName",
+          "cluster_version.$": "$.ClusterInfo.Version",
+          "summary.$": "$.ProcessedResult.summary",
+          "services.$": "$.ProcessedResult.services",
+          "issues.$": "$.ProcessedResult.issues",
+          "healthy.$": "$.ProcessedResult.healthy",
+          "timestamp.$": "$.ProcessedResult.timestamp"
+        },
+        "updated_by": "step-function:k8s-services-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save processed state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatSuccessResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateError": {
+      "Type": "Task",
+      "Comment": "Save error state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload": {
+          "project.$": "$.project",
+          "env.$": "$.env",
+          "category": "k8s",
+          "check_type": "services",
+          "payload": {
+            "status.$": "$.status",
+            "error.$": "$.error",
+            "message.$": "$.message",
+            "healthy": false
+          },
+          "updated_by": "step-function:k8s-services-checker"
+        }
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatErrorResult",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveErrorFailed",
+          "Next": "FinalError"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "status": "error",
+        "error": "SaveStateFailed",
+        "message.$": "States.Format('Failed to save state: {}', $.SaveError.Error)",
+        "project.$": "$.project",
+        "env.$": "$.env"
+      },
+      "Next": "FinalError"
+    },
+
+    "FormatSuccessResult": {
+      "Type": "Pass",
+      "Comment": "Format successful result for output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "services",
+        "result": {
+          "status.$": "$.payload.status",
+          "healthy.$": "$.payload.healthy",
+          "summary.$": "$.payload.summary",
+          "issues_count.$": "States.ArrayLength($.payload.issues)"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FormatErrorResult": {
+      "Type": "Pass",
+      "Comment": "Format error result for output",
+      "Parameters": {
+        "status": "error",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "k8s",
+        "check_type": "services",
+        "error": {
+          "type.$": "$.status",
+          "message.$": "$.message"
+        },
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    },
+
+    "FinalError": {
+      "Type": "Fail",
+      "Error": "StateMachineExecutionFailed",
+      "Cause": "Failed to execute k8s-services check and save error state"
+    }
+  }
+}

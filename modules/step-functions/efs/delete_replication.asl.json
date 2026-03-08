@@ -1,0 +1,233 @@
+{
+  "Comment": "Deletes EFS replication configuration. After deletion, the destination file system becomes Writable.",
+  "StartAt": "GetReplicationConfig",
+  "States": {
+    "GetReplicationConfig": {
+      "Type": "Task",
+      "Comment": "Check if replication configuration exists",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ReplicationConfig",
+      "Next": "HasReplicationConfig",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.ReplicationNotFoundException"],
+          "ResultPath": "$.Error",
+          "Next": "NoReplicationExists"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "DeleteFailed"
+        }
+      ]
+    },
+    "HasReplicationConfig": {
+      "Type": "Choice",
+      "Comment": "Check if replication configuration exists",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationConfig.Replications[0]",
+          "IsPresent": true,
+          "Next": "ExtractDestinationInfo"
+        }
+      ],
+      "Default": "NoReplicationExists"
+    },
+    "ExtractDestinationInfo": {
+      "Type": "Pass",
+      "Comment": "Extract destination file system info before deletion",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "DestinationFileSystemId.$": "$.ReplicationConfig.Replications[0].Destinations[0].FileSystemId",
+        "DestinationRegion.$": "$.ReplicationConfig.Replications[0].Destinations[0].Region",
+        "ReplicationStatus.$": "$.ReplicationConfig.Replications[0].Destinations[0].Status",
+        "DeleteDestinationFileSystem.$": "States.ArrayGetItem(States.Array($.DeleteDestinationFileSystem, false), 0)"
+      },
+      "Next": "DeleteReplicationConfig"
+    },
+    "DeleteReplicationConfig": {
+      "Type": "Task",
+      "Comment": "Delete the replication configuration from source",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteReplicationConfiguration",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitReplicationDeleted",
+      "Retry": [
+        {
+          "ErrorEquals": ["Efs.ReplicationNotFoundException"],
+          "MaxAttempts": 0
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.ReplicationNotFoundException"],
+          "ResultPath": "$.Error",
+          "Next": "NoReplicationExists"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "DeleteFailed"
+        }
+      ]
+    },
+    "WaitReplicationDeleted": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "CheckReplicationDeleted"
+    },
+    "CheckReplicationDeleted": {
+      "Type": "Task",
+      "Comment": "Verify replication is deleted",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.CheckResult",
+      "Next": "IsReplicationDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.ReplicationNotFoundException"],
+          "ResultPath": "$.CheckError",
+          "Next": "ShouldDeleteDestination"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CheckError",
+          "Next": "ShouldDeleteDestination"
+        }
+      ]
+    },
+    "IsReplicationDeleted": {
+      "Type": "Choice",
+      "Comment": "Check if replication is fully deleted",
+      "Choices": [
+        {
+          "Variable": "$.CheckResult.Replications[0]",
+          "IsPresent": false,
+          "Next": "ShouldDeleteDestination"
+        },
+        {
+          "Variable": "$.CheckResult.Replications[0].Destinations[0].Status",
+          "StringEquals": "DELETING",
+          "Next": "WaitReplicationDeleted"
+        }
+      ],
+      "Default": "ShouldDeleteDestination"
+    },
+    "ShouldDeleteDestination": {
+      "Type": "Choice",
+      "Comment": "Check if we should also delete the destination file system",
+      "Choices": [
+        {
+          "Variable": "$.DeleteDestinationFileSystem",
+          "BooleanEquals": true,
+          "Next": "DeleteDestinationFileSystem"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "DeleteDestinationFileSystem": {
+      "Type": "Task",
+      "Comment": "Delete the destination EFS file system",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteFileSystem",
+      "Parameters": {
+        "FileSystemId.$": "$.DestinationFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutputWithDeletion",
+      "Retry": [
+        {
+          "ErrorEquals": ["Efs.FileSystemInUse"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.FileSystemNotFoundException"],
+          "ResultPath": "$.DeleteDestError",
+          "Next": "PrepareOutputWithDeletion"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DeleteDestError",
+          "Next": "DeleteDestinationFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "delete_replication",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "DestinationFileSystemDeleted": false,
+        "Message": "Replication configuration deleted. Destination EFS is now writable."
+      },
+      "Next": "DeleteSucceeded"
+    },
+    "PrepareOutputWithDeletion": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "delete_replication",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "DestinationFileSystemDeleted": true,
+        "Message": "Replication configuration and destination file system deleted."
+      },
+      "Next": "DeleteSucceeded"
+    },
+    "NoReplicationExists": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "NoReplication",
+        "ModuleName": "delete_replication",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "Message": "No replication configuration found for this file system."
+      },
+      "Next": "DeleteSucceeded"
+    },
+    "DeleteDestinationFailed": {
+      "Type": "Fail",
+      "Error": "DeleteDestinationFailed",
+      "Cause": "Replication deleted but failed to delete destination file system"
+    },
+    "DeleteFailed": {
+      "Type": "Fail",
+      "Error": "DeleteReplicationFailed",
+      "Cause": "Failed to delete EFS replication configuration"
+    },
+    "DeleteSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

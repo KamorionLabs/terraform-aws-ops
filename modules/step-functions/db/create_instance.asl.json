@@ -85,15 +85,16 @@
           },
           "TagInstance": {
             "Type": "Task",
-            "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+            "QueryLanguage": "JSONata",
+            "Resource": "arn:aws:states:::aws-sdk:rds:addTagsToResource",
             "Credentials": {
-              "RoleArn.$": "$.DestinationAccountRoleArn"
+              "RoleArn": "{% $states.input.DestinationAccountRoleArn %}"
             },
-            "Parameters": {
-              "ResourceARNList.$": "States.Array($.Status.DbInstances[0].DbInstanceArn)",
-              "Tags.$": "$.Tags"
+            "Arguments": {
+              "ResourceName": "{% $states.input.Status.DbInstances[0].DbInstanceArn %}",
+              "Tags": "{% $each($states.input.Tags, function($v, $k) { {'Key': $k, 'Value': $v} }) %}"
             },
-            "ResultPath": null,
+            "Output": "{% $states.input %}",
             "Next": "InstanceCreated"
           },
           "InstanceCreated": {

@@ -4,6 +4,8 @@
 # -----------------------------------------------------------------------------
 
 locals {
+  _eks_suffix = var.eks_access_mode == "private" ? "_private" : ""
+
   step_functions = {
     # Core Operations
     restore_cluster           = "restore_cluster.asl.json"
@@ -17,9 +19,10 @@ locals {
     create_instance = "create_instance.asl.json"
 
     # Snapshot Management
-    share_snapshot         = "share_snapshot.asl.json"
-    create_manual_snapshot = "create_manual_snapshot.asl.json"
-    list_shared_snapshots  = "list_shared_snapshots.asl.json"
+    prepare_snapshot_for_restore = "prepare_snapshot_for_restore.asl.json"
+    share_snapshot               = "share_snapshot.asl.json"
+    create_manual_snapshot       = "create_manual_snapshot.asl.json"
+    list_shared_snapshots        = "list_shared_snapshots.asl.json"
 
     # Secrets Management
     enable_master_secret = "enable_master_secret.asl.json"
@@ -30,9 +33,9 @@ locals {
     run_sql_lambda           = "run_sql_lambda.asl.json"
     run_sql_from_s3          = "run_sql_from_s3.asl.json"
 
-    # EKS Integration
-    run_mysqldump_on_eks   = "run_mysqldump_on_eks.asl.json"
-    run_mysqlimport_on_eks = "run_mysqlimport_on_eks.asl.json"
+    # EKS Integration (private variant)
+    run_mysqldump_on_eks   = "run_mysqldump_on_eks${local._eks_suffix}.asl.json"
+    run_mysqlimport_on_eks = "run_mysqlimport_on_eks${local._eks_suffix}.asl.json"
   }
 
   # Naming: pascal = "DB-RestoreCluster", kebab = "db-restore-cluster"

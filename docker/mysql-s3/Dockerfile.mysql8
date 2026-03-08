@@ -1,0 +1,43 @@
+FROM oraclelinux:9-slim
+
+LABEL org.opencontainers.image.title="mysql-s3-mysql8"
+LABEL org.opencontainers.image.description="MySQL 8.4 LTS dump/import with S3 sync support"
+LABEL org.opencontainers.image.source="https://github.com/KamorionLabs/terraform-aws-ops"
+LABEL org.opencontainers.image.vendor="KamorionLabs"
+
+# Build arg injected by Docker Buildx for multi-arch
+ARG TARGETARCH
+
+# Add MySQL 8.4 LTS community repo and install client
+RUN set -eux; \
+    { \
+        echo '[mysql84-community]'; \
+        echo 'name=MySQL 8.4 LTS Community Server'; \
+        echo 'baseurl=https://repo.mysql.com/yum/mysql-8.4-lts-community/el/9/$basearch/'; \
+        echo 'enabled=1'; \
+        echo 'gpgcheck=1'; \
+        echo 'gpgkey=https://repo.mysql.com/RPM-GPG-KEY-mysql-2023'; \
+    } > /etc/yum.repos.d/mysql-community.repo; \
+    microdnf install -y \
+        mysql-community-client \
+        bash \
+        curl \
+        unzip \
+        gzip; \
+    case "${TARGETARCH}" in \
+        arm64) AWSCLI_ARCH="aarch64" ;; \
+        *)     AWSCLI_ARCH="x86_64"  ;; \
+    esac; \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWSCLI_ARCH}.zip" -o /tmp/awscliv2.zip; \
+    unzip -q /tmp/awscliv2.zip -d /tmp; \
+    /tmp/aws/install; \
+    rm -rf /tmp/aws /tmp/awscliv2.zip; \
+    microdnf remove -y unzip; \
+    microdnf clean all; \
+    rm -rf /var/cache/dnf
+
+COPY import.sh /import.sh
+COPY dump.sh /dump.sh
+RUN chmod +x /import.sh /dump.sh
+
+ENTRYPOINT ["/import.sh"]

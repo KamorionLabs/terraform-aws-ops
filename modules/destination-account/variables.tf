@@ -310,3 +310,52 @@ variable "dynamic_lambda_prefix" {
   type        = string
   default     = null
 }
+
+variable "ssm_parameter_prefixes" {
+  description = "Additional SSM parameter path prefixes to allow (without leading slash)."
+  type        = list(string)
+  default     = []
+}
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity Configuration
+# For Kubernetes refresh jobs that need AWS access (e.g., S3 for SQL scripts)
+# -----------------------------------------------------------------------------
+
+variable "create_eks_pod_identity" {
+  description = "Create EKS Pod Identity IAM role and associations for refresh jobs"
+  type        = bool
+  default     = false
+}
+
+variable "eks_pod_identity_associations" {
+  description = "List of namespace/service_account pairs for Pod Identity associations"
+  type = list(object({
+    namespace       = string
+    service_account = string
+  }))
+  default = []
+}
+
+variable "eks_pod_identity_s3_arns" {
+  description = "S3 ARNs for Pod Identity role (refresh bucket read access)"
+  type        = list(string)
+  default     = []
+}
+
+# -----------------------------------------------------------------------------
+# K8s Proxy Lambda Configuration
+# For EKS clusters with private-only API endpoints
+# -----------------------------------------------------------------------------
+
+variable "enable_k8s_proxy" {
+  description = "Deploy k8s-proxy Lambda for EKS private endpoint access. Uses the destination role as Lambda execution role."
+  type        = bool
+  default     = false
+}
+
+variable "k8s_proxy_lambda_path" {
+  description = "Path to k8s-proxy Lambda source file (optional, uses bundled if not provided)"
+  type        = string
+  default     = null
+}

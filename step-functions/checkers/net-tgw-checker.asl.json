@@ -1,0 +1,421 @@
+{
+  "Comment": "Fetches Transit Gateway state and stores in DynamoDB. New format: project/env/category/check_type",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Comment": "Validate required parameters are present",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.Project",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Env",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.TransitGatewayId",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.CrossAccountRoleArn",
+              "IsPresent": true
+            }
+          ],
+          "Next": "DescribeTransitGateway"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "ValidationError",
+      "Cause": "Missing required parameters: Project, Env, TransitGatewayId, and CrossAccountRoleArn are required"
+    },
+
+    "DescribeTransitGateway": {
+      "Type": "Task",
+      "Comment": "Get Transit Gateway details",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeTransitGateways",
+      "Parameters": {
+        "TransitGatewayIds.$": "States.Array($.TransitGatewayId)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "TransitGateway.$": "$.TransitGateways[0]"
+      },
+      "ResultPath": "$.TgwResult",
+      "Next": "CheckTgwExists",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TgwError",
+          "Next": "DescribeTgwFailed"
+        }
+      ]
+    },
+
+    "CheckTgwExists": {
+      "Type": "Choice",
+      "Comment": "Check if Transit Gateway was found",
+      "Choices": [
+        {
+          "Variable": "$.TgwResult.TransitGateway",
+          "IsPresent": true,
+          "Next": "DescribeAttachments"
+        }
+      ],
+      "Default": "TgwNotFound"
+    },
+
+    "TgwNotFound": {
+      "Type": "Pass",
+      "Comment": "Transit Gateway not found",
+      "Parameters": {
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload": {
+          "status": "critical",
+          "summary": {
+            "transitGatewayId.$": "$.TransitGatewayId",
+            "state": "not_found",
+            "totalAttachments": 0,
+            "availableAttachments": 0,
+            "routeTables": 0
+          },
+          "transitGateway": null,
+          "attachments": [],
+          "routeTables": [],
+          "issues.$": "States.Array(States.Format('Transit Gateway {} not found', $.TransitGatewayId))",
+          "healthy": false
+        },
+        "updated_by": "step-function:net-tgw-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "DescribeTgwFailed": {
+      "Type": "Pass",
+      "Comment": "Handle DescribeTransitGateways failure",
+      "Parameters": {
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload": {
+          "status": "critical",
+          "summary": {
+            "transitGatewayId.$": "$.TransitGatewayId",
+            "state": "error",
+            "totalAttachments": 0,
+            "availableAttachments": 0,
+            "routeTables": 0
+          },
+          "transitGateway": null,
+          "attachments": [],
+          "routeTables": [],
+          "issues": ["Failed to describe Transit Gateway"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-tgw-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "DescribeAttachments": {
+      "Type": "Task",
+      "Comment": "Get Transit Gateway attachments",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeTransitGatewayAttachments",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "transit-gateway-id",
+            "Values.$": "States.Array($.TransitGatewayId)"
+          }
+        ],
+        "MaxResults": 100
+      },
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "Attachments.$": "$.TransitGatewayAttachments"
+      },
+      "ResultPath": "$.AttachmentsResult",
+      "Next": "DescribeRouteTables",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AttachmentsError",
+          "Next": "DescribeAttachmentsFailed"
+        }
+      ]
+    },
+
+    "DescribeAttachmentsFailed": {
+      "Type": "Pass",
+      "Comment": "Handle DescribeTransitGatewayAttachments failure - continue with partial data",
+      "Parameters": {
+        "Attachments": []
+      },
+      "ResultPath": "$.AttachmentsResult",
+      "Next": "DescribeRouteTables"
+    },
+
+    "DescribeRouteTables": {
+      "Type": "Task",
+      "Comment": "Get Transit Gateway route tables",
+      "Resource": "arn:aws:states:::aws-sdk:ec2:describeTransitGatewayRouteTables",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "transit-gateway-id",
+            "Values.$": "States.Array($.TransitGatewayId)"
+          }
+        ],
+        "MaxResults": 100
+      },
+      "Credentials": {
+        "RoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "ResultSelector": {
+        "RouteTables.$": "$.TransitGatewayRouteTables"
+      },
+      "ResultPath": "$.RouteTablesResult",
+      "Next": "SearchRoutesForEachTable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.RouteTablesError",
+          "Next": "DescribeRouteTablesFailed"
+        }
+      ]
+    },
+
+    "DescribeRouteTablesFailed": {
+      "Type": "Pass",
+      "Comment": "Handle DescribeTransitGatewayRouteTables failure - continue with partial data",
+      "Parameters": {
+        "RouteTables": []
+      },
+      "ResultPath": "$.RouteTablesResult",
+      "Next": "ProcessTgwData"
+    },
+
+    "SearchRoutesForEachTable": {
+      "Type": "Map",
+      "Comment": "Search routes for each route table",
+      "ItemsPath": "$.RouteTablesResult.RouteTables",
+      "MaxConcurrency": 5,
+      "Parameters": {
+        "RouteTable.$": "$$.Map.Item.Value",
+        "CrossAccountRoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "SearchRoutes",
+        "States": {
+          "SearchRoutes": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:ec2:searchTransitGatewayRoutes",
+            "Parameters": {
+              "TransitGatewayRouteTableId.$": "$.RouteTable.TransitGatewayRouteTableId",
+              "Filters": [
+                {
+                  "Name": "state",
+                  "Values": ["active", "blackhole"]
+                }
+              ],
+              "MaxResults": 100
+            },
+            "Credentials": {
+              "RoleArn.$": "$.CrossAccountRoleArn"
+            },
+            "ResultSelector": {
+              "RouteTableId.$": "$.RouteTable.TransitGatewayRouteTableId",
+              "Routes.$": "$.Routes"
+            },
+            "End": true,
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.SearchRoutesError",
+                "Next": "SearchRoutesFailed"
+              }
+            ]
+          },
+          "SearchRoutesFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "RouteTableId.$": "$.RouteTable.TransitGatewayRouteTableId",
+              "Routes": [],
+              "Error": "Failed to search routes"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.RoutesResult",
+      "Next": "ProcessTgwData",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.RoutesMapError",
+          "Next": "RoutesMapFailed"
+        }
+      ]
+    },
+
+    "RoutesMapFailed": {
+      "Type": "Pass",
+      "Comment": "Handle Map failure for routes - continue with empty routes",
+      "Parameters": [],
+      "ResultPath": "$.RoutesResult",
+      "Next": "ProcessTgwData"
+    },
+
+    "ProcessTgwData": {
+      "Type": "Task",
+      "Comment": "Process TGW data and check expected attachments via Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ProcessTgwLambdaArn}",
+        "Payload": {
+          "Project.$": "$.Project",
+          "Env.$": "$.Env",
+          "TransitGatewayId.$": "$.TransitGatewayId",
+          "TransitGateway.$": "$.TgwResult.TransitGateway",
+          "Attachments.$": "$.AttachmentsResult.Attachments",
+          "RouteTables.$": "$.RouteTablesResult.RouteTables",
+          "Routes.$": "$.RoutesResult",
+          "ExpectedAttachments.$": "$.ExpectedAttachments"
+        }
+      },
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "payload.$": "$.Payload.payload"
+      },
+      "ResultPath": "$.ProcessResult",
+      "Next": "PrepareStatePayload",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProcessError",
+          "Next": "ProcessTgwFailed"
+        }
+      ]
+    },
+
+    "ProcessTgwFailed": {
+      "Type": "Pass",
+      "Comment": "Handle process TGW data failure",
+      "Parameters": {
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload": {
+          "status": "critical",
+          "summary": {
+            "transitGatewayId.$": "$.TransitGatewayId",
+            "state": "error",
+            "totalAttachments": 0,
+            "availableAttachments": 0,
+            "routeTables": 0
+          },
+          "transitGateway": null,
+          "attachments": [],
+          "routeTables": [],
+          "issues": ["Failed to process Transit Gateway data"],
+          "healthy": false
+        },
+        "updated_by": "step-function:net-tgw-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "PrepareStatePayload": {
+      "Type": "Pass",
+      "Comment": "Prepare final payload for DynamoDB",
+      "Parameters": {
+        "project.$": "$.Project",
+        "env.$": "$.Env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload.$": "$.ProcessResult.payload",
+        "updated_by": "step-function:net-tgw-checker"
+      },
+      "Next": "SaveState"
+    },
+
+    "SaveState": {
+      "Type": "Task",
+      "Comment": "Save state to DynamoDB",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${SaveStateLambdaArn}",
+        "Payload.$": "$"
+      },
+      "ResultSelector": {
+        "state_update.$": "$.Payload"
+      },
+      "ResultPath": "$.SaveResult",
+      "Next": "FormatOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SaveError",
+          "Next": "SaveStateFailed"
+        }
+      ]
+    },
+
+    "SaveStateFailed": {
+      "Type": "Pass",
+      "Comment": "Handle save state failure but still return result",
+      "Parameters": {
+        "status": "partial",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload.$": "$.payload",
+        "error": "Failed to save state to DynamoDB"
+      },
+      "End": true
+    },
+
+    "FormatOutput": {
+      "Type": "Pass",
+      "Comment": "Format final output",
+      "Parameters": {
+        "status": "success",
+        "project.$": "$.project",
+        "env.$": "$.env",
+        "category": "net",
+        "check_type": "tgw",
+        "payload.$": "$.payload",
+        "state_update.$": "$.SaveResult.state_update"
+      },
+      "End": true
+    }
+  }
+}

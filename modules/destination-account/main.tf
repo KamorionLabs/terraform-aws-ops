@@ -27,6 +27,15 @@ locals {
     local.dynamic_lambda_prefix != local.prefixes.lambda ? ["arn:aws:lambda:*:${local.account_id}:function:${local.dynamic_lambda_prefix}-*"] : []
   ))
 
+  ssm_parameter_prefixes = distinct(compact(concat(
+    [local.prefixes.lambda],
+    var.ssm_parameter_prefixes
+  )))
+  ssm_parameter_arns = [
+    for prefix in local.ssm_parameter_prefixes :
+    "arn:aws:ssm:*:${local.account_id}:parameter/${prefix}/*"
+  ]
+
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.destination[0].arn : var.existing_role_arn
   role_name = var.create_role ? aws_iam_role.destination[0].name : var.existing_role_name
@@ -56,24 +65,33 @@ resource "aws_iam_role" "destination" {
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      merge(
-        {
-          Effect = "Allow"
-          Principal = {
-            AWS = local.all_trust_principals
-          }
-          Action = "sts:AssumeRole"
-        },
-        var.aws_organization_id != null ? {
-          Condition = {
-            StringEquals = {
-              "aws:PrincipalOrgID" = var.aws_organization_id
+    Statement = concat(
+      [
+        merge(
+          {
+            Effect = "Allow"
+            Principal = {
+              AWS = local.all_trust_principals
             }
-          }
-        } : {}
-      )
-    ]
+            Action = "sts:AssumeRole"
+          },
+          var.aws_organization_id != null ? {
+            Condition = {
+              StringEquals = {
+                "aws:PrincipalOrgID" = var.aws_organization_id
+              }
+            }
+          } : {}
+        )
+      ],
+      var.enable_k8s_proxy ? [{
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }] : []
+    )
   })
 
   tags = var.tags
@@ -99,6 +117,17 @@ resource "aws_iam_role_policy" "rds_access" {
           "rds:*"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "RDSPassRole"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = "arn:aws:iam::${local.account_id}:role/*"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "rds.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -169,6 +198,19 @@ resource "aws_iam_role_policy" "efs_access" {
           "backup:ListRecoveryPointsByResource"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "BackupPassRole"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/*"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "backup.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -318,7 +360,7 @@ resource "aws_iam_role_policy" "ssm_access" {
           "ssm:PutParameter",
           "ssm:DeleteParameter"
         ]
-        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/${local.prefixes.lambda}/*"
+        Resource = local.ssm_parameter_arns
       },
       {
         Sid    = "SSMReadAllParameters"
@@ -470,6 +512,45 @@ resource "aws_iam_role_policy" "sns_access" {
 }
 
 # -----------------------------------------------------------------------------
+# IAM Policy - K8s Proxy Lambda (VPC + CloudWatch)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "k8s_proxy_lambda" {
+  count = local.should_attach_policies && var.enable_k8s_proxy ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-k8s-proxy-lambda"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
+      },
+      {
+        Sid    = "VPCAccess"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
 # EKS Access Entry - Grants Kubernetes API access to the destination role
 # -----------------------------------------------------------------------------
 
@@ -512,4 +593,145 @@ resource "aws_eks_access_policy_association" "destination" {
   }
 
   depends_on = [aws_eks_access_entry.destination]
+}
+
+# -----------------------------------------------------------------------------
+# EKS Pod Identity - IAM Role for Kubernetes refresh jobs
+# Separate from the destination role (which is for Step Functions cross-account)
+# This role is assumed by EKS pods via Pod Identity (pods.eks.amazonaws.com)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "eks_pod_identity" {
+  count = var.create_eks_pod_identity ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-eks-job"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "pods.eks.amazonaws.com"
+        }
+        Action = ["sts:AssumeRole", "sts:TagSession"]
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "eks_pod_identity_s3" {
+  count = var.create_eks_pod_identity && length(var.eks_pod_identity_s3_arns) > 0 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-eks-job-s3"
+  role = aws_iam_role.eks_pod_identity[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3RefreshBucketRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = var.eks_pod_identity_s3_arns
+      }
+    ]
+  })
+}
+
+# Pod Identity Associations - one per namespace/service_account pair
+locals {
+  pod_identity_map = var.create_eks_pod_identity && var.eks_cluster_name != null ? {
+    for assoc in var.eks_pod_identity_associations :
+    "${assoc.namespace}/${assoc.service_account}" => assoc
+  } : {}
+}
+
+# -----------------------------------------------------------------------------
+# AWS Backup Role - Dedicated role for EFS backup restore operations
+# This role is assumed by the AWS Backup service to restore EFS filesystems
+# (cross-account copy lands in local vault, then restore creates new EFS)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-backup-efs-restore-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "backup.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "backup_efs" {
+  count = var.enable_efs ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-backup-efs-restore"
+  role = aws_iam_role.backup_efs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "BackupRestoreOperations"
+        Effect = "Allow"
+        Action = [
+          "backup:DescribeRestoreJob",
+          "backup:GetRecoveryPointRestoreMetadata"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EFSRestoreOperations"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:CreateFileSystem",
+          "elasticfilesystem:Restore",
+          "elasticfilesystem:DescribeFileSystems",
+          "elasticfilesystem:CreateMountTarget",
+          "elasticfilesystem:DescribeMountTargets",
+          "elasticfilesystem:TagResource",
+          "elasticfilesystem:CreateTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "KMSForBackup"
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt",
+          "kms:Encrypt",
+          "kms:GenerateDataKey",
+          "kms:DescribeKey",
+          "kms:CreateGrant"
+        ]
+        Resource = var.kms_key_arns
+      }
+    ]
+  })
+}
+
+resource "aws_eks_pod_identity_association" "refresh" {
+  for_each = local.pod_identity_map
+
+  cluster_name    = var.eks_cluster_name
+  namespace       = each.value.namespace
+  service_account = each.value.service_account
+  role_arn        = aws_iam_role.eks_pod_identity[0].arn
+
+  tags = var.tags
 }

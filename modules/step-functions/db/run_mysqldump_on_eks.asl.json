@@ -7,8 +7,8 @@
       "Comment": "Ensure cluster is started and available before mysqldump",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable')",
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.EnsureClusterAvailable)",
+        "Name.$": "States.Format('{}-EnsureClusterAvailable-Dump', $.OrchestratorExecutionName)",
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
         "Input": {
           "DbClusterIdentifier.$": "$.DbClusterIdentifier",
           "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
@@ -48,9 +48,10 @@
       "Comment": "Ensure node group has sufficient capacity before running mysqldump",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.EKS.ScaleNodegroupAsg)",
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleNodegroupAsg",
         "Input": {
           "ClusterName.$": "$.EKS.ClusterName",
+          "NodeSelector.$": "$.EKS.NodeSelector",
           "Tolerations.$": "$.EKS.Tolerations",
           "MinimumCapacity.$": "$.EKS.Scaling.MinimumCapacity",
           "DesiredCapacity.$": "$.EKS.Scaling.TargetCapacity",
@@ -144,6 +145,7 @@
                   "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
                 },
                 "spec": {
+                  "ttlSecondsAfterFinished": 3600,
                   "template": {
                     "spec": {
                       "serviceAccountName": "refresh",

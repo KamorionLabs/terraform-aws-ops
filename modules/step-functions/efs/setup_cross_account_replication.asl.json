@@ -1,9 +1,10 @@
 {
-  "Comment": "Sets up EFS cross-account replication from source account to destination account",
+  "Comment": "Sets up EFS cross-account replication with prerequisite validation. Creates destination EFS, configures policies, and establishes replication.",
   "StartAt": "GetSourceFileSystem",
   "States": {
     "GetSourceFileSystem": {
       "Type": "Task",
+      "Comment": "Get source EFS information",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
       "Parameters": {
         "FileSystemId.$": "$.SourceFileSystemId"
@@ -27,6 +28,7 @@
     },
     "CheckExistingReplication": {
       "Type": "Task",
+      "Comment": "Check if replication configuration already exists",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
       "Parameters": {
         "FileSystemId.$": "$.SourceFileSystemId"
@@ -40,12 +42,13 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CheckError",
-          "Next": "CreateDestinationFileSystem"
+          "Next": "ValidateSourceIAMPermissions"
         }
       ]
     },
     "HasExistingReplication": {
       "Type": "Choice",
+      "Comment": "Check if replication already exists",
       "Choices": [
         {
           "Variable": "$.ExistingReplication.Replications[0]",
@@ -53,7 +56,7 @@
           "Next": "ReplicationAlreadyExists"
         }
       ],
-      "Default": "CreateDestinationFileSystem"
+      "Default": "ValidateSourceIAMPermissions"
     },
     "ReplicationAlreadyExists": {
       "Type": "Pass",
@@ -66,21 +69,204 @@
       },
       "Next": "SetupSucceeded"
     },
+
+    "ValidateSourceIAMPermissions": {
+      "Type": "Task",
+      "Comment": "Validate source account role has required EFS permissions by attempting a harmless describe call",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "ValidateDestinationIAMPermissions",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.AccessDeniedException"],
+          "ResultPath": "$.IAMError",
+          "Next": "SourceIAMPermissionsFailed"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "SourceIAMPermissionsFailed": {
+      "Type": "Fail",
+      "Error": "SourceIAMPermissionsInsufficient",
+      "Cause": "Source account role lacks required EFS permissions. Please verify the role has elasticfilesystem:* permissions."
+    },
+    "ValidateDestinationIAMPermissions": {
+      "Type": "Task",
+      "Comment": "Validate destination account role has required EFS permissions",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "MaxItems": 1
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "GetSourceFileSystemPolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.AccessDeniedException"],
+          "ResultPath": "$.IAMError",
+          "Next": "DestinationIAMPermissionsFailed"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "DestinationIAMPermissionsFailed": {
+      "Type": "Fail",
+      "Error": "DestinationIAMPermissionsInsufficient",
+      "Cause": "Destination account role lacks required EFS permissions. Please verify the role has elasticfilesystem:* permissions."
+    },
+
+    "GetSourceFileSystemPolicy": {
+      "Type": "Task",
+      "Comment": "Get current file system policy on source EFS",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.SourcePolicy",
+      "Next": "CheckSourcePolicyForReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.PolicyNotFound"],
+          "ResultPath": "$.SourcePolicyNotFound",
+          "Comment": "No policy exists, need to create one",
+          "Next": "CreateSourceReplicationPolicy"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "CheckSourcePolicyForReplication": {
+      "Type": "Pass",
+      "Comment": "Source has a policy - we'll update it to include replication permissions",
+      "Next": "UpdateSourcePolicyForReplication"
+    },
+    "CreateSourceReplicationPolicy": {
+      "Type": "Task",
+      "Comment": "Create file system policy on source EFS allowing replication",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId",
+        "Policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowReplicationWrite",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "elasticfilesystem.amazonaws.com"
+              },
+              "Action": [
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite"
+              ],
+              "Resource.$": "$.SourceEFS.FileSystemArn",
+              "Condition": {
+                "Bool": {
+                  "elasticfilesystem:AccessedViaMountTarget": "true"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "CreateDestinationFileSystem",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PolicyError",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
+    },
+    "UpdateSourcePolicyForReplication": {
+      "Type": "Task",
+      "Comment": "Update existing source file system policy to ensure replication is allowed",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId",
+        "Policy": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowReplicationWrite",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "elasticfilesystem.amazonaws.com"
+              },
+              "Action": [
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite"
+              ],
+              "Resource.$": "$.SourceEFS.FileSystemArn",
+              "Condition": {
+                "Bool": {
+                  "elasticfilesystem:AccessedViaMountTarget": "true"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "CreateDestinationFileSystem",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PolicyError",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
+    },
+    "SourcePolicyUpdateFailed": {
+      "Type": "Fail",
+      "Error": "SourcePolicyUpdateFailed",
+      "Cause": "Failed to update source EFS file system policy for replication"
+    },
+
     "CreateDestinationFileSystem": {
       "Type": "Task",
+      "Comment": "Create destination EFS with replication overwrite protection DISABLED (tags applied separately)",
       "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
       "Parameters": {
         "CreationToken.$": "States.UUID()",
         "PerformanceMode.$": "$.PerformanceMode",
         "Encrypted.$": "$.Encrypted",
-        "KmsKeyId.$": "$.DestinationKmsKeyId",
-        "Tags.$": "$.Tags"
+        "KmsKeyId.$": "$.DestinationKmsKeyId"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.DestinationEFS",
-      "Next": "WaitDestinationAvailable",
+      "Next": "TagDestinationFileSystem",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -89,13 +275,35 @@
         }
       ]
     },
-    "WaitDestinationAvailable": {
+    "TagDestinationFileSystem": {
+      "Type": "Task",
+      "Comment": "Tag destination EFS using resourcegroupstaggingapi (accepts map format)",
+      "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+      "Parameters": {
+        "ResourceARNList.$": "States.Array($.DestinationEFS.FileSystemArn)",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.TagResult",
+      "Next": "WaitDestinationCreating",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TagError",
+          "Next": "WaitDestinationCreating"
+        }
+      ]
+    },
+    "WaitDestinationCreating": {
       "Type": "Wait",
-      "Seconds": 15,
+      "Seconds": 10,
       "Next": "CheckDestinationStatus"
     },
     "CheckDestinationStatus": {
       "Type": "Task",
+      "Comment": "Check if destination EFS is available",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
       "Parameters": {
         "FileSystemId.$": "$.DestinationEFS.FileSystemId"
@@ -108,25 +316,145 @@
     },
     "IsDestinationAvailable": {
       "Type": "Choice",
+      "Comment": "Check if destination EFS is in available state",
       "Choices": [
         {
           "Variable": "$.DestinationStatus.FileSystems[0].LifeCycleState",
           "StringEquals": "available",
-          "Next": "CreateReplicationConfiguration"
+          "Next": "DisableReplicationOverwriteProtection"
         }
       ],
-      "Default": "WaitDestinationAvailable"
+      "Default": "WaitDestinationCreating"
     },
+
+    "DisableReplicationOverwriteProtection": {
+      "Type": "Task",
+      "Comment": "Disable replication overwrite protection on destination EFS (required for replication target)",
+      "Resource": "arn:aws:states:::aws-sdk:efs:updateFileSystemProtection",
+      "Parameters": {
+        "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+        "ReplicationOverwriteProtection": "DISABLED"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.ProtectionUpdate",
+      "Next": "BuildDestinationPolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ProtectionError",
+          "Next": "DestinationProtectionFailed"
+        }
+      ]
+    },
+    "DestinationProtectionFailed": {
+      "Type": "Fail",
+      "Error": "DestinationProtectionFailed",
+      "Cause": "Failed to disable replication overwrite protection on destination EFS"
+    },
+
+    "BuildDestinationPolicy": {
+      "Type": "Pass",
+      "Comment": "Build the destination file system policy object with cross-account permissions",
+      "Parameters": {
+        "PolicyObject": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowCrossAccountReplication",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS.$": "States.Format('arn:aws:iam::{}:root', $.SourceAccount.AccountId)"
+              },
+              "Action": [
+                "elasticfilesystem:DescribeFileSystems",
+                "elasticfilesystem:DescribeReplicationConfigurations",
+                "elasticfilesystem:CreateReplicationConfiguration",
+                "elasticfilesystem:DeleteReplicationConfiguration",
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite"
+              ],
+              "Resource.$": "$.DestinationEFS.FileSystemArn"
+            },
+            {
+              "Sid": "AllowReplicationRole",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS.$": "$.ReplicationRoleArn"
+              },
+              "Action": [
+                "elasticfilesystem:DescribeFileSystems",
+                "elasticfilesystem:DescribeReplicationConfigurations",
+                "elasticfilesystem:CreateReplicationConfiguration",
+                "elasticfilesystem:DeleteReplicationConfiguration",
+                "elasticfilesystem:ReplicationWrite"
+              ],
+              "Resource.$": "$.DestinationEFS.FileSystemArn"
+            },
+            {
+              "Sid": "AllowReplicationService",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "elasticfilesystem.amazonaws.com"
+              },
+              "Action": [
+                "elasticfilesystem:ClientMount",
+                "elasticfilesystem:ClientWrite",
+                "elasticfilesystem:ReplicationWrite"
+              ],
+              "Resource.$": "$.DestinationEFS.FileSystemArn"
+            }
+          ]
+        }
+      },
+      "ResultPath": "$.DestinationPolicyBuild",
+      "Next": "CreateDestinationPolicy"
+    },
+    "CreateDestinationPolicy": {
+      "Type": "Task",
+      "Comment": "Create file system policy on destination EFS allowing cross-account replication from source",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+        "Policy.$": "States.JsonToString($.DestinationPolicyBuild.PolicyObject)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitPolicyPropagation",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PolicyError",
+          "Next": "DestinationPolicyFailed"
+        }
+      ]
+    },
+    "DestinationPolicyFailed": {
+      "Type": "Fail",
+      "Error": "DestinationPolicyFailed",
+      "Cause": "Failed to create file system policy on destination EFS"
+    },
+    "WaitPolicyPropagation": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Comment": "Wait for policy to propagate before creating replication",
+      "Next": "CreateReplicationConfiguration"
+    },
+
     "CreateReplicationConfiguration": {
       "Type": "Task",
+      "Comment": "Create the replication configuration from source to destination (use ARN and ReplicationRoleArn for cross-account)",
       "Resource": "arn:aws:states:::aws-sdk:efs:createReplicationConfiguration",
       "Parameters": {
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "Destinations": [
           {
             "Region.$": "$.DestinationRegion",
-            "FileSystemId.$": "$.DestinationEFS.FileSystemId",
-            "KmsKeyId.$": "$.DestinationKmsKeyId"
+            "FileSystemId.$": "$.DestinationEFS.FileSystemArn",
+            "RoleArn.$": "$.ReplicationRoleArn"
           }
         ]
       },
@@ -137,7 +465,7 @@
       "Next": "PrepareOutput",
       "Retry": [
         {
-          "ErrorEquals": ["EFS.ReplicationNotFound", "EFS.FileSystemNotFound"],
+          "ErrorEquals": ["Efs.ReplicationNotFound", "Efs.FileSystemNotFound"],
           "IntervalSeconds": 10,
           "MaxAttempts": 5,
           "BackoffRate": 2
@@ -147,18 +475,27 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.ReplicationError",
-          "Next": "SetupFailed"
+          "Next": "ReplicationCreationFailed"
         }
       ]
     },
+    "ReplicationCreationFailed": {
+      "Type": "Fail",
+      "Error": "ReplicationCreationFailed",
+      "Cause": "Failed to create replication configuration. Check IAM permissions and file system policies."
+    },
+
     "PrepareOutput": {
       "Type": "Pass",
       "Parameters": {
         "Status": "Completed",
         "ModuleName": "setup_cross_account_replication",
         "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "SourceFileSystemArn.$": "$.SourceEFS.FileSystemArn",
         "DestinationFileSystemId.$": "$.DestinationEFS.FileSystemId",
-        "DestinationFileSystemArn.$": "$.DestinationEFS.FileSystemArn"
+        "DestinationFileSystemArn.$": "$.DestinationEFS.FileSystemArn",
+        "ReplicationOverwriteProtection": "DISABLED",
+        "Message": "Cross-account EFS replication configured successfully"
       },
       "Next": "SetupSucceeded"
     },
