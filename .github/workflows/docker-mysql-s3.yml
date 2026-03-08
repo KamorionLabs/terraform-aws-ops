@@ -1,0 +1,200 @@
+---
+name: Build and Push mysql-s3 Docker Images
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - 'docker/mysql-s3/**'
+      - '.github/workflows/docker-mysql-s3.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker/mysql-s3/**'
+      - '.github/workflows/docker-mysql-s3.yml'
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE_NAME: ${{ github.repository_owner }}/mysql-s3
+  DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPO }}/mysql-s3
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: mariadb
+            dockerfile: Dockerfile
+            platforms: linux/amd64,linux/arm64
+            tags: |
+              type=ref,event=branch
+              type=ref,event=pr
+              type=sha,prefix=
+              type=raw,value=latest,enable={{is_default_branch}}
+              type=raw,value=mariadb,enable={{is_default_branch}}
+          - name: mysql8
+            dockerfile: Dockerfile.mysql8
+            platforms: linux/amd64,linux/arm64
+            tags: |
+              type=ref,event=branch,suffix=-mysql8
+              type=ref,event=pr,suffix=-mysql8
+              type=sha,prefix=,suffix=-mysql8
+              type=raw,value=mysql8,enable={{is_default_branch}}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata for GHCR
+        id: meta-ghcr
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
+          tags: ${{ matrix.variant.tags }}
+
+      - name: Extract metadata for Docker Hub
+        id: meta-dockerhub
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE_NAME }}
+          tags: ${{ matrix.variant.tags }}
+
+      - name: Build and push to both registries
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/mysql-s3
+          file: docker/mysql-s3/${{ matrix.variant.dockerfile }}
+          platforms: ${{ matrix.variant.platforms }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.meta-ghcr.outputs.tags }}
+            ${{ steps.meta-dockerhub.outputs.tags }}
+          labels: ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
+
+  test:
+    name: Test ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [mariadb, mysql8]
+        include:
+          - variant: mariadb
+            dockerfile: Dockerfile
+          - variant: mysql8
+            dockerfile: Dockerfile.mysql8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/mysql-s3
+          file: docker/mysql-s3/${{ matrix.dockerfile }}
+          load: true
+          tags: test-mysql-s3:${{ matrix.variant }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+
+      - name: Test tools availability
+        run: |
+          echo "Testing ${{ matrix.variant }} variant..."
+          docker run --rm test-mysql-s3:${{ matrix.variant }} bash -c '
+            set -e
+            echo "--- mysql client ---"
+            mysql --version
+            echo "--- mysqldump ---"
+            mysqldump --version
+            echo "--- aws cli ---"
+            aws --version
+            echo "--- bash ---"
+            bash --version | head -1
+            echo "--- scripts ---"
+            test -x /import.sh && echo "import.sh OK"
+            test -x /dump.sh && echo "dump.sh OK"
+            echo "All checks passed!"
+          '
+
+  security-scan:
+    name: Trivy scan ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [mariadb, mysql8]
+        include:
+          - variant: mariadb
+            image_tag: latest
+          - variant: mysql8
+            image_tag: mysql8
+
+    steps:
+      - name: Run Trivy vulnerability scanner (GHCR)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:${{ matrix.image_tag }}"
+          format: sarif
+          output: "trivy-results-${{ matrix.variant }}.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results-${{ matrix.variant }}.sarif"
+
+  sync-dockerhub-readme:
+    name: Sync README to Docker Hub
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE_NAME }}
+          readme-filepath: ./docker/mysql-s3/README.md
+          short-description: "MySQL/MariaDB dump & import with S3 sync - multi-arch (amd64/arm64)"
