@@ -142,7 +142,7 @@
                         }],
                         "containers": [{
                           "name": "mysqldump",
-                          "image": "akirosit/mysql-s3:latest",
+                          "image": "kamorion/mysql-s3:mysql8",
                           "imagePullPolicy": "Always",
                           "command": ["/dump.sh"],
                           "volumeMounts": [{
