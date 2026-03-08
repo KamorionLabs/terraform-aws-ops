@@ -12,6 +12,7 @@ name: Build and Push mysql-s3 Docker Images
     paths:
       - 'docker/mysql-s3/**'
       - '.github/workflows/docker-mysql-s3.yml'
+  workflow_dispatch:
 
 env:
   GHCR_REGISTRY: ghcr.io
