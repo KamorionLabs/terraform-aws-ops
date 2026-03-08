@@ -15,7 +15,7 @@ name: Build and Push mysql-s3 Docker Images
 
 env:
   GHCR_REGISTRY: ghcr.io
-  GHCR_IMAGE_NAME: ${{ github.repository_owner }}/mysql-s3
+  GHCR_IMAGE_NAME: kamorionlabs/mysql-s3
   DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPO }}/mysql-s3
 
 jobs:
@@ -156,6 +156,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
