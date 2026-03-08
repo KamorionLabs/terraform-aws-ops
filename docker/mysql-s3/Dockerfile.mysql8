@@ -13,10 +13,10 @@ RUN set -eux; \
     { \
         echo '[mysql84-community]'; \
         echo 'name=MySQL 8.4 LTS Community Server'; \
-        echo 'baseurl=https://repo.mysql.com/yum/mysql-8.4-lts-community/el/9/$basearch/'; \
+        echo 'baseurl=https://repo.mysql.com/yum/mysql-8.4-community/el/9/$basearch/'; \
         echo 'enabled=1'; \
         echo 'gpgcheck=1'; \
-        echo 'gpgkey=https://repo.mysql.com/RPM-GPG-KEY-mysql-2023'; \
+        echo 'gpgkey=https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 https://repo.mysql.com/RPM-GPG-KEY-mysql-2025'; \
     } > /etc/yum.repos.d/mysql-community.repo; \
     microdnf install -y \
         mysql-community-client \
