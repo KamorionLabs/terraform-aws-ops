@@ -463,13 +463,57 @@
             },
             "CheckEFSFields2": {
               "Type": "Choice",
-              "Comment": "Verify EFS replication and naming fields (always required when EFS enabled)",
+              "Comment": "Verify EFS replication fields (always required)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
+                    {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSDestinationMode"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSDestinationMode": {
+              "Type": "Choice",
+              "Comment": "If CreateDestinationEFS is false, validate DestinationFileSystemId; otherwise validate create fields",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Replication.CreateDestinationEFS", "IsPresent": true},
+                    {"Variable": "$.EFS.Replication.CreateDestinationEFS", "BooleanEquals": false}
+                  ],
+                  "Next": "CheckEFSExistingDestFields"
+                }
+              ],
+              "Default": "CheckEFSNewDestFields"
+            },
+            "CheckEFSExistingDestFields": {
+              "Type": "Choice",
+              "Comment": "When using existing EFS, DestinationFileSystemId is required",
+              "Choices": [
+                {
+                  "Variable": "$.EFS.Replication.DestinationFileSystemId",
+                  "IsPresent": true,
+                  "Next": "CheckEFSSSMConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EFS_ExistingDest"
+            },
+            "ConfigMissing_EFS_ExistingDest": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Replication.DestinationFileSystemId (required when CreateDestinationEFS is false)"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEFSNewDestFields": {
+              "Type": "Choice",
+              "Comment": "When creating new EFS, KMS key, name and tags are required",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
-                    {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
-                    {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true},
                     {"Variable": "$.EFS.Name", "IsPresent": true},
                     {"Variable": "$.EFS.Tags", "IsPresent": true}
                   ],
@@ -480,7 +524,7 @@
             },
             "ConfigMissing_EFS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationKmsKeyId", "Replication.DestinationRegion", "Replication.RoleArn", "Name", "Tags"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationRegion", "Replication.RoleArn", "Replication.DestinationKmsKeyId (if creating)", "Name (if creating)", "Tags (if creating)"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
