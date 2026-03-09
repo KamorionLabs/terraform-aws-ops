@@ -1,5 +1,5 @@
 {
-  "Comment": "Deletes EFS replication configuration. After deletion, the destination file system becomes Writable.",
+  "Comment": "Deletes EFS replication configuration and cleans up source policy. After deletion, the destination file system becomes Writable.",
   "StartAt": "GetReplicationConfig",
   "States": {
     "GetReplicationConfig": {
@@ -111,12 +111,12 @@
         {
           "ErrorEquals": ["Efs.ReplicationNotFoundException"],
           "ResultPath": "$.CheckError",
-          "Next": "ShouldDeleteDestination"
+          "Next": "GetSourcePolicyForCleanup"
         },
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CheckError",
-          "Next": "ShouldDeleteDestination"
+          "Next": "GetSourcePolicyForCleanup"
         }
       ]
     },
@@ -127,7 +127,7 @@
         {
           "Variable": "$.CheckResult.Replications[0]",
           "IsPresent": false,
-          "Next": "ShouldDeleteDestination"
+          "Next": "GetSourcePolicyForCleanup"
         },
         {
           "Variable": "$.CheckResult.Replications[0].Destinations[0].Status",
@@ -135,8 +135,123 @@
           "Next": "WaitReplicationDeleted"
         }
       ],
+      "Default": "GetSourcePolicyForCleanup"
+    },
+
+    "GetSourcePolicyForCleanup": {
+      "Type": "Task",
+      "Comment": "Read source EFS policy to clean up AllowReplicationWrite statement",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.SourcePolicyForCleanup",
+      "Next": "CheckSourcePolicyForCleanup",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.PolicyNotFound"],
+          "ResultPath": "$.CleanupError",
+          "Comment": "No policy exists, nothing to clean up",
+          "Next": "ShouldDeleteDestination"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CleanupError",
+          "Comment": "Don't fail the workflow for cleanup errors",
+          "Next": "ShouldDeleteDestination"
+        }
+      ]
+    },
+    "CheckSourcePolicyForCleanup": {
+      "Type": "Choice",
+      "Comment": "Check if source policy contains AllowReplicationWrite to clean up",
+      "Choices": [
+        {
+          "Variable": "$.SourcePolicyForCleanup.Policy",
+          "StringMatches": "*AllowReplicationWrite*",
+          "Next": "ParseSourcePolicyForCleanup"
+        }
+      ],
       "Default": "ShouldDeleteDestination"
     },
+    "ParseSourcePolicyForCleanup": {
+      "Type": "Pass",
+      "Comment": "Parse source policy JSON string to object for JSONata cleanup",
+      "Parameters": {
+        "PolicyObject.$": "States.StringToJson($.SourcePolicyForCleanup.Policy)"
+      },
+      "ResultPath": "$.ParsedCleanupPolicy",
+      "Next": "CleanSourcePolicyJSONata"
+    },
+    "CleanSourcePolicyJSONata": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Remove AllowReplicationWrite statement from source policy using JSONata",
+      "Assign": {
+        "cleanedSourcePolicyString": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $s.Sid != 'AllowReplicationWrite' }); $string({'Version': '2012-10-17', 'Statement': $filtered})) %}",
+        "cleanedPolicyEmpty": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $count($filter($stmts, function($s) { $s.Sid != 'AllowReplicationWrite' })) = 0) %}"
+      },
+      "Next": "CheckCleanedPolicyEmpty"
+    },
+    "CheckCleanedPolicyEmpty": {
+      "Type": "Choice",
+      "Comment": "If all statements were removed, delete the policy entirely instead of putting an empty one",
+      "Choices": [
+        {
+          "Variable": "$cleanedPolicyEmpty",
+          "BooleanEquals": true,
+          "Next": "DeleteSourcePolicy"
+        }
+      ],
+      "Default": "PutCleanedSourcePolicy"
+    },
+    "DeleteSourcePolicy": {
+      "Type": "Task",
+      "Comment": "Delete source EFS policy entirely (was only AllowReplicationWrite)",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "ShouldDeleteDestination",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CleanupError",
+          "Comment": "Don't fail the workflow for cleanup errors",
+          "Next": "ShouldDeleteDestination"
+        }
+      ]
+    },
+    "PutCleanedSourcePolicy": {
+      "Type": "Task",
+      "Comment": "Put the cleaned policy (without AllowReplicationWrite) back on source EFS",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId",
+        "Policy.$": "$cleanedSourcePolicyString"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "ShouldDeleteDestination",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CleanupError",
+          "Comment": "Don't fail the workflow for cleanup errors",
+          "Next": "ShouldDeleteDestination"
+        }
+      ]
+    },
+
     "ShouldDeleteDestination": {
       "Type": "Choice",
       "Comment": "Check if we should also delete the destination file system",
@@ -190,7 +305,7 @@
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "DestinationFileSystemId.$": "$.DestinationFileSystemId",
         "DestinationFileSystemDeleted": false,
-        "Message": "Replication configuration deleted. Destination EFS is now writable."
+        "Message": "Replication configuration deleted and source policy cleaned up. Destination EFS is now writable."
       },
       "Next": "DeleteSucceeded"
     },
@@ -202,7 +317,7 @@
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "DestinationFileSystemId.$": "$.DestinationFileSystemId",
         "DestinationFileSystemDeleted": true,
-        "Message": "Replication configuration and destination file system deleted."
+        "Message": "Replication configuration, source policy cleaned up, and destination file system deleted."
       },
       "Next": "DeleteSucceeded"
     },

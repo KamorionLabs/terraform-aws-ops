@@ -4,6 +4,7 @@
 # -----------------------------------------------------------------------------
 
 locals {
+  # SFN definitions - all use file() (JSONata handles policy merge inline)
   step_functions = {
     # Core Operations
     delete_filesystem = "delete_filesystem.asl.json"
@@ -13,10 +14,11 @@ locals {
     get_subpath_and_store_in_ssm = "get_subpath_and_store_in_ssm.asl.json"
 
     # Backup & Replication
-    restore_from_backup             = "restore_from_backup.asl.json"
-    setup_cross_account_replication = "setup_cross_account_replication.asl.json"
-    check_replication_sync          = "check_replication_sync.asl.json"
-    delete_replication              = "delete_replication.asl.json"
+    restore_from_backup              = "restore_from_backup.asl.json"
+    check_replication_sync           = "check_replication_sync.asl.json"
+    cleanup_efs_lambdas              = "cleanup_efs_lambdas.asl.json"
+    setup_cross_account_replication  = "setup_cross_account_replication.asl.json"
+    delete_replication               = "delete_replication.asl.json"
   }
 
   # Naming: pascal = "EFS-RestoreFromBackup", kebab = "efs-restore-from-backup"
@@ -58,7 +60,7 @@ resource "aws_sfn_state_machine" "efs" {
 }
 
 # -----------------------------------------------------------------------------
-# CloudWatch Log Group
+# CloudWatch Log Group - Step Functions
 # -----------------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "sfn" {
@@ -69,3 +71,4 @@ resource "aws_cloudwatch_log_group" "sfn" {
 
   tags = var.tags
 }
+

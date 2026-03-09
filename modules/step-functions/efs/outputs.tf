@@ -1,15 +1,11 @@
 output "step_function_arns" {
   description = "Map of Step Function names to ARNs"
-  value = {
-    for k, v in aws_sfn_state_machine.efs : k => v.arn
-  }
+  value       = { for k, v in aws_sfn_state_machine.efs : k => v.arn }
 }
 
 output "step_function_names" {
   description = "Map of Step Function keys to actual names"
-  value = {
-    for k, v in aws_sfn_state_machine.efs : k => v.name
-  }
+  value       = { for k, v in aws_sfn_state_machine.efs : k => v.name }
 }
 
 output "log_group_arn" {
