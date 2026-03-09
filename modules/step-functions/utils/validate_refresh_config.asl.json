@@ -1028,7 +1028,9 @@
               "Type": "Pass",
               "Result": {
                 "SourceFileSystem": {"Status": "NOT_RUN"},
-                "DestKmsKey": {"Status": "NOT_RUN"}
+                "ExistingReplication": {"Status": "NOT_RUN"},
+                "DestKmsKey": {"Status": "NOT_RUN"},
+                "DestinationFileSystem": {"Status": "NOT_RUN"}
               },
               "ResultPath": "$.V",
               "Next": "CheckSourceEFS"
@@ -1048,16 +1050,85 @@
                 "LifeCycleState.$": "$.FileSystems[0].LifeCycleState"
               },
               "ResultPath": "$.V.SourceFileSystem",
-              "Next": "CheckDestKmsEfsKey",
+              "Next": "CheckExistingReplication",
               "Catch": [{
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": "$.V.SourceFileSystem",
                 "Next": "EFSFailed"
               }]
             },
+            "CheckExistingReplication": {
+              "Type": "Task",
+              "Comment": "Detect existing replication on source EFS. SUCCESS = replication exists (bad). ReplicationNotFoundException = no replication (good).",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+              "Parameters": {
+                "FileSystemId.$": "$.EFS.Source.FileSystemId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.EFS.Source.Account.RoleArn"
+              },
+              "ResultPath": "$.V.ExistingReplicationRaw",
+              "Next": "ReplicationAlreadyExists",
+              "Catch": [{
+                "ErrorEquals": ["Efs.ReplicationNotFoundException"],
+                "Comment": "No replication found - this is the expected (happy) path",
+                "ResultPath": "$.V.ExistingReplicationRaw",
+                "Next": "NoExistingReplication"
+              }, {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.ExistingReplication",
+                "Next": "EFSFailed"
+              }]
+            },
+            "ReplicationAlreadyExists": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "Error": "Source EFS already has an active replication configuration. Delete it before starting a new refresh."},
+              "ResultPath": "$.V.ExistingReplication",
+              "Next": "EFSFailed"
+            },
+            "NoExistingReplication": {
+              "Type": "Pass",
+              "Result": {"Status": "PASSED"},
+              "ResultPath": "$.V.ExistingReplication",
+              "Next": "CheckDestinationEFSMode"
+            },
+            "CheckDestinationEFSMode": {
+              "Type": "Choice",
+              "Comment": "Route validation based on CreateDestinationEFS: false → check existing EFS, default → check KMS key for new EFS",
+              "Choices": [{
+                "And": [
+                  {"Variable": "$.EFS.Replication.CreateDestinationEFS", "IsPresent": true},
+                  {"Variable": "$.EFS.Replication.CreateDestinationEFS", "BooleanEquals": false}
+                ],
+                "Next": "CheckDestinationEFS"
+              }],
+              "Default": "CheckDestKmsEfsKey"
+            },
+            "CheckDestinationEFS": {
+              "Type": "Task",
+              "Comment": "Verify destination EFS filesystem exists when reusing an existing one (CreateDestinationEFS=false)",
+              "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+              "Parameters": {
+                "FileSystemId.$": "$.EFS.Replication.DestinationFileSystemId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "LifeCycleState.$": "$.FileSystems[0].LifeCycleState"
+              },
+              "ResultPath": "$.V.DestinationFileSystem",
+              "Next": "EFSPassed",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.DestinationFileSystem",
+                "Next": "EFSFailed"
+              }]
+            },
             "CheckDestKmsEfsKey": {
               "Type": "Task",
-              "Comment": "Verify destination KMS key for EFS is accessible",
+              "Comment": "Verify destination KMS key for EFS is accessible (only when creating new EFS)",
               "Resource": "arn:aws:states:::aws-sdk:kms:describeKey",
               "Parameters": {
                 "KeyId.$": "$.EFS.Replication.DestinationKmsKeyId"
