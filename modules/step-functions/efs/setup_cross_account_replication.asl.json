@@ -315,11 +315,11 @@
 
     "ShouldCreateDestinationEFS": {
       "Type": "Choice",
-      "Comment": "If DestinationFileSystemId is provided, use existing EFS; otherwise create a new one",
+      "Comment": "If CreateDestinationEFS is false, use existing DestinationFileSystemId; otherwise create a new one (default)",
       "Choices": [
         {
-          "Variable": "$.DestinationFileSystemId",
-          "IsPresent": true,
+          "Variable": "$.CreateDestinationEFS",
+          "BooleanEquals": false,
           "Next": "GetExistingDestinationEFS"
         }
       ],
@@ -454,11 +454,11 @@
 
     "ShouldSetDestinationPolicy": {
       "Type": "Choice",
-      "Comment": "Set policy only on newly created EFS (no DestinationFileSystemId). Existing EFS policies are managed by Terraform.",
+      "Comment": "Set policy only on newly created EFS. Existing EFS policies are managed by Terraform.",
       "Choices": [
         {
-          "Variable": "$.DestinationFileSystemId",
-          "IsPresent": true,
+          "Variable": "$.CreateDestinationEFS",
+          "BooleanEquals": false,
           "Next": "WaitPolicyPropagation"
         }
       ],
