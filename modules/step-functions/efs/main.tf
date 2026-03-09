@@ -16,7 +16,6 @@ locals {
     # Backup & Replication
     restore_from_backup              = "restore_from_backup.asl.json"
     check_replication_sync           = "check_replication_sync.asl.json"
-    cleanup_efs_lambdas              = "cleanup_efs_lambdas.asl.json"
     setup_cross_account_replication  = "setup_cross_account_replication.asl.json"
     delete_replication               = "delete_replication.asl.json"
   }
