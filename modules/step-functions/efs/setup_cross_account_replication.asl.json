@@ -198,7 +198,7 @@
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": null,
-      "Next": "GetSourceFileSystemPolicy",
+      "Next": "ShouldUpdateSourcePolicy",
       "Catch": [
         {
           "ErrorEquals": ["Efs.AccessDeniedException"],
@@ -218,6 +218,18 @@
       "Cause": "Destination account role lacks required EFS permissions. Please verify the role has elasticfilesystem:* permissions."
     },
 
+    "ShouldUpdateSourcePolicy": {
+      "Type": "Choice",
+      "Comment": "Skip source policy update unless explicitly requested (default: managed by Terraform)",
+      "Choices": [
+        {
+          "Variable": "$.UpdateSourcePolicy",
+          "BooleanEquals": true,
+          "Next": "GetSourceFileSystemPolicy"
+        }
+      ],
+      "Default": "CheckExistingTargetEFS"
+    },
     "GetSourceFileSystemPolicy": {
       "Type": "Task",
       "Comment": "Get current file system policy on source EFS",
