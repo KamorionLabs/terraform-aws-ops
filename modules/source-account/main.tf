@@ -42,9 +42,10 @@ locals {
 # -----------------------------------------------------------------------------
 
 locals {
-  # Combine orchestrator role with additional trust principals
+  # Combine orchestrator role, cross-region proxy role, and additional trust principals
   all_trust_principals = compact(concat(
     var.orchestrator_role_arn != null ? [var.orchestrator_role_arn] : [],
+    var.cross_region_proxy_role_arn != null ? [var.cross_region_proxy_role_arn] : [],
     var.additional_trust_principal_arns
   ))
 }

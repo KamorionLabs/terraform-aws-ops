@@ -32,6 +32,12 @@ variable "orchestrator_role_arn" {
   default     = null
 }
 
+variable "cross_region_proxy_role_arn" {
+  description = "ARN of the cross-region proxy Lambda IAM role (from shared services account). Optional, for cross-region RDS operations."
+  type        = string
+  default     = null
+}
+
 variable "additional_trust_principal_arns" {
   description = "Additional IAM role ARNs that can assume this role (e.g., ops-dashboard Step Functions role)"
   type        = list(string)
