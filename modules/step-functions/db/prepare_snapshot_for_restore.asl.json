@@ -68,14 +68,166 @@
           "Next": "GenerateManualSnapshotId"
         }
       ],
+      "Default": "CheckProxyForCopyLatest"
+    },
+
+    "CheckProxyForCopyLatest": {
+      "Type": "Choice",
+      "Comment": "Route to Lambda proxy for cross-region snapshot discovery, or direct SDK for same-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "GetLatestSnapshotViaProxy"
+        }
+      ],
       "Default": "GetLatestSnapshotForCopy"
+    },
+
+    "GetLatestSnapshotViaProxy": {
+      "Type": "Task",
+      "Comment": "Get latest automated snapshot via Lambda proxy (cross-region: source cluster is in a different region than the SFN)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "rds",
+          "Action": "describe_db_cluster_snapshots",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "DBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+            "SnapshotType": "automated"
+          }
+        }
+      },
+      "Output": {
+        "SourceAccount": "{% $states.input.SourceAccount %}",
+        "DestinationAccount": "{% $states.input.DestinationAccount %}",
+        "SourceDBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+        "Mode": "{% $states.input.Mode %}",
+        "ProxyLambdaArn": "{% $states.input.ProxyLambdaArn %}",
+        "SourceSnapshot": {
+          "SourceSnapshotId": "{% $states.result.Payload.DbClusterSnapshots[-1].DbClusterSnapshotIdentifier %}",
+          "SourceSnapshotArn": "{% $states.result.Payload.DbClusterSnapshots[-1].DbClusterSnapshotArn %}",
+          "EngineVersion": "{% $states.result.Payload.DbClusterSnapshots[-1].EngineVersion %}",
+          "StorageEncrypted": "{% $states.result.Payload.DbClusterSnapshots[-1].StorageEncrypted %}",
+          "KmsKeyId": "{% $states.result.Payload.DbClusterSnapshots[-1].KmsKeyId ? $states.result.Payload.DbClusterSnapshots[-1].KmsKeyId : null %}"
+        }
+      },
+      "Next": "GenerateCopySnapshotId",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
+    },
+
+    "CheckProxyForCreateManual": {
+      "Type": "Choice",
+      "Comment": "Route to Lambda proxy for cross-region manual snapshot creation, or direct SDK for same-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "CreateManualSnapshotViaProxy"
+        }
+      ],
+      "Default": "CreateManualSnapshot"
+    },
+
+    "CreateManualSnapshotViaProxy": {
+      "Type": "Task",
+      "Comment": "Create manual snapshot via Lambda proxy (cross-region: source cluster is in a different region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "rds",
+          "Action": "create_db_cluster_snapshot",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "DBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+            "DBClusterSnapshotIdentifier": "{% $states.input.ManualSnapshotParams.TargetSnapshotId %}",
+            "Tags": [
+              { "Key": "CreatedBy", "Value": "RefreshOrchestrator" },
+              { "Key": "Purpose", "Value": "CrossRegionRefresh" },
+              { "Key": "SourceCluster", "Value": "{% $states.input.SourceDBClusterIdentifier %}" },
+              { "Key": "CreatedAt", "Value": "{% $states.context.State.EnteredTime %}" }
+            ]
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.Payload.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.Payload.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.Payload.DbClusterSnapshot.Status, 'EngineVersion': $states.result.Payload.DbClusterSnapshot.EngineVersion, 'StorageEncrypted': $states.result.Payload.DbClusterSnapshot.StorageEncrypted, 'KmsKeyId': $states.result.Payload.DbClusterSnapshot.KmsKeyId ? $states.result.Payload.DbClusterSnapshot.KmsKeyId : null}}]) %}",
+      "Next": "WaitManualSnapshot",
+      "Catch": [
+        {
+          "ErrorEquals": ["DBClusterSnapshotAlreadyExistsFault"],
+          "Output": "{% $states.input %}",
+          "Next": "GetExistingManualSnapshotViaProxy"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PrepareFailed"
+        }
+      ]
+    },
+
+    "GetExistingManualSnapshotViaProxy": {
+      "Type": "Task",
+      "Comment": "Get existing manual snapshot via Lambda proxy (cross-region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "rds",
+          "Action": "describe_db_cluster_snapshots",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "DBClusterSnapshotIdentifier": "{% $states.input.ManualSnapshotParams.TargetSnapshotId %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.Payload.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.Payload.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.Payload.DbClusterSnapshots[0].Status, 'EngineVersion': $states.result.Payload.DbClusterSnapshots[0].EngineVersion, 'StorageEncrypted': $states.result.Payload.DbClusterSnapshots[0].StorageEncrypted, 'KmsKeyId': $states.result.Payload.DbClusterSnapshots[0].KmsKeyId ? $states.result.Payload.DbClusterSnapshots[0].KmsKeyId : null}}]) %}",
+      "Next": "IsManualSnapshotComplete"
+    },
+
+    "CheckProxyForManualStatus": {
+      "Type": "Choice",
+      "Comment": "Route manual snapshot status check to proxy (cross-region) or direct SDK (same-region)",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "CheckManualSnapshotStatusViaProxy"
+        }
+      ],
+      "Default": "CheckManualSnapshotStatus"
+    },
+
+    "CheckManualSnapshotStatusViaProxy": {
+      "Type": "Task",
+      "Comment": "Check manual snapshot status via Lambda proxy (cross-region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "rds",
+          "Action": "describe_db_cluster_snapshots",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "DBClusterSnapshotIdentifier": "{% $states.input.ManualSnapshot.SnapshotIdentifier %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ManualSnapshotStatus': {'Status': $states.result.Payload.DbClusterSnapshots[0].Status}}]) %}",
+      "Next": "IsManualSnapshotComplete"
     },
 
     "GenerateManualSnapshotId": {
       "Type": "Pass",
       "Comment": "Generate unique ID for the manual snapshot",
       "Output": "{% $merge([$states.input, {'ManualSnapshotParams': {'TargetSnapshotId': 'refresh-manual-' & $substringAfter($states.context.Execution.Name, ':') }}]) %}",
-      "Next": "CreateManualSnapshot"
+      "Next": "CheckProxyForCreateManual"
     },
 
     "GetLatestSnapshotForCopy": {
@@ -315,7 +467,7 @@
     "WaitManualSnapshot": {
       "Type": "Wait",
       "Seconds": 30,
-      "Next": "CheckManualSnapshotStatus"
+      "Next": "CheckProxyForManualStatus"
     },
 
     "CheckManualSnapshotStatus": {

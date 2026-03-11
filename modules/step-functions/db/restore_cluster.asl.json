@@ -185,7 +185,8 @@
           "DestinationAccount": "{% $states.input.DestinationAccount %}",
           "SourceDBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
           "Mode": "{% $states.input.SnapshotMode ? $states.input.SnapshotMode : 'copy-latest' %}",
-          "SourceSnapshot": "{% $states.input.SourceSnapshot %}"
+          "SourceSnapshot": "{% $states.input.SourceSnapshot %}",
+          "ProxyLambdaArn": "{% $states.input.ProxyLambdaArn %}"
         }
       },
       "Output": "{% $merge([$states.input, {'SnapshotInfo': {'SnapshotIdentifier': $states.result.Output.SnapshotIdentifier, 'SnapshotArn': $states.result.Output.SnapshotArn, 'EngineVersion': $states.result.Output.EngineVersion, 'Shared': $states.result.Output.Shared}}]) %}",
