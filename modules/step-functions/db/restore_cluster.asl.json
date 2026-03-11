@@ -175,28 +175,24 @@
     },
     "PrepareSnapshot": {
       "Type": "Task",
-      "Comment": "Call prepare_snapshot_for_restore to handle same-account or cross-account snapshot preparation",
+      "QueryLanguage": "JSONata",
+      "Comment": "Call prepare_snapshot_for_restore to handle same-account or cross-account snapshot preparation. Uses JSONata so SourceSnapshot is omitted when not provided (cross-region input).",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
-      "Parameters": {
-        "StateMachineArn.$": "$.PrepareSnapshotStateMachineArn",
+      "Arguments": {
+        "StateMachineArn": "{% $states.input.PrepareSnapshotStateMachineArn %}",
         "Input": {
-          "SourceAccount.$": "$.SourceAccount",
-          "DestinationAccount.$": "$.DestinationAccount",
-          "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
-          "Mode.$": "States.ArrayGetItem(States.Array($.SnapshotMode, $.Defaults.SnapshotMode), 0)"
+          "SourceAccount": "{% $states.input.SourceAccount %}",
+          "DestinationAccount": "{% $states.input.DestinationAccount %}",
+          "SourceDBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
+          "Mode": "{% $states.input.SnapshotMode ? $states.input.SnapshotMode : 'copy-latest' %}",
+          "SourceSnapshot": "{% $states.input.SourceSnapshot %}"
         }
       },
-      "ResultSelector": {
-        "SnapshotIdentifier.$": "$.Output.SnapshotIdentifier",
-        "SnapshotArn.$": "$.Output.SnapshotArn",
-        "EngineVersion.$": "$.Output.EngineVersion",
-        "Shared.$": "$.Output.Shared"
-      },
-      "ResultPath": "$.SnapshotInfo",
+      "Output": "{% $merge([$states.input, {'SnapshotInfo': {'SnapshotIdentifier': $states.result.Output.SnapshotIdentifier, 'SnapshotArn': $states.result.Output.SnapshotArn, 'EngineVersion': $states.result.Output.EngineVersion, 'Shared': $states.result.Output.Shared}}]) %}",
       "Next": "IsServerless",
       "Catch": [{
         "ErrorEquals": ["States.ALL"],
-        "ResultPath": "$.Error.PrepareSnapshot",
+        "Output": "{% $merge([$states.input, {'Error': {'PrepareSnapshot': $states.errorOutput}}]) %}",
         "Next": "RestoreFailed"
       }]
     },

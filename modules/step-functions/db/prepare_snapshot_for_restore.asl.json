@@ -57,8 +57,12 @@
 
     "ChooseSnapshotMode": {
       "Type": "Choice",
-      "Comment": "Choose between copying latest automated snapshot or creating a new manual one",
+      "Comment": "Choose snapshot strategy: use pre-provided snapshot (cross-region), copy latest automated, or create manual",
       "Choices": [
+        {
+          "Condition": "{% $exists($states.input.SourceSnapshot.SourceSnapshotArn) %}",
+          "Next": "GenerateCopySnapshotId"
+        },
         {
           "Condition": "{% $states.input.Mode = 'create-manual' %}",
           "Next": "GenerateManualSnapshotId"
@@ -120,7 +124,7 @@
         "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
       },
       "Arguments": {
-        "SourceDBClusterSnapshotIdentifier": "{% $states.input.SourceSnapshot.SourceSnapshotId %}",
+        "SourceDBClusterSnapshotIdentifier": "{% $states.input.SourceSnapshot.SourceSnapshotArn %}",
         "TargetDBClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}",
         "CopyTags": true,
         "Tags": [
@@ -347,7 +351,26 @@
       "Type": "Pass",
       "Comment": "Prepare snapshot info from manual snapshot",
       "Output": "{% $merge([$states.input, {'PreparedSnapshot': {'SnapshotIdentifier': $states.input.ManualSnapshot.SnapshotIdentifier, 'SnapshotArn': $states.input.ManualSnapshot.SnapshotArn, 'EngineVersion': $states.input.ManualSnapshot.EngineVersion, 'StorageEncrypted': $states.input.ManualSnapshot.StorageEncrypted, 'KmsKeyId': $states.input.ManualSnapshot.KmsKeyId, 'Mode': 'create-manual'}}]) %}",
-      "Next": "IsSnapshotEncrypted"
+      "Next": "CheckCrossRegionAfterManual"
+    },
+
+    "CheckCrossRegionAfterManual": {
+      "Type": "Choice",
+      "Comment": "For cross-region manual snapshots, route through copy flow to bring snapshot to destination region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "PrepareManualSnapshotForCrossRegionCopy"
+        }
+      ],
+      "Default": "IsSnapshotEncrypted"
+    },
+
+    "PrepareManualSnapshotForCrossRegionCopy": {
+      "Type": "Pass",
+      "Comment": "Map manual snapshot info to SourceSnapshot format for the cross-region copy flow",
+      "Output": "{% $merge([$states.input, {'SourceSnapshot': {'SourceSnapshotId': $states.input.ManualSnapshot.SnapshotIdentifier, 'SourceSnapshotArn': $states.input.ManualSnapshot.SnapshotArn, 'EngineVersion': $states.input.ManualSnapshot.EngineVersion, 'StorageEncrypted': $states.input.ManualSnapshot.StorageEncrypted, 'KmsKeyId': $states.input.ManualSnapshot.KmsKeyId}}]) %}",
+      "Next": "GenerateCopySnapshotId"
     },
 
     "IsSnapshotEncrypted": {
