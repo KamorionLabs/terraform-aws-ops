@@ -35,3 +35,11 @@ output "get_efs_subpath_config" {
     CodeS3Key    = aws_s3_object.lambda_code["get-efs-subpath"].key
   }
 }
+
+output "cross_region_rds_proxy_config" {
+  description = "Lambda configuration for cross-region-rds-proxy"
+  value = {
+    CodeS3Bucket = local.bucket_name
+    CodeS3Key    = aws_s3_object.lambda_code["cross-region-rds-proxy"].key
+  }
+}

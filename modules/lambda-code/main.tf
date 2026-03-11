@@ -22,7 +22,7 @@ locals {
     if arn != null && arn != "" && can(regex("^arn:aws:iam::[0-9]+:role/", arn))
   ]
 
-  # Lambda functions to package (EFS-related only, MySQL lambdas are deployed directly)
+  # Lambda functions to package and upload to S3
   lambda_functions = {
     "check-flag-file" = {
       source_file = "${path.module}/../../lambdas/check-flag-file/check_flag_file.py"
@@ -33,6 +33,11 @@ locals {
       source_file = "${path.module}/../../lambdas/get-efs-subpath/get_efs_subpath.py"
       handler     = "get_efs_subpath.lambda_handler"
       description = "Find EFS restore subpath from AWS Backup"
+    }
+    "cross-region-rds-proxy" = {
+      source_file = "${path.module}/../../lambdas/cross-region-rds-proxy/cross_region_rds_proxy.py"
+      handler     = "cross_region_rds_proxy.lambda_handler"
+      description = "Cross-region AWS API proxy for Step Functions (assumes role, calls API in source region, normalizes response keys)"
     }
   }
 }
