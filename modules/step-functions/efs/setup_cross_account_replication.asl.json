@@ -346,8 +346,10 @@
       "Comment": "Skip source policy update unless explicitly requested (default: managed by Terraform)",
       "Choices": [
         {
-          "Variable": "$.UpdateSourcePolicy",
-          "BooleanEquals": true,
+          "And": [
+            {"Variable": "$.UpdateSourcePolicy", "IsPresent": true},
+            {"Variable": "$.UpdateSourcePolicy", "BooleanEquals": true}
+          ],
           "Next": "GetSourceFileSystemPolicy"
         }
       ],
