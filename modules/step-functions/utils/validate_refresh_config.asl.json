@@ -1,5 +1,5 @@
 {
-  "Comment": "Validates refresh configuration: structure (required fields) + resources (exist and accessible). Always succeeds with a validation report.",
+  "Comment": "Validates refresh configuration: structure (required fields) + resources (exist and accessible). Supports cross-region validation via Lambda proxy (Database.Source.ProxyLambdaArn, EFS.Replication.ProxyLambdaArn). Always succeeds with a validation report.",
   "StartAt": "ValidateAll",
   "States": {
 
@@ -848,7 +848,44 @@
                 "DestKmsKey": {"Status": "NOT_RUN"}
               },
               "ResultPath": "$.V",
-              "Next": "CheckSourceCluster"
+              "Next": "CheckProxyForSourceCluster"
+            },
+            "CheckProxyForSourceCluster": {
+              "Type": "Choice",
+              "QueryLanguage": "JSONata",
+              "Comment": "Route to Lambda proxy if source DB is in a different region than the SFN",
+              "Choices": [
+                {
+                  "Condition": "{% $exists($states.input.Database.Source.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+                  "Next": "CheckSourceClusterViaProxy"
+                }
+              ],
+              "Default": "CheckSourceCluster"
+            },
+            "CheckSourceClusterViaProxy": {
+              "Type": "Task",
+              "QueryLanguage": "JSONata",
+              "Comment": "Verify source DB cluster exists via Lambda proxy (cross-region)",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Arguments": {
+                "FunctionName": "{% $states.input.Database.Source.ProxyLambdaArn %}",
+                "Payload": {
+                  "Service": "rds",
+                  "Action": "describe_db_clusters",
+                  "Region": "{% $states.input.SourceAccount.Region %}",
+                  "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+                  "Parameters": {
+                    "DBClusterIdentifier": "{% $states.input.Database.Source.ClusterIdentifier %}"
+                  }
+                }
+              },
+              "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'SourceCluster': {'Status': 'PASSED', 'ClusterStatus': $states.result.Payload.DBClusters[0].Status}}])}]) %}",
+              "Next": "CheckDestSubnetGroup",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'SourceCluster': $states.errorOutput}])}]) %}",
+                "Next": "DBFailed"
+              }]
             },
             "CheckSourceCluster": {
               "Type": "Task",
@@ -1033,7 +1070,44 @@
                 "DestinationFileSystem": {"Status": "NOT_RUN"}
               },
               "ResultPath": "$.V",
-              "Next": "CheckSourceEFS"
+              "Next": "CheckProxyForSourceEFS"
+            },
+            "CheckProxyForSourceEFS": {
+              "Type": "Choice",
+              "QueryLanguage": "JSONata",
+              "Comment": "Route to Lambda proxy if source EFS is in a different region than the SFN",
+              "Choices": [
+                {
+                  "Condition": "{% $exists($states.input.EFS.Replication.ProxyLambdaArn) and $exists($states.input.EFS.Source.Account.Region) and $states.input.EFS.Source.Account.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+                  "Next": "CheckSourceEFSViaProxy"
+                }
+              ],
+              "Default": "CheckSourceEFS"
+            },
+            "CheckSourceEFSViaProxy": {
+              "Type": "Task",
+              "QueryLanguage": "JSONata",
+              "Comment": "Verify source EFS filesystem exists via Lambda proxy (cross-region)",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Arguments": {
+                "FunctionName": "{% $states.input.EFS.Replication.ProxyLambdaArn %}",
+                "Payload": {
+                  "Service": "efs",
+                  "Action": "describe_file_systems",
+                  "Region": "{% $states.input.EFS.Source.Account.Region %}",
+                  "RoleArn": "{% $states.input.EFS.Source.Account.RoleArn %}",
+                  "Parameters": {
+                    "FileSystemId": "{% $states.input.EFS.Source.FileSystemId %}"
+                  }
+                }
+              },
+              "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'SourceFileSystem': {'Status': 'PASSED', 'LifeCycleState': $states.result.Payload.FileSystems[0].LifeCycleState}}])}]) %}",
+              "Next": "CheckProxyForExistingReplication",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'SourceFileSystem': $states.errorOutput}])}]) %}",
+                "Next": "EFSFailed"
+              }]
             },
             "CheckSourceEFS": {
               "Type": "Task",
@@ -1050,10 +1124,52 @@
                 "LifeCycleState.$": "$.FileSystems[0].LifeCycleState"
               },
               "ResultPath": "$.V.SourceFileSystem",
-              "Next": "CheckExistingReplication",
+              "Next": "CheckProxyForExistingReplication",
               "Catch": [{
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": "$.V.SourceFileSystem",
+                "Next": "EFSFailed"
+              }]
+            },
+            "CheckProxyForExistingReplication": {
+              "Type": "Choice",
+              "QueryLanguage": "JSONata",
+              "Comment": "Route to Lambda proxy for checking existing replication if cross-region",
+              "Choices": [
+                {
+                  "Condition": "{% $exists($states.input.EFS.Replication.ProxyLambdaArn) and $exists($states.input.EFS.Source.Account.Region) and $states.input.EFS.Source.Account.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+                  "Next": "CheckExistingReplicationViaProxy"
+                }
+              ],
+              "Default": "CheckExistingReplication"
+            },
+            "CheckExistingReplicationViaProxy": {
+              "Type": "Task",
+              "QueryLanguage": "JSONata",
+              "Comment": "Detect existing replication on source EFS via Lambda proxy (cross-region). SUCCESS = replication exists (bad). ReplicationNotFound error = no replication (good).",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Arguments": {
+                "FunctionName": "{% $states.input.EFS.Replication.ProxyLambdaArn %}",
+                "Payload": {
+                  "Service": "efs",
+                  "Action": "describe_replication_configurations",
+                  "Region": "{% $states.input.EFS.Source.Account.Region %}",
+                  "RoleArn": "{% $states.input.EFS.Source.Account.RoleArn %}",
+                  "Parameters": {
+                    "FileSystemId": "{% $states.input.EFS.Source.FileSystemId %}"
+                  }
+                }
+              },
+              "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'ExistingReplicationRaw': $states.result.Payload}])}]) %}",
+              "Next": "ReplicationAlreadyExists",
+              "Catch": [{
+                "ErrorEquals": ["ReplicationNotFoundException", "Efs.ReplicationNotFoundException", "Lambda.Unknown"],
+                "Comment": "No replication found via proxy - this is the expected (happy) path. Lambda may wrap the error.",
+                "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'ExistingReplicationRaw': $states.errorOutput}])}]) %}",
+                "Next": "NoExistingReplication"
+              }, {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'ExistingReplication': $states.errorOutput}])}]) %}",
                 "Next": "EFSFailed"
               }]
             },
