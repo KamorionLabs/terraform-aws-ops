@@ -446,7 +446,7 @@
             },
             "CheckEFSFields": {
               "Type": "Choice",
-              "Comment": "Verify EFS config fields",
+              "Comment": "Verify EFS config fields (Name always required for PrepareRefresh tag extraction)",
               "Choices": [
                 {
                   "And": [
@@ -454,7 +454,8 @@
                     {"Variable": "$.EFS.Source.Account.RoleArn", "IsPresent": true},
                     {"Variable": "$.EFS.Source.Account.AccountId", "IsPresent": true},
                     {"Variable": "$.EFS.Network.SubnetIds", "IsPresent": true},
-                    {"Variable": "$.EFS.Network.SecurityGroupIds", "IsPresent": true}
+                    {"Variable": "$.EFS.Network.SecurityGroupIds", "IsPresent": true},
+                    {"Variable": "$.EFS.Name", "IsPresent": true}
                   ],
                   "Next": "CheckEFSFields2"
                 }
@@ -509,22 +510,27 @@
             },
             "CheckEFSNewDestFields": {
               "Type": "Choice",
-              "Comment": "When creating new EFS, KMS key, name and tags are required",
+              "Comment": "When creating new EFS, KMS key and tags are required (Name already checked in CheckEFSFields)",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
-                    {"Variable": "$.EFS.Name", "IsPresent": true},
                     {"Variable": "$.EFS.Tags", "IsPresent": true}
                   ],
                   "Next": "CheckEFSSSMConditional"
                 }
               ],
-              "Default": "ConfigMissing_EFS"
+              "Default": "ConfigMissing_EFS_NewDest"
             },
             "ConfigMissing_EFS": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Replication.DestinationRegion", "Replication.RoleArn", "Replication.DestinationKmsKeyId (if creating)", "Name (if creating)", "Tags (if creating)"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS", "Required": ["Source.FileSystemId", "Source.Account.RoleArn", "Source.Account.AccountId", "Network.SubnetIds", "Network.SecurityGroupIds", "Name", "Replication.DestinationRegion", "Replication.RoleArn"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "ConfigMissing_EFS_NewDest": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.NewDestination", "Required": ["Replication.DestinationKmsKeyId", "Tags"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
