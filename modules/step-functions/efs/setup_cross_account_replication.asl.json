@@ -36,7 +36,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Output": "{% $merge([$states.input, {'Error': $states.result}]) %}",
+          "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
           "Next": "SetupFailed"
         }
       ]
@@ -100,7 +100,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Output": "{% $merge([$states.input, {'CheckError': $states.result}]) %}",
+          "Output": "{% $merge([$states.input, {'CheckError': $states.errorOutput}]) %}",
           "Next": "CheckProxyForValidateSource"
         }
       ]
@@ -270,12 +270,12 @@
       "Catch": [
         {
           "ErrorEquals": ["Efs.AccessDeniedException", "AccessDeniedException"],
-          "Output": "{% $merge([$states.input, {'IAMError': $states.result}]) %}",
+          "Output": "{% $merge([$states.input, {'IAMError': $states.errorOutput}]) %}",
           "Next": "SourceIAMPermissionsFailed"
         },
         {
           "ErrorEquals": ["States.ALL"],
-          "Output": "{% $merge([$states.input, {'Error': $states.result}]) %}",
+          "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
           "Next": "SetupFailed"
         }
       ]
@@ -678,7 +678,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Output": "{% $merge([$states.input, {'ReplicationError': $states.result}]) %}",
+          "Output": "{% $merge([$states.input, {'ReplicationError': $states.errorOutput}]) %}",
           "Next": "ReplicationCreationFailed"
         }
       ]
