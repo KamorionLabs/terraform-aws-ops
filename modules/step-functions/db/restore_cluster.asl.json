@@ -176,18 +176,11 @@
     "PrepareSnapshot": {
       "Type": "Task",
       "QueryLanguage": "JSONata",
-      "Comment": "Call prepare_snapshot_for_restore to handle same-account or cross-account snapshot preparation. Uses JSONata so SourceSnapshot is omitted when not provided (cross-region input).",
+      "Comment": "Call prepare_snapshot_for_restore to handle same-account or cross-account snapshot preparation. Uses $merge to conditionally include optional fields (SourceSnapshot, ProxyLambdaArn).",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Arguments": {
         "StateMachineArn": "{% $states.input.PrepareSnapshotStateMachineArn %}",
-        "Input": {
-          "SourceAccount": "{% $states.input.SourceAccount %}",
-          "DestinationAccount": "{% $states.input.DestinationAccount %}",
-          "SourceDBClusterIdentifier": "{% $states.input.SourceDBClusterIdentifier %}",
-          "Mode": "{% $states.input.SnapshotMode ? $states.input.SnapshotMode : 'copy-latest' %}",
-          "SourceSnapshot": "{% $states.input.SourceSnapshot %}",
-          "ProxyLambdaArn": "{% $states.input.ProxyLambdaArn %}"
-        }
+        "Input": "{% $merge([{'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount, 'SourceDBClusterIdentifier': $states.input.SourceDBClusterIdentifier, 'Mode': $states.input.SnapshotMode ? $states.input.SnapshotMode : 'copy-latest'}, $exists($states.input.SourceSnapshot) ? {'SourceSnapshot': $states.input.SourceSnapshot} : {}, $exists($states.input.ProxyLambdaArn) ? {'ProxyLambdaArn': $states.input.ProxyLambdaArn} : {}]) %}"
       },
       "Output": "{% $merge([$states.input, {'SnapshotInfo': {'SnapshotIdentifier': $states.result.Output.SnapshotIdentifier, 'SnapshotArn': $states.result.Output.SnapshotArn, 'EngineVersion': $states.result.Output.EngineVersion, 'Shared': $states.result.Output.Shared}}]) %}",
       "Next": "IsServerless",
