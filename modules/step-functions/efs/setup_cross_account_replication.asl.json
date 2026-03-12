@@ -1,7 +1,46 @@
 {
-  "Comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in).",
-  "StartAt": "GetSourceFileSystem",
+  "Comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in). Supports cross-region via Lambda proxy (ProxyLambdaArn + SourceAccount.Region).",
+  "StartAt": "CheckProxyForGetSource",
   "States": {
+    "CheckProxyForGetSource": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Route to Lambda proxy if source EFS is in a different region than the SFN",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "GetSourceFileSystemViaProxy"
+        }
+      ],
+      "Default": "GetSourceFileSystem"
+    },
+    "GetSourceFileSystemViaProxy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Get source EFS information via Lambda proxy (cross-region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "efs",
+          "Action": "describe_file_systems",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "FileSystemId": "{% $states.input.SourceFileSystemId %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'SourceEFS': {'FileSystemId': $states.result.Payload.FileSystems[0].FileSystemId, 'FileSystemArn': $states.result.Payload.FileSystems[0].FileSystemArn}}]) %}",
+      "Next": "CheckProxyForCheckExistingReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'Error': $states.result}]) %}",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
     "GetSourceFileSystem": {
       "Type": "Task",
       "Comment": "Get source EFS information",
@@ -17,12 +56,52 @@
         "FileSystemArn.$": "$.FileSystems[0].FileSystemArn"
       },
       "ResultPath": "$.SourceEFS",
-      "Next": "CheckExistingReplication",
+      "Next": "CheckProxyForCheckExistingReplication",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.Error",
           "Next": "SetupFailed"
+        }
+      ]
+    },
+
+    "CheckProxyForCheckExistingReplication": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Route to Lambda proxy for checking existing replication if cross-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "CheckExistingReplicationViaProxy"
+        }
+      ],
+      "Default": "CheckExistingReplication"
+    },
+    "CheckExistingReplicationViaProxy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Check if replication configuration already exists via Lambda proxy (cross-region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "efs",
+          "Action": "describe_replication_configurations",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "FileSystemId": "{% $states.input.SourceFileSystemId %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ExistingReplication': $states.result.Payload}]) %}",
+      "Next": "HasExistingReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'CheckError': $states.result}]) %}",
+          "Next": "CheckProxyForValidateSource"
         }
       ]
     },
@@ -42,7 +121,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CheckError",
-          "Next": "ValidateSourceIAMPermissions"
+          "Next": "CheckProxyForValidateSource"
         }
       ]
     },
@@ -56,7 +135,7 @@
           "Next": "ExtractExistingReplication"
         }
       ],
-      "Default": "ValidateSourceIAMPermissions"
+      "Default": "CheckProxyForValidateSource"
     },
     "ExtractExistingReplication": {
       "Type": "Pass",
@@ -157,6 +236,50 @@
       "Cause": "Existing replication destination does not match expected region or account. Delete existing replication first."
     },
 
+    "CheckProxyForValidateSource": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Route to Lambda proxy for source IAM validation if cross-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "ValidateSourceIAMPermissionsViaProxy"
+        }
+      ],
+      "Default": "ValidateSourceIAMPermissions"
+    },
+    "ValidateSourceIAMPermissionsViaProxy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Validate source account role has required EFS permissions via Lambda proxy (cross-region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "efs",
+          "Action": "describe_file_systems",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "FileSystemId": "{% $states.input.SourceFileSystemId %}"
+          }
+        }
+      },
+      "Output": "{% $states.input %}",
+      "Next": "ValidateDestinationIAMPermissions",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.AccessDeniedException", "AccessDeniedException"],
+          "Output": "{% $merge([$states.input, {'IAMError': $states.result}]) %}",
+          "Next": "SourceIAMPermissionsFailed"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'Error': $states.result}]) %}",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
     "ValidateSourceIAMPermissions": {
       "Type": "Task",
       "Comment": "Validate source account role has required EFS permissions",
@@ -503,9 +626,63 @@
       "Type": "Wait",
       "Seconds": 5,
       "Comment": "Wait for policy to propagate before creating replication",
-      "Next": "CreateReplicationConfiguration"
+      "Next": "CheckProxyForCreateReplication"
     },
 
+    "CheckProxyForCreateReplication": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Route to Lambda proxy for creating replication if cross-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
+          "Next": "CreateReplicationConfigurationViaProxy"
+        }
+      ],
+      "Default": "CreateReplicationConfiguration"
+    },
+    "CreateReplicationConfigurationViaProxy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Create the replication configuration via Lambda proxy (cross-region: source EFS is in a different region)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "efs",
+          "Action": "create_replication_configuration",
+          "Region": "{% $states.input.SourceAccount.Region %}",
+          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
+          "Parameters": {
+            "SourceFileSystemId": "{% $states.input.SourceFileSystemId %}",
+            "Destinations": [
+              {
+                "Region": "{% $states.input.DestinationRegion %}",
+                "FileSystemId": "{% $states.input.DestinationEFS.FileSystemArn %}",
+                "RoleArn": "{% $states.input.ReplicationRoleArn %}"
+              }
+            ]
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ReplicationConfig': $states.result.Payload}]) %}",
+      "Next": "PrepareOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["ReplicationNotFound", "FileSystemNotFound", "Efs.ReplicationNotFound", "Efs.FileSystemNotFound"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'ReplicationError': $states.result}]) %}",
+          "Next": "ReplicationCreationFailed"
+        }
+      ]
+    },
     "CreateReplicationConfiguration": {
       "Type": "Task",
       "Comment": "Create the replication configuration from source to destination (use ARN and ReplicationRoleArn for cross-account)",
