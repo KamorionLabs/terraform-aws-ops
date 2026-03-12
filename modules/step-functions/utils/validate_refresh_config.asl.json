@@ -1163,7 +1163,7 @@
               "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'ExistingReplicationRaw': $states.result.Payload}])}]) %}",
               "Next": "ReplicationAlreadyExists",
               "Catch": [{
-                "ErrorEquals": ["ReplicationNotFoundException", "Efs.ReplicationNotFoundException", "Lambda.Unknown"],
+                "ErrorEquals": ["ReplicationNotFound", "ReplicationNotFoundException", "Efs.ReplicationNotFoundException", "Lambda.Unknown"],
                 "Comment": "No replication found via proxy - this is the expected (happy) path. Lambda may wrap the error.",
                 "Output": "{% $merge([$states.input, {'V': $merge([$states.input.V, {'ExistingReplicationRaw': $states.errorOutput}])}]) %}",
                 "Next": "NoExistingReplication"
