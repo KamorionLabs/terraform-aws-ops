@@ -272,31 +272,22 @@
           "States": {
             "SetupCrossAccountReplication_Repl": {
               "Type": "Task",
-              "Comment": "Setup EFS replication from source to destination account",
+              "QueryLanguage": "JSONata",
+              "Comment": "Setup EFS replication from source to destination account (supports cross-region via ProxyLambdaArn and existing destination EFS via CreateDestinationEFS/DestinationFileSystemId)",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
-              "Parameters": {
-                "StateMachineArn.$": "$.StepFunctions.EFS.SetupCrossAccountReplication",
-                "Input": {
-                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
-                  "SourceAccount.$": "$.EFS.Source.Account",
-                  "DestinationAccount.$": "$.DestinationAccount",
-                  "DestinationRegion.$": "$.EFS.Replication.DestinationRegion",
-                  "DestinationKmsKeyId.$": "$.EFS.Replication.DestinationKmsKeyId",
-                  "ReplicationRoleArn.$": "$.EFS.Replication.RoleArn",
-                  "PerformanceMode": "generalPurpose",
-                  "Encrypted": true,
-                  "Tags.$": "$.EFS.Tags"
-                },
-                "Name.$": "States.Format('{}-SetupReplication', $$.Execution.Name)"
+              "Arguments": {
+                "StateMachineArn": "{% $states.input.StepFunctions.EFS.SetupCrossAccountReplication %}",
+                "Input": "{% $merge([{'SourceFileSystemId': $states.input.EFS.Source.FileSystemId, 'SourceAccount': $states.input.EFS.Source.Account, 'DestinationAccount': $states.input.DestinationAccount, 'DestinationRegion': $states.input.EFS.Replication.DestinationRegion, 'ReplicationRoleArn': $states.input.EFS.Replication.RoleArn, 'PerformanceMode': 'generalPurpose', 'Encrypted': true, 'Tags': $states.input.EFS.Tags}, $exists($states.input.EFS.Replication.DestinationKmsKeyId) ? {'DestinationKmsKeyId': $states.input.EFS.Replication.DestinationKmsKeyId} : {}, $exists($states.input.EFS.Replication.ProxyLambdaArn) ? {'ProxyLambdaArn': $states.input.EFS.Replication.ProxyLambdaArn} : {}, $exists($states.input.EFS.Replication.CreateDestinationEFS) ? {'CreateDestinationEFS': $states.input.EFS.Replication.CreateDestinationEFS} : {}, $exists($states.input.EFS.Replication.DestinationFileSystemId) ? {'DestinationFileSystemId': $states.input.EFS.Replication.DestinationFileSystemId} : {}]) %}",
+                "Name": "{% $states.context.Execution.Name & '-SetupReplication' %}"
               },
-              "ResultPath": "$.ReplicationSetupResult",
+              "Output": "{% $merge([$states.input, {'ReplicationSetupResult': $states.result}]) %}",
               "Next": "CheckReplicationSync_Repl",
               "Catch": [
                 {
                   "ErrorEquals": [
                     "States.ALL"
                   ],
-                  "ResultPath": "$.Error",
+                  "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
                   "Next": "EFSReplicationFailed_Repl"
                 }
               ]
@@ -451,26 +442,22 @@
           "States": {
             "DeleteEFSReplication_Sync": {
               "Type": "Task",
-              "Comment": "Delete replication to make destination EFS writable and freeze data at time T",
+              "QueryLanguage": "JSONata",
+              "Comment": "Delete replication to make destination EFS writable and freeze data at time T (supports cross-region via destination-side deletion)",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
-              "Parameters": {
-                "StateMachineArn.$": "$.StepFunctions.EFS.DeleteReplication",
-                "Input": {
-                  "SourceFileSystemId.$": "$.EFS.Source.FileSystemId",
-                  "SourceAccount.$": "$.EFS.Source.Account",
-                  "DestinationAccount.$": "$.DestinationAccount",
-                  "DeleteDestinationFileSystem": false
-                },
-                "Name.$": "States.Format('{}-DelReplSync', $$.Execution.Name)"
+              "Arguments": {
+                "StateMachineArn": "{% $states.input.StepFunctions.EFS.DeleteReplication %}",
+                "Input": "{% $merge([{'SourceFileSystemId': $states.input.EFS.Source.FileSystemId, 'SourceAccount': $states.input.EFS.Source.Account, 'DestinationAccount': $states.input.DestinationAccount, 'DeleteDestinationFileSystem': false}, $exists($states.input.EFS.Replication.DestinationFileSystemId) ? {'DestinationFileSystemId': $states.input.EFS.Replication.DestinationFileSystemId} : {}]) %}",
+                "Name": "{% $states.context.Execution.Name & '-DelReplSync' %}"
               },
-              "ResultPath": "$.DeleteReplicationResult",
+              "Output": "{% $merge([$states.input, {'DeleteReplicationResult': $states.result}]) %}",
               "Next": "ReplicationDeleteComplete_Sync",
               "Catch": [
                 {
                   "ErrorEquals": [
                     "States.ALL"
                   ],
-                  "ResultPath": "$.DeleteReplicationError",
+                  "Output": "{% $merge([$states.input, {'DeleteReplicationError': $states.errorOutput}]) %}",
                   "Next": "ReplicationDeleteFailed_Sync"
                 }
               ]
@@ -517,36 +504,22 @@
             },
             "RestoreDatabase_Sync": {
               "Type": "Task",
-              "Comment": "Restore database from a fresh manual snapshot - snapshot is created NOW at time T, synchronized with EFS replication cutoff",
+              "QueryLanguage": "JSONata",
+              "Comment": "Restore database from a fresh manual snapshot - snapshot is created NOW at time T, synchronized with EFS replication cutoff (supports cross-region via ProxyLambdaArn)",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
-              "Parameters": {
-                "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
-                "Input": {
-                  "RestoreType.$": "$.Database.Source.RestoreType",
-                  "SnapshotMode": "create-manual",
-                  "PrepareSnapshotStateMachineArn.$": "$.StepFunctions.Database.PrepareSnapshotForRestore",
-                  "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
-                  "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
-                  "DbInstanceClass.$": "$.Database.Target.InstanceClass",
-                  "AuroraServerlessMinCapacity.$": "$.Database.Target.ServerlessConfig.MinCapacity",
-                  "AuroraServerlessMaxCapacity.$": "$.Database.Target.ServerlessConfig.MaxCapacity",
-                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
-                  "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
-                  "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
-                  "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
-                  "SourceAccount.$": "$.SourceAccount",
-                  "DestinationAccount.$": "$.DestinationAccount"
-                },
-                "Name.$": "States.Format('{}-RestoreDatabase', $$.Execution.Name)"
+              "Arguments": {
+                "StateMachineArn": "{% $states.input.StepFunctions.Database.RestoreCluster %}",
+                "Input": "{% $merge([{'RestoreType': $states.input.Database.Source.RestoreType, 'SnapshotMode': 'create-manual', 'PrepareSnapshotStateMachineArn': $states.input.StepFunctions.Database.PrepareSnapshotForRestore, 'SourceDBClusterIdentifier': $states.input.Database.Source.ClusterIdentifier, 'TmpDbClusterIdentifier': $states.input.ResourceNames.TmpDbClusterIdentifier, 'DbInstanceClass': $states.input.Database.Target.InstanceClass, 'AuroraServerlessMinCapacity': $states.input.Database.Target.ServerlessConfig.MinCapacity, 'AuroraServerlessMaxCapacity': $states.input.Database.Target.ServerlessConfig.MaxCapacity, 'DbSubnetGroupName': $states.input.Database.Network.SubnetGroupName, 'VpcSecurityGroupIds': $states.input.Database.Network.SecurityGroupIds, 'DbClusterParameterGroupName': $states.input.Database.Parameters.ClusterParameterGroupName, 'KmsKeyId': $states.input.Database.Secrets.KmsKeyId, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Source.ProxyLambdaArn) ? {'ProxyLambdaArn': $states.input.Database.Source.ProxyLambdaArn} : {}]) %}",
+                "Name": "{% $states.context.Execution.Name & '-RestoreDatabase' %}"
               },
-              "ResultPath": "$.RestoreResult",
+              "Output": "{% $merge([$states.input, {'RestoreResult': $states.result}]) %}",
               "Next": "CreateDBInstance_Sync",
               "Catch": [
                 {
                   "ErrorEquals": [
                     "States.ALL"
                   ],
-                  "ResultPath": "$.Error",
+                  "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
                   "Next": "DatabaseRefreshFailed_Sync"
                 }
               ]

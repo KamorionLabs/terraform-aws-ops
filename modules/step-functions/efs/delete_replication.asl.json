@@ -1,16 +1,23 @@
 {
   "Comment": "Deletes EFS replication configuration and cleans up source policy. After deletion, the destination file system becomes Writable.",
-  "StartAt": "GetReplicationConfig",
+  "StartAt": "PrepareDeletionContext",
   "States": {
+    "PrepareDeletionContext": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Determine deletion mode: destination-side (cross-region) or source-side (same region). For cross-region, use destination account credentials since source EFS is in a different region than the SFN.",
+      "Output": "{% ($sfnRegion := $split($states.context.StateMachine.Id, ':')[3]; $isCrossRegion := $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $sfnRegion and $exists($states.input.DestinationFileSystemId); $merge([$states.input, {'DeletionRoleArn': $isCrossRegion ? $states.input.DestinationAccount.RoleArn : $states.input.SourceAccount.RoleArn, 'DescribeFileSystemId': $isCrossRegion ? $states.input.DestinationFileSystemId : $states.input.SourceFileSystemId, 'SkipSourcePolicyCleanup': $isCrossRegion}])) %}",
+      "Next": "GetReplicationConfig"
+    },
     "GetReplicationConfig": {
       "Type": "Task",
-      "Comment": "Check if replication configuration exists",
+      "Comment": "Check if replication configuration exists (uses destination-side credentials for cross-region)",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
       "Parameters": {
-        "FileSystemId.$": "$.SourceFileSystemId"
+        "FileSystemId.$": "$.DescribeFileSystemId"
       },
       "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
+        "RoleArn.$": "$.DeletionRoleArn"
       },
       "ResultPath": "$.ReplicationConfig",
       "Next": "HasReplicationConfig",
@@ -49,19 +56,22 @@
         "DestinationFileSystemId.$": "$.ReplicationConfig.Replications[0].Destinations[0].FileSystemId",
         "DestinationRegion.$": "$.ReplicationConfig.Replications[0].Destinations[0].Region",
         "ReplicationStatus.$": "$.ReplicationConfig.Replications[0].Destinations[0].Status",
-        "DeleteDestinationFileSystem.$": "States.ArrayGetItem(States.Array($.DeleteDestinationFileSystem, false), 0)"
+        "DeleteDestinationFileSystem.$": "States.ArrayGetItem(States.Array($.DeleteDestinationFileSystem, false), 0)",
+        "DeletionRoleArn.$": "$.DeletionRoleArn",
+        "DescribeFileSystemId.$": "$.DescribeFileSystemId",
+        "SkipSourcePolicyCleanup.$": "$.SkipSourcePolicyCleanup"
       },
       "Next": "DeleteReplicationConfig"
     },
     "DeleteReplicationConfig": {
       "Type": "Task",
-      "Comment": "Delete the replication configuration from source",
+      "Comment": "Delete the replication configuration (uses destination-side credentials for cross-region)",
       "Resource": "arn:aws:states:::aws-sdk:efs:deleteReplicationConfiguration",
       "Parameters": {
         "SourceFileSystemId.$": "$.SourceFileSystemId"
       },
       "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
+        "RoleArn.$": "$.DeletionRoleArn"
       },
       "ResultPath": null,
       "Next": "WaitReplicationDeleted",
@@ -97,13 +107,13 @@
     },
     "CheckReplicationDeleted": {
       "Type": "Task",
-      "Comment": "Verify replication is deleted",
+      "Comment": "Verify replication is deleted (uses destination-side credentials for cross-region)",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
       "Parameters": {
-        "FileSystemId.$": "$.SourceFileSystemId"
+        "FileSystemId.$": "$.DescribeFileSystemId"
       },
       "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
+        "RoleArn.$": "$.DeletionRoleArn"
       },
       "ResultPath": "$.CheckResult",
       "Next": "IsReplicationDeleted",
@@ -111,12 +121,12 @@
         {
           "ErrorEquals": ["Efs.ReplicationNotFoundException"],
           "ResultPath": "$.CheckError",
-          "Next": "GetSourcePolicyForCleanup"
+          "Next": "CheckSkipSourcePolicyCleanup"
         },
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.CheckError",
-          "Next": "GetSourcePolicyForCleanup"
+          "Next": "CheckSkipSourcePolicyCleanup"
         }
       ]
     },
@@ -127,7 +137,7 @@
         {
           "Variable": "$.CheckResult.Replications[0]",
           "IsPresent": false,
-          "Next": "GetSourcePolicyForCleanup"
+          "Next": "CheckSkipSourcePolicyCleanup"
         },
         {
           "Variable": "$.CheckResult.Replications[0].Destinations[0].Status",
@@ -135,9 +145,21 @@
           "Next": "WaitReplicationDeleted"
         }
       ],
-      "Default": "GetSourcePolicyForCleanup"
+      "Default": "CheckSkipSourcePolicyCleanup"
     },
 
+    "CheckSkipSourcePolicyCleanup": {
+      "Type": "Choice",
+      "Comment": "Skip source policy cleanup for cross-region deletion (source EFS unreachable from this region)",
+      "Choices": [
+        {
+          "Variable": "$.SkipSourcePolicyCleanup",
+          "BooleanEquals": true,
+          "Next": "ShouldDeleteDestination"
+        }
+      ],
+      "Default": "GetSourcePolicyForCleanup"
+    },
     "GetSourcePolicyForCleanup": {
       "Type": "Task",
       "Comment": "Read source EFS policy to clean up AllowReplicationWrite statement",
