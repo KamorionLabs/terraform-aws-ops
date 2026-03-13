@@ -1,11 +1,148 @@
 {
-  "Comment": "STUB - ManageLambdaLifecycle | To be implemented in Plan 03",
-  "StartAt": "Placeholder",
+  "Comment": "ManageLambdaLifecycle | Input: {LambdaConfig: {FunctionName, Runtime, Handler, Role, Code: {S3Bucket, S3Key}, Timeout?, MemorySize?, Architectures?, VpcConfig?, Environment?, Tags?, ForceUpdateCode?}, Account: {RoleArn}} | Output: {FunctionName, FunctionArn, Status}",
+  "StartAt": "CheckLambdaExists",
   "States": {
-    "Placeholder": {
+    "CheckLambdaExists": {
+      "Type": "Task",
+      "Comment": "Check if the Lambda function already exists",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:getFunction",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaConfig.FunctionName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.ExistingLambda",
+      "Next": "CheckIfCodeUpdateNeeded",
+      "Catch": [
+        {
+          "ErrorEquals": ["Lambda.ResourceNotFoundException"],
+          "ResultPath": "$.LambdaNotFound",
+          "Next": "CreateLambda"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageLambdaLifecycleFailed"
+        }
+      ]
+    },
+    "CheckIfCodeUpdateNeeded": {
+      "Type": "Choice",
+      "Comment": "If ForceUpdateCode is true, update the existing Lambda code from S3",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateCode",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateCode",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "UpdateLambdaCode"
+        }
+      ],
+      "Default": "PrepareLambdaReadyOutput"
+    },
+    "UpdateLambdaCode": {
+      "Type": "Task",
+      "Comment": "Update existing Lambda function code from S3",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionCode",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaConfig.FunctionName",
+        "S3Bucket.$": "$.LambdaConfig.Code.S3Bucket",
+        "S3Key.$": "$.LambdaConfig.Code.S3Key",
+        "Architectures.$": "$.LambdaConfig.Architectures"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.UpdatedLambda",
+      "Next": "WaitCodeUpdateReady",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 6,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageLambdaLifecycleFailed"
+        }
+      ]
+    },
+    "WaitCodeUpdateReady": {
+      "Type": "Wait",
+      "Comment": "Wait for Lambda code update to propagate",
+      "Seconds": 5,
+      "Next": "PrepareLambdaReadyOutput"
+    },
+    "CreateLambda": {
+      "Type": "Task",
+      "Comment": "Create the Lambda function with provided configuration",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:createFunction",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaConfig.FunctionName",
+        "Runtime.$": "$.LambdaConfig.Runtime",
+        "Handler.$": "$.LambdaConfig.Handler",
+        "Role.$": "$.LambdaConfig.Role",
+        "Code": {
+          "S3Bucket.$": "$.LambdaConfig.Code.S3Bucket",
+          "S3Key.$": "$.LambdaConfig.Code.S3Key"
+        },
+        "Timeout.$": "$.LambdaConfig.Timeout",
+        "MemorySize.$": "$.LambdaConfig.MemorySize",
+        "Architectures.$": "$.LambdaConfig.Architectures",
+        "VpcConfig.$": "$.LambdaConfig.VpcConfig",
+        "Environment.$": "$.LambdaConfig.Environment",
+        "Tags.$": "$.LambdaConfig.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.CreatedLambda",
+      "Next": "WaitLambdaReady",
+      "Catch": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "ResultPath": "$.LambdaConflict",
+          "Comment": "Lambda already exists (race condition), treat as existing",
+          "Next": "PrepareLambdaReadyOutput"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageLambdaLifecycleFailed"
+        }
+      ]
+    },
+    "WaitLambdaReady": {
+      "Type": "Wait",
+      "Comment": "Wait for newly created Lambda to become active",
+      "Seconds": 5,
+      "Next": "PrepareLambdaReadyOutput"
+    },
+    "PrepareLambdaReadyOutput": {
+      "Type": "Pass",
+      "Comment": "Return the Lambda function details",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaConfig.FunctionName",
+        "FunctionArn.$": "States.Format('arn:aws:lambda:*:*:function:{}', $.LambdaConfig.FunctionName)",
+        "Status": "Ready"
+      },
+      "End": true
+    },
+    "ManageLambdaLifecycleFailed": {
       "Type": "Fail",
-      "Error": "NotImplemented",
-      "Cause": "This sub-SFN will be implemented in Plan 03"
+      "Error": "ManageLambdaLifecycleFailed",
+      "Cause": "Failed to create or update Lambda function - see $.Error for details"
     }
   }
 }
