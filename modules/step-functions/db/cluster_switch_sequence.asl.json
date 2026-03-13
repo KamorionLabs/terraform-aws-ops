@@ -1,0 +1,211 @@
+{
+  "Comment": "ClusterSwitchSequence | Input: {TargetClusterIdentifier, TmpClusterIdentifier, OldClusterIdentifier, OldInstanceIdentifierPrefix, TargetInstanceIdentifierPrefix, Options: {RenameOldCluster, DeleteOldCluster}, StepFunctions: {Database: {RenameCluster, DeleteCluster, EnsureClusterNotExists, EnsureClusterAvailable}, Utils: {TagResources}}, DestinationAccount: {RoleArn}} | Output: {TargetClusterIdentifier, Status, SwitchCompletedAt}",
+  "StartAt": "CheckRenameOldClusterOption",
+  "States": {
+    "CheckRenameOldClusterOption": {
+      "Type": "Choice",
+      "Comment": "If RenameOldCluster is true, ensure old-named cluster doesn't exist then rename current target to -old",
+      "Choices": [
+        {
+          "Variable": "$.Options.RenameOldCluster",
+          "BooleanEquals": true,
+          "Next": "EnsureOldClusterNotExists"
+        }
+      ],
+      "Default": "CheckDeleteOldClusterOption"
+    },
+    "CheckDeleteOldClusterOption": {
+      "Type": "Choice",
+      "Comment": "If not renaming, check if we should delete old cluster to free target name. If neither, skip switch entirely (test mode).",
+      "Choices": [
+        {
+          "Variable": "$.Options.DeleteOldCluster",
+          "BooleanEquals": true,
+          "Next": "DeleteOldCluster"
+        }
+      ],
+      "Default": "SkipClusterSwitch"
+    },
+    "DeleteOldCluster": {
+      "Type": "Task",
+      "Comment": "Delete old cluster to free up target name for rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.TargetClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-DeleteOldCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.DeleteOldClusterResult",
+      "Next": "EnsureTargetClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.Error",
+          "Next": "ClusterSwitchSequenceFailed"
+        }
+      ]
+    },
+    "SkipClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Test mode: both RenameOldCluster and DeleteOldCluster are false. Restored cluster keeps its temporary name.",
+      "Parameters": {
+        "TargetClusterIdentifier.$": "$.TargetClusterIdentifier",
+        "Status": "SKIPPED",
+        "SwitchCompletedAt.$": "$$.State.EnteredTime"
+      },
+      "Next": "SwitchComplete"
+    },
+    "EnsureOldClusterNotExists": {
+      "Type": "Task",
+      "Comment": "Ensure the -old named cluster does not exist before renaming current target to -old",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
+        "Input": {
+          "DbClusterIdentifier.$": "$.OldClusterIdentifier",
+          "OrchestratorExecutionName.$": "$$.Execution.Name",
+          "StepFunctions.$": "$.StepFunctions",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-EnsureNoOldClstr', $$.Execution.Name)"
+      },
+      "ResultPath": "$.EnsureOldNotExistsResult",
+      "Next": "RenameOldCluster",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.EnsureOldError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "RenameOldCluster": {
+      "Type": "Task",
+      "Comment": "Rename current target cluster to -old identifier",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RenameCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.TargetClusterIdentifier",
+          "NewDbClusterIdentifier.$": "$.OldClusterIdentifier",
+          "NewInstanceIdentifierPrefix.$": "$.OldInstanceIdentifierPrefix",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-RenameOldCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.RenameOldResult",
+      "Next": "TagOldClusterRefreshTrue",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.RenameOldError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "TagOldClusterRefreshTrue": {
+      "Type": "Task",
+      "Comment": "Tag renamed -old cluster with refresh:true so next EnsureClusterNotExists can delete it",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.TagResources",
+        "Input": {
+          "ResourceARNList.$": "States.Array($.RenameOldResult.Output.DbClusterArn)",
+          "ConfigTags": {
+            "refresh": "true"
+          },
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-TagOldCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.TagOldClusterResult",
+      "Next": "EnsureTargetClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.TagOldClusterError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "EnsureTargetClusterAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure target cluster is available (start if stopped) before rename",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
+        "Input": {
+          "DbClusterIdentifier.$": "$.TmpClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-EnsureTargetAvail', $$.Execution.Name)"
+      },
+      "ResultPath": "$.EnsureTargetAvailableResult",
+      "Next": "RenameNewCluster",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.EnsureTargetAvailableError",
+          "Next": "RenameNewCluster"
+        }
+      ]
+    },
+    "RenameNewCluster": {
+      "Type": "Task",
+      "Comment": "Rename temporary cluster to target identifier",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RenameCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.TmpClusterIdentifier",
+          "NewDbClusterIdentifier.$": "$.TargetClusterIdentifier",
+          "NewInstanceIdentifierPrefix.$": "$.TargetInstanceIdentifierPrefix",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-RenameNewCluster', $$.Execution.Name)"
+      },
+      "ResultPath": "$.RenameNewResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.Error",
+          "Next": "ClusterSwitchSequenceFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Comment": "Format output with switch completion status",
+      "Parameters": {
+        "TargetClusterIdentifier.$": "$.TargetClusterIdentifier",
+        "Status": "SwitchComplete",
+        "SwitchCompletedAt.$": "$$.State.EnteredTime"
+      },
+      "Next": "SwitchComplete"
+    },
+    "SwitchComplete": {
+      "Type": "Succeed"
+    },
+    "ClusterSwitchSequenceFailed": {
+      "Type": "Fail",
+      "Error": "ClusterSwitchSequenceFailed",
+      "Cause": "Cluster switch sequence failed during rename/delete/tag operations"
+    }
+  }
+}
