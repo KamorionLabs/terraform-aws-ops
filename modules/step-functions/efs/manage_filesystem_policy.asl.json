@@ -1,0 +1,164 @@
+{
+  "Comment": "ManageFileSystemPolicy | Input: {FileSystemId, Account: {RoleArn}, Action (ADD|REMOVE), PolicyStatement: {Sid, Effect, Principal, Action, Resource, Condition?}} | Output: {FileSystemId, PolicyApplied, Status}",
+  "StartAt": "GetCurrentPolicy",
+  "States": {
+    "GetCurrentPolicy": {
+      "Type": "Task",
+      "Comment": "Read the current file system policy from EFS",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.CurrentPolicy",
+      "Next": "ParseCurrentPolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.PolicyNotFound"],
+          "ResultPath": "$.PolicyNotFound",
+          "Comment": "No policy exists yet - route based on action",
+          "Next": "CheckActionOnMissingPolicy"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageFileSystemPolicyFailed"
+        }
+      ]
+    },
+    "CheckActionOnMissingPolicy": {
+      "Type": "Choice",
+      "Comment": "If no policy exists and action is ADD, build from scratch. If REMOVE, nothing to do.",
+      "Choices": [
+        {
+          "Variable": "$.Action",
+          "StringEquals": "ADD",
+          "Next": "BuildPolicyFromScratch"
+        }
+      ],
+      "Default": "PrepareSuccessOutput"
+    },
+    "BuildPolicyFromScratch": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build a new policy with only the provided statement",
+      "Assign": {
+        "mergedPolicyString": "{% $string({'Version': '2012-10-17', 'Statement': [$states.input.PolicyStatement]}) %}"
+      },
+      "Next": "PutUpdatedPolicy"
+    },
+    "ParseCurrentPolicy": {
+      "Type": "Pass",
+      "Comment": "Parse the policy JSON string to object for manipulation",
+      "Parameters": {
+        "PolicyObject.$": "States.StringToJson($.CurrentPolicy.Policy)"
+      },
+      "ResultPath": "$.ParsedPolicy",
+      "Next": "CheckAction"
+    },
+    "CheckAction": {
+      "Type": "Choice",
+      "Comment": "Route to ADD or REMOVE logic based on Action parameter",
+      "Choices": [
+        {
+          "Variable": "$.Action",
+          "StringEquals": "ADD",
+          "Next": "MergePolicyStatement"
+        },
+        {
+          "Variable": "$.Action",
+          "StringEquals": "REMOVE",
+          "Next": "RemovePolicyStatement"
+        }
+      ],
+      "Default": "ManageFileSystemPolicyFailed"
+    },
+    "MergePolicyStatement": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Add or replace the statement in the existing policy (dedup by Sid)",
+      "Assign": {
+        "mergedPolicyString": "{% ($stmts := $type($states.input.ParsedPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedPolicy.PolicyObject.Statement : [$states.input.ParsedPolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $not($s.Sid = $states.input.PolicyStatement.Sid) }); $string({'Version': '2012-10-17', 'Statement': $append($filtered, [$states.input.PolicyStatement])})) %}"
+      },
+      "Next": "PutUpdatedPolicy"
+    },
+    "RemovePolicyStatement": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Remove the statement matching the Sid from the policy",
+      "Assign": {
+        "mergedPolicyString": "{% ($stmts := $type($states.input.ParsedPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedPolicy.PolicyObject.Statement : [$states.input.ParsedPolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $s.Sid != $states.input.PolicyStatement.Sid }); $count($filtered) = 0 ? '__EMPTY__' : $string({'Version': '2012-10-17', 'Statement': $filtered})) %}"
+      },
+      "Next": "CheckRemovedPolicyEmpty"
+    },
+    "CheckRemovedPolicyEmpty": {
+      "Type": "Choice",
+      "Comment": "If removing the last statement, delete the policy entirely instead of putting an empty one",
+      "Choices": [
+        {
+          "Variable": "$mergedPolicyString",
+          "StringEquals": "__EMPTY__",
+          "Next": "DeleteEntirePolicy"
+        }
+      ],
+      "Default": "PutUpdatedPolicy"
+    },
+    "DeleteEntirePolicy": {
+      "Type": "Task",
+      "Comment": "Delete the file system policy entirely (last statement was removed)",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareSuccessOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageFileSystemPolicyFailed"
+        }
+      ]
+    },
+    "PutUpdatedPolicy": {
+      "Type": "Task",
+      "Comment": "Apply the updated policy to the file system",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId",
+        "Policy.$": "$mergedPolicyString"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareSuccessOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageFileSystemPolicyFailed"
+        }
+      ]
+    },
+    "PrepareSuccessOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId",
+        "PolicyApplied": true,
+        "Status": "Completed"
+      },
+      "End": true
+    },
+    "ManageFileSystemPolicyFailed": {
+      "Type": "Fail",
+      "Error": "ManageFileSystemPolicyFailed",
+      "Cause": "See $.Error for details"
+    }
+  }
+}
