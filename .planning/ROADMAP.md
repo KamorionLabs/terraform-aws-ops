@@ -45,7 +45,12 @@ Plans:
   3. prepare_snapshot_for_restore est reduit de 39 a ~18 states via extraction EnsureSnapshotAvailable
   4. refresh_orchestrator est reduit de 51 a ~30 states avec ClusterSwitchSequence extrait
   5. Toutes les interfaces Input/Output des SFN refactorees sont identiques pour les appelants existants (orchestrateur, CI, invocations manuelles)
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 02-01-PLAN.md — Module EFS: CheckFlagFileSync + refactoring check_replication_sync + setup_cross_account_replication + dual-map Terraform migration
+- [ ] 02-02-PLAN.md — Module DB: EnsureSnapshotAvailable + refactoring prepare_snapshot_for_restore + restore_cluster + dual-map Terraform migration
+- [ ] 02-03-PLAN.md — Module Orchestrator: ClusterSwitchSequence + refactoring refresh_orchestrator
 
 ### Phase 3: Consolidation
 **Goal**: Les 6 paires de fichiers public/private sont remplacees par 6 fichiers uniques parametrises via Account.RoleArn optionnel, eliminant la divergence silencieuse entre variantes.
@@ -66,5 +71,5 @@ Phases execute in numeric order: 1 → 2 → 3
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Extraction | 3/3 | Complete | 2026-03-13 |
-| 2. Refactoring | 0/TBD | Not started | - |
+| 2. Refactoring | 0/3 | Not started | - |
 | 3. Consolidation | 0/TBD | Not started | - |
