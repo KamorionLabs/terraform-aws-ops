@@ -24,7 +24,7 @@ locals {
     list_shared_snapshots  = "list_shared_snapshots.asl.json"
 
     # Sub-SFN — Phase 2 Extraction (reusable, no ARN injection)
-    ensure_snapshot_available  = "ensure_snapshot_available.asl.json"
+    ensure_snapshot_available = "ensure_snapshot_available.asl.json"
     cluster_switch_sequence   = "cluster_switch_sequence.asl.json"
 
     # Secrets Management

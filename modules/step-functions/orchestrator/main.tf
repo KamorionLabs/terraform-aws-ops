@@ -34,6 +34,9 @@ resource "aws_sfn_state_machine" "orchestrator" {
     efs_step_functions   = var.efs_step_function_arns
     eks_step_functions   = var.eks_step_function_arns
     utils_step_functions = var.utils_step_function_arns
+
+    # Flat ARN variables for sub-SFN calls in ASL (avoids map lookup syntax in JSON)
+    cluster_switch_sequence_arn = var.db_step_function_arns["cluster_switch_sequence"]
   })
 
   logging_configuration {
