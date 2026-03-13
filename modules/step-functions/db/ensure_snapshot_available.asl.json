@@ -1,0 +1,104 @@
+{
+  "Comment": "EnsureSnapshotAvailable | Input: {SnapshotIdentifier, Account: {RoleArn}, ProxyLambdaArn?, SourceRegion?} | Output: {SnapshotIdentifier, SnapshotArn, Status, EngineVersion}",
+  "QueryLanguage": "JSONata",
+  "StartAt": "CheckProxyForDescribe",
+  "States": {
+    "CheckProxyForDescribe": {
+      "Type": "Choice",
+      "Comment": "Route to Lambda proxy for cross-region snapshot check, or direct SDK for same-region",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceRegion) %}",
+          "Next": "DescribeSnapshotViaProxy"
+        }
+      ],
+      "Default": "DescribeSnapshotDirect"
+    },
+
+    "DescribeSnapshotDirect": {
+      "Type": "Task",
+      "Comment": "Describe snapshot directly via SDK (same-region)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn": "{% $states.input.Account.RoleArn %}"
+      },
+      "Arguments": {
+        "DbClusterSnapshotIdentifier": "{% $states.input.SnapshotIdentifier %}"
+      },
+      "Output": "{% $merge([$states.input, {'SnapshotStatus': {'Status': $states.result.DbClusterSnapshots[0].Status, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'EngineVersion': $states.result.DbClusterSnapshots[0].EngineVersion}}]) %}",
+      "Next": "IsAvailable",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "EnsureSnapshotAvailableFailed"
+      }]
+    },
+
+    "DescribeSnapshotViaProxy": {
+      "Type": "Task",
+      "Comment": "Describe snapshot via Lambda proxy (cross-region: snapshot is in a different region than the SFN)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
+        "Payload": {
+          "Service": "rds",
+          "Action": "describe_db_cluster_snapshots",
+          "Region": "{% $states.input.SourceRegion %}",
+          "RoleArn": "{% $states.input.Account.RoleArn %}",
+          "Parameters": {
+            "DBClusterSnapshotIdentifier": "{% $states.input.SnapshotIdentifier %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'SnapshotStatus': {'Status': $states.result.Payload.DbClusterSnapshots[0].Status, 'SnapshotArn': $states.result.Payload.DbClusterSnapshots[0].DbClusterSnapshotArn, 'EngineVersion': $states.result.Payload.DbClusterSnapshots[0].EngineVersion}}]) %}",
+      "Next": "IsAvailable",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "EnsureSnapshotAvailableFailed"
+      }]
+    },
+
+    "IsAvailable": {
+      "Type": "Choice",
+      "Comment": "Check if snapshot status is 'available'",
+      "Choices": [
+        {
+          "Condition": "{% $states.input.SnapshotStatus.Status = 'available' %}",
+          "Next": "SnapshotAvailable"
+        },
+        {
+          "Condition": "{% $states.input.SnapshotStatus.Status = 'failed' %}",
+          "Next": "EnsureSnapshotAvailableFailed"
+        }
+      ],
+      "Default": "WaitSnapshot"
+    },
+
+    "WaitSnapshot": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckProxyForDescribe"
+    },
+
+    "SnapshotAvailable": {
+      "Type": "Pass",
+      "Comment": "Snapshot is available - format output",
+      "Output": {
+        "SnapshotIdentifier": "{% $states.input.SnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.input.SnapshotStatus.SnapshotArn %}",
+        "Status": "available",
+        "EngineVersion": "{% $states.input.SnapshotStatus.EngineVersion %}"
+      },
+      "Next": "EnsureSnapshotAvailableSucceeded"
+    },
+
+    "EnsureSnapshotAvailableSucceeded": {
+      "Type": "Succeed"
+    },
+
+    "EnsureSnapshotAvailableFailed": {
+      "Type": "Fail",
+      "Error": "EnsureSnapshotAvailableFailed",
+      "Cause": "Failed to verify snapshot availability"
+    }
+  }
+}

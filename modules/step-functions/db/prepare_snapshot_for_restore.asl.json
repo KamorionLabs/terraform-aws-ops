@@ -157,7 +157,7 @@
         }
       },
       "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.Payload.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.Payload.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.Payload.DbClusterSnapshot.Status, 'EngineVersion': $states.result.Payload.DbClusterSnapshot.EngineVersion, 'StorageEncrypted': $states.result.Payload.DbClusterSnapshot.StorageEncrypted, 'KmsKeyId': $states.result.Payload.DbClusterSnapshot.KmsKeyId ? $states.result.Payload.DbClusterSnapshot.KmsKeyId : null}}]) %}",
-      "Next": "WaitManualSnapshot",
+      "Next": "EnsureManualSnapshotAvailable",
       "Catch": [
         {
           "ErrorEquals": ["DBClusterSnapshotAlreadyExistsFault"],
@@ -188,39 +188,7 @@
         }
       },
       "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.Payload.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.Payload.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.Payload.DbClusterSnapshots[0].Status, 'EngineVersion': $states.result.Payload.DbClusterSnapshots[0].EngineVersion, 'StorageEncrypted': $states.result.Payload.DbClusterSnapshots[0].StorageEncrypted, 'KmsKeyId': $states.result.Payload.DbClusterSnapshots[0].KmsKeyId ? $states.result.Payload.DbClusterSnapshots[0].KmsKeyId : null}}]) %}",
-      "Next": "IsManualSnapshotComplete"
-    },
-
-    "CheckProxyForManualStatus": {
-      "Type": "Choice",
-      "Comment": "Route manual snapshot status check to proxy (cross-region) or direct SDK (same-region)",
-      "Choices": [
-        {
-          "Condition": "{% $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $split($states.context.StateMachine.Id, ':')[3] %}",
-          "Next": "CheckManualSnapshotStatusViaProxy"
-        }
-      ],
-      "Default": "CheckManualSnapshotStatus"
-    },
-
-    "CheckManualSnapshotStatusViaProxy": {
-      "Type": "Task",
-      "Comment": "Check manual snapshot status via Lambda proxy (cross-region)",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Arguments": {
-        "FunctionName": "{% $states.input.ProxyLambdaArn %}",
-        "Payload": {
-          "Service": "rds",
-          "Action": "describe_db_cluster_snapshots",
-          "Region": "{% $states.input.SourceAccount.Region %}",
-          "RoleArn": "{% $states.input.SourceAccount.RoleArn %}",
-          "Parameters": {
-            "DBClusterSnapshotIdentifier": "{% $states.input.ManualSnapshot.SnapshotIdentifier %}"
-          }
-        }
-      },
-      "Output": "{% $merge([$states.input, {'ManualSnapshotStatus': {'Status': $states.result.Payload.DbClusterSnapshots[0].Status}}]) %}",
-      "Next": "IsManualSnapshotComplete"
+      "Next": "EnsureManualSnapshotAvailable"
     },
 
     "GenerateManualSnapshotId": {
@@ -299,7 +267,7 @@
         ]
       },
       "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshot.Status}}]) %}",
-      "Next": "WaitCopySnapshot",
+      "Next": "EnsureCopySnapshotAvailable",
       "Catch": [
         {
           "ErrorEquals": ["Rds.DBClusterSnapshotAlreadyExistsFault"],
@@ -330,7 +298,7 @@
         "DbClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}"
       },
       "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshots[0].Status}}]) %}",
-      "Next": "IsCopyComplete"
+      "Next": "EnsureCopySnapshotAvailable"
     },
 
     "FindExistingCopyBySource": {
@@ -358,45 +326,32 @@
       "Choices": [
         {
           "Condition": "{% $states.input.CopiedSnapshot != null %}",
-          "Next": "IsCopyComplete"
+          "Next": "EnsureCopySnapshotAvailable"
         }
       ],
       "Default": "PrepareFailed"
     },
 
-    "WaitCopySnapshot": {
-      "Type": "Wait",
-      "Seconds": 30,
-      "Next": "CheckCopyStatus"
-    },
-
-    "CheckCopyStatus": {
+    "EnsureCopySnapshotAvailable": {
       "Type": "Task",
-      "Comment": "Check copy progress",
-      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
-      "Credentials": {
-        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
-      },
+      "Comment": "Wait for copied snapshot to become available via EnsureSnapshotAvailable sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Arguments": {
-        "DbClusterSnapshotIdentifier": "{% $states.input.CopyParams.TargetSnapshotId %}"
-      },
-      "Output": "{% $merge([$states.input, {'CopyStatus': {'Status': $states.result.DbClusterSnapshots[0].Status, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn}}]) %}",
-      "Next": "IsCopyComplete"
-    },
-
-    "IsCopyComplete": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Condition": "{% $states.input.CopiedSnapshot.Status = 'available' or $states.input.CopyStatus.Status = 'available' %}",
-          "Next": "PrepareSnapshotInfoFromCopy"
+        "StateMachineArn": "${ensure_snapshot_available_arn}",
+        "Input": {
+          "SnapshotIdentifier": "{% $states.input.CopiedSnapshot.SnapshotIdentifier ? $states.input.CopiedSnapshot.SnapshotIdentifier : $states.input.CopyParams.TargetSnapshotId %}",
+          "Account": {
+            "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+          }
         },
-        {
-          "Condition": "{% $states.input.CopiedSnapshot.Status = 'failed' or $states.input.CopyStatus.Status = 'failed' %}",
-          "Next": "PrepareFailed"
-        }
-      ],
-      "Default": "WaitCopySnapshot"
+        "Name": "{% 'EnsureCopy-' & $substringAfter($states.context.Execution.Name, ':') %}"
+      },
+      "Output": "{% $merge([$states.input, {'CopiedSnapshot': {'SnapshotArn': $states.result.Output.SnapshotArn, 'SnapshotIdentifier': $states.result.Output.SnapshotIdentifier, 'Status': $states.result.Output.Status}}]) %}",
+      "Next": "PrepareSnapshotInfoFromCopy",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
     },
 
     "PrepareSnapshotInfoFromCopy": {
@@ -436,7 +391,7 @@
         ]
       },
       "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshot.DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshot.DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshot.Status, 'EngineVersion': $states.result.DbClusterSnapshot.EngineVersion, 'StorageEncrypted': $states.result.DbClusterSnapshot.StorageEncrypted, 'KmsKeyId': $states.result.DbClusterSnapshot.KmsKeyId ? $states.result.DbClusterSnapshot.KmsKeyId : null}}]) %}",
-      "Next": "WaitManualSnapshot",
+      "Next": "EnsureManualSnapshotAvailable",
       "Catch": [
         {
           "ErrorEquals": ["Rds.DBClusterSnapshotAlreadyExistsFault"],
@@ -461,42 +416,24 @@
         "DbClusterSnapshotIdentifier": "{% $states.input.ManualSnapshotParams.TargetSnapshotId %}"
       },
       "Output": "{% $merge([$states.input, {'ManualSnapshot': {'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn, 'SnapshotIdentifier': $states.result.DbClusterSnapshots[0].DbClusterSnapshotIdentifier, 'Status': $states.result.DbClusterSnapshots[0].Status, 'EngineVersion': $states.result.DbClusterSnapshots[0].EngineVersion, 'StorageEncrypted': $states.result.DbClusterSnapshots[0].StorageEncrypted, 'KmsKeyId': $states.result.DbClusterSnapshots[0].KmsKeyId ? $states.result.DbClusterSnapshots[0].KmsKeyId : null}}]) %}",
-      "Next": "IsManualSnapshotComplete"
+      "Next": "EnsureManualSnapshotAvailable"
     },
 
-    "WaitManualSnapshot": {
-      "Type": "Wait",
-      "Seconds": 30,
-      "Next": "CheckProxyForManualStatus"
-    },
-
-    "CheckManualSnapshotStatus": {
+    "EnsureManualSnapshotAvailable": {
       "Type": "Task",
-      "Comment": "Check manual snapshot creation progress",
-      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
-      "Credentials": {
-        "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
-      },
+      "Comment": "Wait for manual snapshot to become available via EnsureSnapshotAvailable sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Arguments": {
-        "DbClusterSnapshotIdentifier": "{% $states.input.ManualSnapshot.SnapshotIdentifier %}"
+        "StateMachineArn": "${ensure_snapshot_available_arn}",
+        "Input": "{% $merge([{'SnapshotIdentifier': $states.input.ManualSnapshot.SnapshotIdentifier, 'Account': {'RoleArn': $states.input.SourceAccount.RoleArn}}, $exists($states.input.ProxyLambdaArn) and $exists($states.input.SourceAccount.Region) ? {'ProxyLambdaArn': $states.input.ProxyLambdaArn, 'SourceRegion': $states.input.SourceAccount.Region} : {}]) %}",
+        "Name": "{% 'EnsureManual-' & $substringAfter($states.context.Execution.Name, ':') %}"
       },
-      "Output": "{% $merge([$states.input, {'ManualSnapshotStatus': {'Status': $states.result.DbClusterSnapshots[0].Status}}]) %}",
-      "Next": "IsManualSnapshotComplete"
-    },
-
-    "IsManualSnapshotComplete": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Condition": "{% $states.input.ManualSnapshot.Status = 'available' or $states.input.ManualSnapshotStatus.Status = 'available' %}",
-          "Next": "PrepareSnapshotInfoFromManual"
-        },
-        {
-          "Condition": "{% $states.input.ManualSnapshot.Status = 'failed' or $states.input.ManualSnapshotStatus.Status = 'failed' %}",
-          "Next": "PrepareFailed"
-        }
-      ],
-      "Default": "WaitManualSnapshot"
+      "Output": "{% $merge([$states.input, {'ManualSnapshot': $merge([$states.input.ManualSnapshot, {'Status': $states.result.Output.Status, 'SnapshotArn': $states.result.Output.SnapshotArn}])}]) %}",
+      "Next": "PrepareSnapshotInfoFromManual",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "Next": "PrepareFailed"
+      }]
     },
 
     "PrepareSnapshotInfoFromManual": {
