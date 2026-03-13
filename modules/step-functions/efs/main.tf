@@ -18,6 +18,11 @@ locals {
     check_replication_sync           = "check_replication_sync.asl.json"
     setup_cross_account_replication  = "setup_cross_account_replication.asl.json"
     delete_replication               = "delete_replication.asl.json"
+
+    # Sub-SFNs — Phase 1 Extraction (reusable building blocks)
+    manage_filesystem_policy = "manage_filesystem_policy.asl.json"
+    manage_access_point      = "manage_access_point.asl.json"
+    manage_lambda_lifecycle  = "manage_lambda_lifecycle.asl.json"
   }
 
   # Naming: pascal = "EFS-RestoreFromBackup", kebab = "efs-restore-from-backup"

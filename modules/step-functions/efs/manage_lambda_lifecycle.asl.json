@@ -1,0 +1,11 @@
+{
+  "Comment": "STUB - ManageLambdaLifecycle | To be implemented in Plan 03",
+  "StartAt": "Placeholder",
+  "States": {
+    "Placeholder": {
+      "Type": "Fail",
+      "Error": "NotImplemented",
+      "Cause": "This sub-SFN will be implemented in Plan 03"
+    }
+  }
+}
