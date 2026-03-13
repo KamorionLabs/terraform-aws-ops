@@ -252,13 +252,25 @@ class TestASLCatchSelfContained:
 
     @staticmethod
     def _get_sub_sfn_files() -> list[tuple[str, Path]]:
-        """Get EFS sub-SFN files (manage_*.asl.json) for parametrization."""
+        """Get sub-SFN files across all modules for parametrization.
+
+        Discovers sub-SFNs using known patterns per module:
+        - EFS: manage_*.asl.json, check_flag_file_sync.asl.json
+        - DB: ensure_snapshot_available.asl.json, cluster_switch_sequence.asl.json (future)
+        Files that don't exist yet are skipped.
+        """
+        sub_sfn_patterns = [
+            (PROJECT_ROOT / "modules" / "step-functions" / "efs", "manage_*.asl.json"),
+            (PROJECT_ROOT / "modules" / "step-functions" / "efs", "check_flag_file_sync.asl.json"),
+            (PROJECT_ROOT / "modules" / "step-functions" / "db", "ensure_snapshot_available.asl.json"),
+            (PROJECT_ROOT / "modules" / "step-functions" / "db", "cluster_switch_sequence.asl.json"),
+        ]
         sub_sfn_files = []
-        efs_dir = PROJECT_ROOT / "modules" / "step-functions" / "efs"
-        if efs_dir.exists():
-            for path in sorted(efs_dir.glob("manage_*.asl.json")):
-                test_id = path.stem
-                sub_sfn_files.append((test_id, path))
+        for module_dir, pattern in sub_sfn_patterns:
+            if module_dir.exists():
+                for path in sorted(module_dir.glob(pattern)):
+                    test_id = path.stem
+                    sub_sfn_files.append((test_id, path))
         return sub_sfn_files
 
     SUB_SFN_FILES = _get_sub_sfn_files.__func__()

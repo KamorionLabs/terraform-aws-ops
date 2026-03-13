@@ -1,0 +1,63 @@
+{
+  "comment": "Monitors EFS cross-account replication sync status with lazy Lambda creation. Creates context-specific Lambdas on first use, reuses them on subsequent runs. Supports optional SSM parameters for subpath configuration.",
+  "terminal_outputs": {
+    "CheckSucceeded": [],
+    "PrepareEnablingOutput": [
+      "DestinationFileSystemId",
+      "Message",
+      "ModuleName",
+      "ReplicationState",
+      "SourceFileSystemId",
+      "Status"
+    ],
+    "PrepareFlagVerifiedOutput": [
+      "Context",
+      "DestinationDirectoryListing",
+      "DestinationFileSystemId",
+      "DestinationLambdaName",
+      "FlagFileVerified",
+      "FlagId",
+      "Message",
+      "ModuleName",
+      "PropagationTiming",
+      "ReplicationInfo",
+      "SourceDirectoryListing",
+      "SourceFileSystemId",
+      "SourceLambdaName",
+      "Status"
+    ],
+    "PrepareNoSyncOutput": [
+      "DestinationFileSystemId",
+      "Message",
+      "ModuleName",
+      "ReplicationState",
+      "SourceFileSystemId",
+      "Status"
+    ],
+    "PrepareOutputAfterTimeout": [
+      "DestinationFileSystemId",
+      "FlagId",
+      "Message",
+      "ModuleName",
+      "SourceFileSystemId",
+      "Status"
+    ],
+    "PrepareOutputNoFlagCheck": [
+      "DestinationFileSystemId",
+      "FlagFileVerified",
+      "LastReplicatedTimestamp",
+      "Message",
+      "ModuleName",
+      "SourceFileSystemId",
+      "Status"
+    ],
+    "TimeoutReached": [
+      "DestinationFileSystemId",
+      "Message",
+      "ModuleName",
+      "SourceFileSystemId",
+      "Status",
+      "WaitCount"
+    ]
+  }
+}

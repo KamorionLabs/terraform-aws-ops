@@ -1,0 +1,816 @@
+{
+  "Comment": "CheckFlagFileSync | Input: {SourceFileSystemId, DestinationFileSystemId, SourceAccount: {RoleArn}, DestinationAccount: {RoleArn}, LambdaConfig: {SourceLambdaPrefix, DestinationLambdaPrefix, SourceLambdaRoleArn, DestinationLambdaRoleArn, CodeS3Bucket, CodeS3Key, SourceSubnetIds, SourceSecurityGroupIds, DestinationSubnetIds, DestinationSecurityGroupIds, ForceUpdateLambdaCode?}, SourceSubpath, DestinationSubpath, FlagId, Context} | Output: {SyncVerified, FlagId, SourceTime, DestinationTime, Status}",
+  "StartAt": "InitializeFlagSync",
+  "States": {
+    "InitializeFlagSync": {
+      "Type": "Pass",
+      "Comment": "Build Lambda function names and set retry defaults",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
+        "FlagId.$": "$.FlagId",
+        "Context.$": "$.Context",
+        "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.SourceLambdaPrefix, $.Context)",
+        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)",
+        "FlagRetryCount": 0,
+        "MaxFlagRetries": 15
+      },
+      "Next": "EnsureSourceLambda"
+    },
+    "EnsureSourceLambda": {
+      "Type": "Task",
+      "Comment": "Ensure source Lambda exists via ManageLambdaLifecycle sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${manage_lambda_lifecycle_arn}",
+        "Input": {
+          "LambdaConfig": {
+            "FunctionName.$": "$.SourceLambdaName",
+            "Runtime": "python3.11",
+            "Handler": "check_flag_file.lambda_handler",
+            "Role.$": "$.LambdaConfig.SourceLambdaRoleArn",
+            "Code": {
+              "S3Bucket.$": "$.LambdaConfig.CodeS3Bucket",
+              "S3Key.$": "$.LambdaConfig.CodeS3Key"
+            },
+            "Timeout": 60,
+            "MemorySize": 128,
+            "Architectures": ["arm64"],
+            "VpcConfig": {
+              "SubnetIds.$": "$.LambdaConfig.SourceSubnetIds",
+              "SecurityGroupIds.$": "$.LambdaConfig.SourceSecurityGroupIds"
+            },
+            "Environment": {
+              "Variables": {
+                "LOG_LEVEL": "INFO",
+                "EFS_MOUNT_PATH": "/mnt/efs"
+              }
+            },
+            "Tags": {
+              "ManagedBy": "StepFunctions",
+              "Context.$": "$.Context",
+              "Purpose": "EFS-FlagFile-Check"
+            },
+            "ForceUpdateCode.$": "States.ArrayGetItem(States.Array($.LambdaConfig.ForceUpdateLambdaCode, false), 0)"
+          },
+          "Account.$": "$.SourceAccount"
+        },
+        "Name.$": "States.Format('{}-SrcLambda', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "FunctionName.$": "$.Output.FunctionName",
+        "FunctionArn.$": "$.Output.FunctionArn",
+        "Status.$": "$.Output.Status"
+      },
+      "ResultPath": "$.SourceLambdaResult",
+      "Next": "CreateSourceAP",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckFlagFileSyncFailed"
+        }
+      ]
+    },
+    "CreateSourceAP": {
+      "Type": "Task",
+      "Comment": "Create source access point via ManageAccessPoint sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${manage_access_point_arn}",
+        "Input": {
+          "FileSystemId.$": "$.SourceFileSystemId",
+          "AccessPointConfig": {
+            "ClientToken.$": "States.Format('src-{}-{}', $.Context, $.FlagId)",
+            "PosixUser": {
+              "Uid": 0,
+              "Gid": 0
+            },
+            "RootDirectory": {
+              "Path": "/",
+              "CreationInfo": {
+                "OwnerUid": 0,
+                "OwnerGid": 0,
+                "Permissions": "755"
+              }
+            },
+            "Tags": [
+              {
+                "Key": "Name",
+                "Value.$": "States.Format('temp-flag-check-{}', $.FlagId)"
+              },
+              {
+                "Key": "ManagedBy",
+                "Value": "StepFunctions"
+              },
+              {
+                "Key": "Purpose",
+                "Value": "FlagFileCheck"
+              }
+            ]
+          },
+          "Account.$": "$.SourceAccount"
+        },
+        "Name.$": "States.Format('{}-SrcAP', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "AccessPointId.$": "$.Output.AccessPointId",
+        "AccessPointArn.$": "$.Output.AccessPointArn",
+        "FileSystemId.$": "$.Output.FileSystemId",
+        "Status.$": "$.Output.Status"
+      },
+      "ResultPath": "$.SourceAccessPoint",
+      "Next": "BindSourceAPToLambda",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckFlagFileSyncFailed"
+        }
+      ]
+    },
+    "BindSourceAPToLambda": {
+      "Type": "Task",
+      "Comment": "Bind source access point to source Lambda via FileSystemConfigs",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionConfiguration",
+      "Parameters": {
+        "FunctionName.$": "$.SourceLambdaName",
+        "FileSystemConfigs": [
+          {
+            "Arn.$": "$.SourceAccessPoint.AccessPointArn",
+            "LocalMountPath": "/mnt/efs"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitSourceBind",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupSourceAPOnError"
+        }
+      ]
+    },
+    "WaitSourceBind": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "EnsureDestLambda"
+    },
+    "EnsureDestLambda": {
+      "Type": "Task",
+      "Comment": "Ensure destination Lambda exists via ManageLambdaLifecycle sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${manage_lambda_lifecycle_arn}",
+        "Input": {
+          "LambdaConfig": {
+            "FunctionName.$": "$.DestinationLambdaName",
+            "Runtime": "python3.11",
+            "Handler": "check_flag_file.lambda_handler",
+            "Role.$": "$.LambdaConfig.DestinationLambdaRoleArn",
+            "Code": {
+              "S3Bucket.$": "$.LambdaConfig.CodeS3Bucket",
+              "S3Key.$": "$.LambdaConfig.CodeS3Key"
+            },
+            "Timeout": 60,
+            "MemorySize": 128,
+            "Architectures": ["arm64"],
+            "VpcConfig": {
+              "SubnetIds.$": "$.LambdaConfig.DestinationSubnetIds",
+              "SecurityGroupIds.$": "$.LambdaConfig.DestinationSecurityGroupIds"
+            },
+            "Environment": {
+              "Variables": {
+                "LOG_LEVEL": "INFO",
+                "EFS_MOUNT_PATH": "/mnt/efs"
+              }
+            },
+            "Tags": {
+              "ManagedBy": "StepFunctions",
+              "Context.$": "$.Context",
+              "Purpose": "EFS-FlagFile-Check"
+            },
+            "ForceUpdateCode.$": "States.ArrayGetItem(States.Array($.LambdaConfig.ForceUpdateLambdaCode, false), 0)"
+          },
+          "Account.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-DstLambda', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "FunctionName.$": "$.Output.FunctionName",
+        "FunctionArn.$": "$.Output.FunctionArn",
+        "Status.$": "$.Output.Status"
+      },
+      "ResultPath": "$.DestLambdaResult",
+      "Next": "CreateDestAP",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupSourceAPOnError"
+        }
+      ]
+    },
+    "CreateDestAP": {
+      "Type": "Task",
+      "Comment": "Create destination access point via ManageAccessPoint sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${manage_access_point_arn}",
+        "Input": {
+          "FileSystemId.$": "$.DestinationFileSystemId",
+          "AccessPointConfig": {
+            "ClientToken.$": "States.Format('dst-{}-{}', $.Context, $.FlagId)",
+            "PosixUser": {
+              "Uid": 0,
+              "Gid": 0
+            },
+            "RootDirectory": {
+              "Path": "/",
+              "CreationInfo": {
+                "OwnerUid": 0,
+                "OwnerGid": 0,
+                "Permissions": "755"
+              }
+            },
+            "Tags": [
+              {
+                "Key": "Name",
+                "Value.$": "States.Format('temp-flag-check-{}', $.FlagId)"
+              },
+              {
+                "Key": "ManagedBy",
+                "Value": "StepFunctions"
+              },
+              {
+                "Key": "Purpose",
+                "Value": "FlagFileCheck"
+              }
+            ]
+          },
+          "Account.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-DstAP', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "AccessPointId.$": "$.Output.AccessPointId",
+        "AccessPointArn.$": "$.Output.AccessPointArn",
+        "FileSystemId.$": "$.Output.FileSystemId",
+        "Status.$": "$.Output.Status"
+      },
+      "ResultPath": "$.DestinationAccessPoint",
+      "Next": "BindDestAPToLambda",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupSourceAPOnError"
+        }
+      ]
+    },
+    "BindDestAPToLambda": {
+      "Type": "Task",
+      "Comment": "Bind destination access point to destination Lambda via FileSystemConfigs",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionConfiguration",
+      "Parameters": {
+        "FunctionName.$": "$.DestinationLambdaName",
+        "FileSystemConfigs": [
+          {
+            "Arn.$": "$.DestinationAccessPoint.AccessPointArn",
+            "LocalMountPath": "/mnt/efs"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitDestBind",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 10,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupAllAPsOnError"
+        }
+      ]
+    },
+    "WaitDestBind": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "WriteFlagFile"
+    },
+    "WriteFlagFile": {
+      "Type": "Task",
+      "Comment": "Write flag file to source EFS via Lambda",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.SourceLambdaName",
+        "Payload": {
+          "action": "write",
+          "flag_id.$": "$.FlagId",
+          "subpath.$": "$.SourceSubpath"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "StatusCode.$": "$.Payload.statusCode",
+        "Body.$": "States.StringToJson($.Payload.body)"
+      },
+      "ResultPath": "$.WriteFlagResult",
+      "Next": "VerifyFlagWrite",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ResourceNotReadyException",
+            "Lambda.EFSMountFailureException",
+            "Lambda.EFSMountConnectivityException"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupAllAPsOnError"
+        }
+      ]
+    },
+    "VerifyFlagWrite": {
+      "Type": "Choice",
+      "Comment": "Verify flag file was written successfully (HTTP 200)",
+      "Choices": [
+        {
+          "Variable": "$.WriteFlagResult.StatusCode",
+          "NumericEquals": 200,
+          "Next": "RecordWriteTime"
+        }
+      ],
+      "Default": "CleanupAllAPsOnError"
+    },
+    "RecordWriteTime": {
+      "Type": "Pass",
+      "Comment": "Record the timestamp when flag was written",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
+        "FlagId.$": "$.FlagId",
+        "Context.$": "$.Context",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "FlagRetryCount.$": "$.FlagRetryCount",
+        "MaxFlagRetries.$": "$.MaxFlagRetries",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "FlagWriteTimestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "WaitPropagation"
+    },
+    "WaitPropagation": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Comment": "Wait for EFS replication to propagate the flag file",
+      "Next": "CheckFlagDest"
+    },
+    "CheckFlagDest": {
+      "Type": "Task",
+      "Comment": "Check if flag file exists on destination EFS",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.DestinationLambdaName",
+        "Payload": {
+          "action": "check",
+          "flag_id.$": "$.FlagId",
+          "timeout_seconds": 600,
+          "subpath.$": "$.DestinationSubpath"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "StatusCode.$": "$.Payload.statusCode",
+        "Body.$": "States.StringToJson($.Payload.body)"
+      },
+      "ResultPath": "$.CheckFlagResult",
+      "Next": "EvaluateFlag",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ResourceNotReadyException",
+            "Lambda.EFSMountFailureException",
+            "Lambda.EFSMountConnectivityException"
+          ],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupAllAPsOnError"
+        }
+      ]
+    },
+    "EvaluateFlag": {
+      "Type": "Choice",
+      "Comment": "Evaluate flag file replication result",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.CheckFlagResult.Body.exists",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.CheckFlagResult.Body.valid",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "RecordDetectedTime"
+        },
+        {
+          "Variable": "$.FlagRetryCount",
+          "NumericLessThanPath": "$.MaxFlagRetries",
+          "Next": "IncrementRetry"
+        }
+      ],
+      "Default": "CleanupAllAPsOnTimeout"
+    },
+    "RecordDetectedTime": {
+      "Type": "Pass",
+      "Comment": "Record timestamp when flag was detected on destination",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
+        "FlagId.$": "$.FlagId",
+        "Context.$": "$.Context",
+        "FlagRetryCount.$": "$.FlagRetryCount",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "FlagWriteTimestamp.$": "$.FlagWriteTimestamp",
+        "FlagDetectedTimestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "CleanupFlagFiles"
+    },
+    "IncrementRetry": {
+      "Type": "Pass",
+      "Comment": "Increment retry counter and wait before next check",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
+        "FlagId.$": "$.FlagId",
+        "Context.$": "$.Context",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "FlagRetryCount.$": "States.MathAdd($.FlagRetryCount, 1)",
+        "MaxFlagRetries.$": "$.MaxFlagRetries",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "FlagWriteTimestamp.$": "$.FlagWriteTimestamp"
+      },
+      "Next": "WaitBeforeRetry"
+    },
+    "WaitBeforeRetry": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "CheckFlagDest"
+    },
+    "CleanupFlagFiles": {
+      "Type": "Parallel",
+      "Comment": "Delete flag files from both source and destination",
+      "Branches": [
+        {
+          "StartAt": "DeleteSourceFlag",
+          "States": {
+            "DeleteSourceFlag": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.SourceLambdaName",
+                "Payload": {
+                  "action": "delete",
+                  "flag_id.$": "$.FlagId",
+                  "subpath.$": "$.SourceSubpath"
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "Next": "SourceFlagDeleted",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "SourceFlagDeleted"
+                }
+              ]
+            },
+            "SourceFlagDeleted": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DeleteDestFlag",
+          "States": {
+            "DeleteDestFlag": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.DestinationLambdaName",
+                "Payload": {
+                  "action": "delete",
+                  "flag_id.$": "$.FlagId",
+                  "subpath.$": "$.DestinationSubpath"
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "Next": "DestFlagDeleted",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "DestFlagDeleted"
+                }
+              ]
+            },
+            "DestFlagDeleted": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "CleanupAccessPoints"
+    },
+    "CleanupAccessPoints": {
+      "Type": "Parallel",
+      "Comment": "Clean up temporary access points (keep Lambdas for reuse)",
+      "Branches": [
+        {
+          "StartAt": "DeleteSourceAP",
+          "States": {
+            "DeleteSourceAP": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.SourceAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "SourceAPCleanupFailed"
+                }
+              ]
+            },
+            "SourceAPCleanupFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DeleteDestAP",
+          "States": {
+            "DeleteDestAP": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.DestinationAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "DestAPCleanupFailed"
+                }
+              ]
+            },
+            "DestAPCleanupFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Comment": "Return flag file sync verification result",
+      "Parameters": {
+        "SyncVerified": true,
+        "FlagId.$": "$.FlagId",
+        "SourceTime.$": "$.FlagWriteTimestamp",
+        "DestinationTime.$": "$.FlagDetectedTimestamp",
+        "Status": "Verified"
+      },
+      "Next": "SyncVerified"
+    },
+    "SyncVerified": {
+      "Type": "Succeed"
+    },
+    "CleanupAllAPsOnTimeout": {
+      "Type": "Parallel",
+      "Comment": "Cleanup access points after flag sync timeout",
+      "Branches": [
+        {
+          "StartAt": "DeleteSourceAPTimeout",
+          "States": {
+            "DeleteSourceAPTimeout": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.SourceAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "SourceAPTimeoutFailed"
+                }
+              ]
+            },
+            "SourceAPTimeoutFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DeleteDestAPTimeout",
+          "States": {
+            "DeleteDestAPTimeout": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.DestinationAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "DestAPTimeoutFailed"
+                }
+              ]
+            },
+            "DestAPTimeoutFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "CheckFlagFileSyncFailed"
+    },
+    "CleanupAllAPsOnError": {
+      "Type": "Parallel",
+      "Comment": "Best-effort cleanup of access points on error",
+      "Branches": [
+        {
+          "StartAt": "TryDeleteSourceAPError",
+          "States": {
+            "TryDeleteSourceAPError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.SourceAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "SourceAPErrorFailed"
+                }
+              ]
+            },
+            "SourceAPErrorFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "TryDeleteDestAPError",
+          "States": {
+            "TryDeleteDestAPError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.DestinationAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "DestAPErrorFailed"
+                }
+              ]
+            },
+            "DestAPErrorFailed": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "CheckFlagFileSyncFailed"
+    },
+    "CleanupSourceAPOnError": {
+      "Type": "Task",
+      "Comment": "Best-effort cleanup of source access point before failing",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+      "Parameters": {
+        "AccessPointId.$": "$.SourceAccessPoint.AccessPointId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "CheckFlagFileSyncFailed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "CheckFlagFileSyncFailed"
+        }
+      ]
+    },
+    "CheckFlagFileSyncFailed": {
+      "Type": "Fail",
+      "Error": "CheckFlagFileSyncFailed",
+      "Cause": "Failed to verify flag file sync between source and destination EFS"
+    }
+  }
+}

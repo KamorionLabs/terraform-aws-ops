@@ -1,0 +1,13 @@
+{
+  "comment": "Restore an RDS/Aurora cluster from snapshot or point-in-time. Uses prepare_snapshot_for_restore for same-account or cross-account snapshot preparation (copy + share).",
+  "terminal_outputs": {
+    "PrepareOutput": [
+      "CrossAccountShared",
+      "ModuleName",
+      "PrimaryIdentifier",
+      "SnapshotUsed",
+      "Status"
+    ],
+    "RestoreSucceeded": []
+  }
+}

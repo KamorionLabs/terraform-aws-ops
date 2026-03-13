@@ -1,0 +1,10 @@
+{
+  "comment": "Cross-Account Refresh Orchestrator - Full 5-phase flow with database, EFS, and EKS operations",
+  "terminal_outputs": {
+    "DryRunComplete": [
+      "Status",
+      "ValidationResult"
+    ],
+    "RefreshComplete": []
+  }
+}
