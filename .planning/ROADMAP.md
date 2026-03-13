@@ -28,7 +28,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Le CI GitHub Actions passe pour tous les fichiers cross-account (strip_credentials dans conftest.py elimine les echecs SFN Local)
   4. Tous les blocs candidats ont ete audites pour les references $$.Execution.Input avant extraction (TST-02) et le pattern templatefile() est etabli pour l'injection ARN
   5. Les tests ASL (validation JSON + ValidateStateMachineDefinition) couvrent les trois nouvelles sous-SFN
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — CI fix (strip_credentials, matrix EFS, audit $$.Execution.Input)
+- [ ] 01-02-PLAN.md — Extraction ManageFileSystemPolicy + Terraform registration + README
+- [ ] 01-03-PLAN.md — Extraction ManageAccessPoint + ManageLambdaLifecycle + README final
 
 ### Phase 2: Refactoring
 **Goal**: Les quatre fichiers de domaine complexes (check_replication_sync, setup_cross_account_replication, refresh_orchestrator, prepare_snapshot_for_restore) ont remplace leurs blocs dupliques inline par des appels aux sous-SFN de Phase 1, avec des interfaces externes inchangees.
@@ -60,6 +65,6 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Extraction | 0/TBD | Not started | - |
+| 1. Extraction | 0/3 | Planning complete | - |
 | 2. Refactoring | 0/TBD | Not started | - |
 | 3. Consolidation | 0/TBD | Not started | - |
