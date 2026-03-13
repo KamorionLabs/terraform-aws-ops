@@ -1,11 +1,84 @@
 {
-  "Comment": "STUB - ManageAccessPoint | To be implemented in Plan 03",
-  "StartAt": "Placeholder",
+  "Comment": "ManageAccessPoint | Input: {FileSystemId, AccessPointConfig: {PosixUser?, RootDirectory?, Tags?, ClientToken?}, Account: {RoleArn}} | Output: {AccessPointId, AccessPointArn, FileSystemId, Status}",
+  "StartAt": "CreateAccessPoint",
   "States": {
-    "Placeholder": {
+    "CreateAccessPoint": {
+      "Type": "Task",
+      "Comment": "Create an EFS access point with the provided configuration",
+      "Resource": "arn:aws:states:::aws-sdk:efs:createAccessPoint",
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId",
+        "ClientToken.$": "$.AccessPointConfig.ClientToken",
+        "PosixUser.$": "$.AccessPointConfig.PosixUser",
+        "RootDirectory.$": "$.AccessPointConfig.RootDirectory",
+        "Tags.$": "$.AccessPointConfig.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.AccessPoint",
+      "Next": "WaitAccessPointAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageAccessPointFailed"
+        }
+      ]
+    },
+    "WaitAccessPointAvailable": {
+      "Type": "Wait",
+      "Comment": "Wait for the access point to become available",
+      "Seconds": 5,
+      "Next": "DescribeAccessPoint"
+    },
+    "DescribeAccessPoint": {
+      "Type": "Task",
+      "Comment": "Check the lifecycle state of the access point",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeAccessPoints",
+      "Parameters": {
+        "AccessPointId.$": "$.AccessPoint.AccessPointId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.AccessPointStatus",
+      "Next": "IsAccessPointAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ManageAccessPointFailed"
+        }
+      ]
+    },
+    "IsAccessPointAvailable": {
+      "Type": "Choice",
+      "Comment": "Check if access point lifecycle state is available",
+      "Choices": [
+        {
+          "Variable": "$.AccessPointStatus.AccessPoints[0].LifeCycleState",
+          "StringEquals": "available",
+          "Next": "PrepareSuccessOutput"
+        }
+      ],
+      "Default": "WaitAccessPointAvailable"
+    },
+    "PrepareSuccessOutput": {
+      "Type": "Pass",
+      "Comment": "Return the access point details",
+      "Parameters": {
+        "AccessPointId.$": "$.AccessPoint.AccessPointId",
+        "AccessPointArn.$": "$.AccessPoint.AccessPointArn",
+        "FileSystemId.$": "$.FileSystemId",
+        "Status": "Available"
+      },
+      "End": true
+    },
+    "ManageAccessPointFailed": {
       "Type": "Fail",
-      "Error": "NotImplemented",
-      "Cause": "This sub-SFN will be implemented in Plan 03"
+      "Error": "ManageAccessPointFailed",
+      "Cause": "Failed to create or verify EFS access point - see $.Error for details"
     }
   }
 }
