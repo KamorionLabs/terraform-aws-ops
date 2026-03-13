@@ -14,8 +14,8 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 
 ### Extraction Sous-SFN
 
-- [ ] **SUB-01**: Creer sous-SFN ManageLambdaLifecycle (~8 states) eliminant ~24 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
-- [ ] **SUB-02**: Creer sous-SFN ManageAccessPoint (~4 states) eliminant ~12 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
+- [x] **SUB-01**: Creer sous-SFN ManageLambdaLifecycle (~8 states) eliminant ~24 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
+- [x] **SUB-02**: Creer sous-SFN ManageAccessPoint (~4 states) eliminant ~12 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
 - [x] **SUB-03**: Creer sous-SFN ManageFileSystemPolicy (~6 states) eliminant ~18 states dupliques dans setup_cross_account_replication et delete_replication
 - [x] **SUB-04**: Contrats Input/Output explicites documentes (JSON schema) pour chaque sous-SFN
 - [x] **SUB-05**: Catch auto-contenu par sous-SFN — chaque sous-SFN gere ses erreurs sans dependre du parent
@@ -40,7 +40,7 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 
 ### Tests & CI
 
-- [ ] **TST-01**: Tests ASL de validation pour chaque nouvelle sous-SFN (auto-decouverte via rglob)
+- [x] **TST-01**: Tests ASL de validation pour chaque nouvelle sous-SFN (auto-decouverte via rglob)
 - [x] **TST-02**: Audit pre-extraction des references $$.Execution.Input dans chaque bloc candidat pour eviter le scope loss
 
 ## v2 Requirements
@@ -72,13 +72,13 @@ Deferred a un milestone futur.
 |-------------|-------|--------|
 | PRE-01 | Phase 1 | Complete |
 | PRE-02 | Phase 1 | Complete |
-| SUB-01 | Phase 1 | Pending |
-| SUB-02 | Phase 1 | Pending |
+| SUB-01 | Phase 1 | Complete |
+| SUB-02 | Phase 1 | Complete |
 | SUB-03 | Phase 1 | Complete |
 | SUB-04 | Phase 1 | Complete |
 | SUB-05 | Phase 1 | Complete |
 | SUB-06 | Phase 1 | Complete |
-| TST-01 | Phase 1 | Pending |
+| TST-01 | Phase 1 | Complete |
 | TST-02 | Phase 1 | Complete |
 | REF-01 | Phase 2 | Pending |
 | REF-02 | Phase 2 | Pending |
