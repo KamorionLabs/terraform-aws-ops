@@ -25,7 +25,7 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 
 - [x] **REF-01**: Refactorer check_replication_sync de 72 a ~35 states en appelant ManageLambdaLifecycle x2, ManageAccessPoint x2, et en extrayant CheckFlagFileSync
 - [x] **REF-02**: Refactorer setup_cross_account_replication de 53 a ~30 states en appelant ManageFileSystemPolicy x2
-- [ ] **REF-03**: Refactorer refresh_orchestrator de 51 a ~30 states en extrayant ClusterSwitchSequence et simplifiant les Choice states
+- [x] **REF-03**: Refactorer refresh_orchestrator de 51 a ~30 states en extrayant ClusterSwitchSequence et simplifiant les Choice states
 - [x] **REF-04**: Refactorer prepare_snapshot_for_restore de 39 a ~18 states en extrayant EnsureSnapshotAvailable reutilisable par restore_cluster
 - [x] **REF-05**: Interfaces externes (Input/Output) des SFN refactorees restent identiques pour les appelants existants
 
@@ -82,7 +82,7 @@ Deferred a un milestone futur.
 | TST-02 | Phase 1 | Complete |
 | REF-01 | Phase 2 | Complete |
 | REF-02 | Phase 2 | Complete |
-| REF-03 | Phase 2 | Pending |
+| REF-03 | Phase 2 | Complete |
 | REF-04 | Phase 2 | Complete |
 | REF-05 | Phase 2 | Complete |
 | CON-01 | Phase 3 | Pending |
