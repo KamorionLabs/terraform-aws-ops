@@ -54,6 +54,22 @@ jobs:
       - name: Run pytest ASL validation tests
         run: pytest tests/test_asl_validation.py -v --tb=short
 
+      - name: Audit Execution.Input references in sub-SFNs
+        run: |
+          echo "Scanning for \$\$.Execution.Input in sub-SFN files..."
+          # Sub-SFNs must NOT use $$.Execution.Input (scope loss risk)
+          FOUND_ISSUE=0
+          for f in modules/step-functions/efs/manage_*.asl.json; do
+            if [ -f "$f" ] && grep -q 'Execution.Input' "$f"; then
+              echo "FAIL: $f contains \$\$.Execution.Input reference (scope loss risk)"
+              FOUND_ISSUE=1
+            fi
+          done
+          if [ "$FOUND_ISSUE" -eq 1 ]; then
+            exit 1
+          fi
+          echo "OK: No sub-SFN files contain \$\$.Execution.Input references"
+
   # Job 2: Step Functions Local (Docker)
   test-sfn-local:
     name: Step Functions Local Tests
@@ -184,7 +200,19 @@ jobs:
       fail-fast: false
       matrix:
         step_function:
+          # Existing EFS step functions
+          - check_replication_sync
+          - cleanup_efs_lambdas
+          - create_filesystem
           - delete_filesystem
+          - delete_replication
+          - get_subpath_and_store_in_ssm
+          - restore_from_backup
+          - setup_cross_account_replication
+          # Phase 1 sub-SFNs (will be created in Plan 02/03)
+          - manage_filesystem_policy
+          - manage_access_point
+          - manage_lambda_lifecycle
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -196,6 +224,7 @@ jobs:
 
           if [ ! -f "$file" ]; then
             echo "File not found (may not be implemented yet): $file"
+            # Permissive for now — future sub-SFNs will be created in Plan 02/03
             exit 0
           fi
 
@@ -211,6 +240,15 @@ jobs:
             echo "Missing required ASL fields"
             exit 1
           fi
+
+          # Count cross-account credentials
+          creds_count=$(jq '[.. | .Credentials? // empty | select(. != null)] | length' "$file")
+          echo "Cross-account Credentials blocks: $creds_count"
+
+          # Count Task states and error handling
+          task_count=$(jq '[.States | to_entries[] | select(.value.Type == "Task")] | length' "$file")
+          catch_count=$(jq '[.States | to_entries[] | select(.value.Type == "Task" and .value.Catch != null)] | length' "$file")
+          echo "Task states: $task_count (with Catch: $catch_count)"
 
           echo "${{ matrix.step_function }} is valid"
 
