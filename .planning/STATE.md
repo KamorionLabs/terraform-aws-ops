@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 1 research complete, planning next
-last_updated: "2026-03-13T11:07:01.168Z"
-last_activity: 2026-03-13 — Roadmap initialise, phases derivees des requirements
+status: executing
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-03-13T11:31:52.880Z"
+last_activity: 2026-03-13 — Completed 01-01 CI fix and test infrastructure
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
   percent: 0
 ---
 
@@ -26,32 +26,34 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 1 of 3 (Extraction)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-03-13 — Roadmap initialise, phases derivees des requirements
+Plan: 1 of 3 in current phase
+Status: Executing
+Last activity: 2026-03-13 — Completed 01-01 CI fix and test infrastructure
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: -
-- Total execution time: 0h
+- Total plans completed: 1
+- Average duration: 3min
+- Total execution time: 3min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Extraction | TBD | - | - |
-| 2. Refactoring | TBD | - | - |
-| 3. Consolidation | TBD | - | - |
+| 1. Extraction | 1/3 | 3min | 3min |
+| 2. Refactoring | 0/TBD | - | - |
+| 3. Consolidation | 0/TBD | - | - |
 
 **Recent Trend:**
-- Last 5 plans: -
-- Trend: -
+- Last 5 plans: 01-01 (3min)
+- Trend: starting
 
-*Updated after each plan completion*
+| Plan | Duration | Tasks | Files |
+|------|----------|-------|-------|
+| Phase 01 P01 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -63,6 +65,9 @@ Decisions recentes affectant le travail courant :
 - [Init]: Extraire en sous-SFN plutot que templating — reutilisation native AWS, testable independamment
 - [Init]: Phases sequentielles (1→2→3) — Phase 2 depend des sous-SFN de Phase 1
 - [Init]: Consolider pub/priv via Account.RoleArn optionnel — une seule source de verite
+- [Phase 01]: Recursive strip_credentials handles Parallel/Map nested states
+- [Phase 01]: TestStateMachineCreation uses fixture for single stripping point
+- [Phase 01]: EFS CI matrix keeps exit 0 for future sub-SFN files not yet created
 
 ### Pending Todos
 
@@ -76,6 +81,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T11:07:01.166Z
-Stopped at: Phase 1 research complete, planning next
-Resume file: .planning/phases/01-extraction/01-RESEARCH.md
+Last session: 2026-03-13T11:31:52.878Z
+Stopped at: Completed 01-01-PLAN.md
+Resume file: .planning/phases/01-extraction/01-01-SUMMARY.md

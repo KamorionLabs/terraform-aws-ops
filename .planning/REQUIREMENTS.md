@@ -9,7 +9,7 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 
 ### Prerequisites
 
-- [ ] **PRE-01**: Fix CI GitHub Actions — stripper les champs Credentials dans conftest.py pour que SFN Local accepte les definitions cross-account
+- [x] **PRE-01**: Fix CI GitHub Actions — stripper les champs Credentials dans conftest.py pour que SFN Local accepte les definitions cross-account
 - [ ] **PRE-02**: Etablir le pattern templatefile() pour injection ARN des sous-SFN dans les modules Terraform appelants
 
 ### Extraction Sous-SFN
@@ -41,7 +41,7 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 ### Tests & CI
 
 - [ ] **TST-01**: Tests ASL de validation pour chaque nouvelle sous-SFN (auto-decouverte via rglob)
-- [ ] **TST-02**: Audit pre-extraction des references $$.Execution.Input dans chaque bloc candidat pour eviter le scope loss
+- [x] **TST-02**: Audit pre-extraction des references $$.Execution.Input dans chaque bloc candidat pour eviter le scope loss
 
 ## v2 Requirements
 
@@ -70,7 +70,7 @@ Deferred a un milestone futur.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRE-01 | Phase 1 | Pending |
+| PRE-01 | Phase 1 | Complete |
 | PRE-02 | Phase 1 | Pending |
 | SUB-01 | Phase 1 | Pending |
 | SUB-02 | Phase 1 | Pending |
@@ -79,7 +79,7 @@ Deferred a un milestone futur.
 | SUB-05 | Phase 1 | Pending |
 | SUB-06 | Phase 1 | Pending |
 | TST-01 | Phase 1 | Pending |
-| TST-02 | Phase 1 | Pending |
+| TST-02 | Phase 1 | Complete |
 | REF-01 | Phase 2 | Pending |
 | REF-02 | Phase 2 | Pending |
 | REF-03 | Phase 2 | Pending |
