@@ -196,7 +196,7 @@
                     {"Variable": "$.Database.MySQLOperations.DumpSubPath", "IsPresent": true},
                     {"Variable": "$.Database.MySQLOperations.TablesToDump", "IsPresent": true}
                   ],
-                  "Next": "CheckMysqlImportConditional"
+                  "Next": "CheckEKSDumpFields"
                 }
               ],
               "Default": "ConfigMissing_MySQLOps"
@@ -204,6 +204,29 @@
             "ConfigMissing_MySQLOps": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "Database.MySQLOperations", "Required": ["DatabaseName", "EfsPvcName", "DumpSubPath", "TablesToDump"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEKSDumpFields": {
+              "Type": "Choice",
+              "Comment": "Dump/import runs on EKS - NodeSelector, Tolerations and Scaling are required",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.NodeSelector", "IsPresent": true},
+                    {"Variable": "$.EKS.Tolerations", "IsPresent": true},
+                    {"Variable": "$.EKS.Scaling.MinimumCapacity", "IsPresent": true},
+                    {"Variable": "$.EKS.Scaling.TargetCapacity", "IsPresent": true},
+                    {"Variable": "$.K8sProxyLambdaArn", "IsPresent": true}
+                  ],
+                  "Next": "CheckMysqlImportConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EKSDump"
+            },
+            "ConfigMissing_EKSDump": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.DumpImport", "Required": ["EKS.NodeSelector", "EKS.Tolerations", "EKS.Scaling.MinimumCapacity", "EKS.Scaling.TargetCapacity", "K8sProxyLambdaArn"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
