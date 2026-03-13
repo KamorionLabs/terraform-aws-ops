@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-03-13T11:31:52.880Z"
-last_activity: 2026-03-13 — Completed 01-01 CI fix and test infrastructure
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-03-13T11:37:40.942Z"
+last_activity: 2026-03-13 — Completed 01-02 ManageFileSystemPolicy extraction + Terraform registration
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 3
-  completed_plans: 1
-  percent: 0
+  completed_plans: 2
+  percent: 67
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 1 of 3 (Extraction)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: Executing
-Last activity: 2026-03-13 — Completed 01-01 CI fix and test infrastructure
+Last activity: 2026-03-13 — Completed 01-02 ManageFileSystemPolicy extraction + Terraform registration
 
-Progress: [███░░░░░░░] 33%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [███░░░░░░░] 33%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 01 P01 | 3min | 2 tasks | 4 files |
+| Phase 01-extraction P02 | 2min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -68,6 +69,9 @@ Decisions recentes affectant le travail courant :
 - [Phase 01]: Recursive strip_credentials handles Parallel/Map nested states
 - [Phase 01]: TestStateMachineCreation uses fixture for single stripping point
 - [Phase 01]: EFS CI matrix keeps exit 0 for future sub-SFN files not yet created
+- [Phase 01-extraction]: ManageFileSystemPolicy uses Action parameter (ADD/REMOVE) to handle both setup and cleanup in one sub-SFN
+- [Phase 01-extraction]: Empty policy after REMOVE triggers deleteFileSystemPolicy instead of empty Statement array
+- [Phase 01-extraction]: Stubs created for manage_access_point and manage_lambda_lifecycle to keep Terraform plan valid
 
 ### Pending Todos
 
@@ -81,6 +85,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-13T11:31:52.878Z
-Stopped at: Completed 01-01-PLAN.md
-Resume file: .planning/phases/01-extraction/01-01-SUMMARY.md
+Last session: 2026-03-13T11:37:40.940Z
+Stopped at: Completed 01-02-PLAN.md
+Resume file: None

@@ -10,16 +10,16 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 ### Prerequisites
 
 - [x] **PRE-01**: Fix CI GitHub Actions — stripper les champs Credentials dans conftest.py pour que SFN Local accepte les definitions cross-account
-- [ ] **PRE-02**: Etablir le pattern templatefile() pour injection ARN des sous-SFN dans les modules Terraform appelants
+- [x] **PRE-02**: Etablir le pattern templatefile() pour injection ARN des sous-SFN dans les modules Terraform appelants
 
 ### Extraction Sous-SFN
 
 - [ ] **SUB-01**: Creer sous-SFN ManageLambdaLifecycle (~8 states) eliminant ~24 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
 - [ ] **SUB-02**: Creer sous-SFN ManageAccessPoint (~4 states) eliminant ~12 states dupliques dans check_replication_sync et get_subpath_and_store_in_ssm
-- [ ] **SUB-03**: Creer sous-SFN ManageFileSystemPolicy (~6 states) eliminant ~18 states dupliques dans setup_cross_account_replication et delete_replication
-- [ ] **SUB-04**: Contrats Input/Output explicites documentes (JSON schema) pour chaque sous-SFN
-- [ ] **SUB-05**: Catch auto-contenu par sous-SFN — chaque sous-SFN gere ses erreurs sans dependre du parent
-- [ ] **SUB-06**: Module Terraform dans modules/step-functions/ avec aws_sfn_state_machine resource pour chaque sous-SFN
+- [x] **SUB-03**: Creer sous-SFN ManageFileSystemPolicy (~6 states) eliminant ~18 states dupliques dans setup_cross_account_replication et delete_replication
+- [x] **SUB-04**: Contrats Input/Output explicites documentes (JSON schema) pour chaque sous-SFN
+- [x] **SUB-05**: Catch auto-contenu par sous-SFN — chaque sous-SFN gere ses erreurs sans dependre du parent
+- [x] **SUB-06**: Module Terraform dans modules/step-functions/ avec aws_sfn_state_machine resource pour chaque sous-SFN
 
 ### Refactoring Fichiers Complexes
 
@@ -71,13 +71,13 @@ Deferred a un milestone futur.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | PRE-01 | Phase 1 | Complete |
-| PRE-02 | Phase 1 | Pending |
+| PRE-02 | Phase 1 | Complete |
 | SUB-01 | Phase 1 | Pending |
 | SUB-02 | Phase 1 | Pending |
-| SUB-03 | Phase 1 | Pending |
-| SUB-04 | Phase 1 | Pending |
-| SUB-05 | Phase 1 | Pending |
-| SUB-06 | Phase 1 | Pending |
+| SUB-03 | Phase 1 | Complete |
+| SUB-04 | Phase 1 | Complete |
+| SUB-05 | Phase 1 | Complete |
+| SUB-06 | Phase 1 | Complete |
 | TST-01 | Phase 1 | Pending |
 | TST-02 | Phase 1 | Complete |
 | REF-01 | Phase 2 | Pending |
