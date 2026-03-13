@@ -224,3 +224,60 @@ class TestASLCrossAccount:
                 has_role = "RoleArn" in creds or "RoleArn.$" in creds
                 assert has_role, \
                     f"State '{state_name}' has Credentials but no RoleArn"
+
+
+class TestASLComment:
+    """Test that ASL files have a Comment field (SUB-04 readiness)."""
+
+    @pytest.mark.parametrize("test_id,asl_file", ASL_FILES, ids=[f[0] for f in ASL_FILES])
+    def test_has_comment(self, test_id, asl_file):
+        """Each ASL file should have a top-level Comment field describing its purpose."""
+        with open(asl_file, 'r') as f:
+            data = json.load(f)
+
+        assert "Comment" in data, \
+            f"ASL file missing top-level 'Comment' field: {asl_file.name}"
+        assert isinstance(data["Comment"], str), \
+            f"Comment must be a string in: {asl_file.name}"
+        assert len(data["Comment"].strip()) > 0, \
+            f"Comment cannot be empty in: {asl_file.name}"
+
+
+class TestASLCatchSelfContained:
+    """Test that sub-SFN Fail states have named errors (SUB-05 readiness).
+
+    Only applies to EFS manage_*.asl.json files (sub-SFNs).
+    Existing SFNs are not required to follow this pattern.
+    """
+
+    @staticmethod
+    def _get_sub_sfn_files() -> list[tuple[str, Path]]:
+        """Get EFS sub-SFN files (manage_*.asl.json) for parametrization."""
+        sub_sfn_files = []
+        efs_dir = PROJECT_ROOT / "modules" / "step-functions" / "efs"
+        if efs_dir.exists():
+            for path in sorted(efs_dir.glob("manage_*.asl.json")):
+                test_id = path.stem
+                sub_sfn_files.append((test_id, path))
+        return sub_sfn_files
+
+    SUB_SFN_FILES = _get_sub_sfn_files.__func__()
+
+    @pytest.mark.parametrize(
+        "test_id,asl_file",
+        SUB_SFN_FILES,
+        ids=[f[0] for f in SUB_SFN_FILES],
+    )
+    def test_fail_states_have_named_error(self, test_id, asl_file):
+        """Fail states in sub-SFNs must have a non-empty Error field for proper catch routing."""
+        with open(asl_file, 'r') as f:
+            data = json.load(f)
+
+        states = data.get("States", {})
+
+        for state_name, state_def in states.items():
+            if state_def.get("Type") == "Fail":
+                assert "Error" in state_def, \
+                    f"Fail state '{state_name}' missing 'Error' field in sub-SFN {asl_file.name}"
+                assert isinstance(state_def["Error"], str) and len(state_def["Error"].strip()) > 0, \
+                    f"Fail state '{state_name}' has empty 'Error' in sub-SFN {asl_file.name}"

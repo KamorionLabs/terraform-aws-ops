@@ -2,6 +2,7 @@
 Pytest configuration and fixtures for Step Functions testing.
 """
 
+import copy
 import json
 import os
 import time
@@ -29,6 +30,38 @@ def get_asl_files() -> list[Path]:
             continue
         asl_files.append(path)
     return sorted(asl_files)
+
+
+def strip_credentials(definition: dict) -> dict:
+    """Remove all Credentials blocks from an ASL definition.
+
+    Step Functions Local does not support cross-account Credentials blocks.
+    This function deep-cleans the definition so it can be loaded locally.
+    Handles nested states in Parallel branches and Map iterators/processors.
+    """
+    cleaned = copy.deepcopy(definition)
+    _strip_credentials_from_states(cleaned.get("States", {}))
+    return cleaned
+
+
+def _strip_credentials_from_states(states: dict) -> None:
+    """Recursively remove Credentials from all states."""
+    for state_def in states.values():
+        state_def.pop("Credentials", None)
+
+        # Handle Parallel branches
+        for branch in state_def.get("Branches", []):
+            _strip_credentials_from_states(branch.get("States", {}))
+
+        # Handle Map Iterator (legacy)
+        iterator = state_def.get("Iterator")
+        if iterator:
+            _strip_credentials_from_states(iterator.get("States", {}))
+
+        # Handle Map ItemProcessor (new)
+        item_processor = state_def.get("ItemProcessor")
+        if item_processor:
+            _strip_credentials_from_states(item_processor.get("States", {}))
 
 
 @pytest.fixture(scope="session")
@@ -74,9 +107,12 @@ def create_state_machine(sfn_client):
         except Exception:
             pass
 
+        # Strip Credentials blocks (not supported by Step Functions Local)
+        clean_definition = strip_credentials(definition)
+
         response = sfn_client.create_state_machine(
             name=name,
-            definition=json.dumps(definition),
+            definition=json.dumps(clean_definition),
             roleArn=role_arn,
             type='STANDARD'
         )

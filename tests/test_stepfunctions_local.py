@@ -39,35 +39,21 @@ class TestStateMachineCreation:
     """Test that state machines can be created in Step Functions Local."""
 
     @pytest.mark.parametrize("test_id,asl_file", ASL_FILES, ids=[f[0] for f in ASL_FILES])
-    def test_create_state_machine(self, test_id, asl_file, sfn_client):
-        """Each ASL file should be accepted by Step Functions Local."""
+    def test_create_state_machine(self, test_id, asl_file, create_state_machine):
+        """Each ASL file should be accepted by Step Functions Local.
+
+        Uses create_state_machine fixture which strips Credentials blocks
+        (not supported by Step Functions Local) via conftest.strip_credentials.
+        """
         with open(asl_file, 'r') as f:
             definition = json.load(f)
 
         # Use a unique name to avoid conflicts
         sm_name = f"test-{test_id}-{int(time.time())}"
 
-        try:
-            response = sfn_client.create_state_machine(
-                name=sm_name,
-                definition=json.dumps(definition),
-                roleArn="arn:aws:iam::123456789012:role/test-role",
-                type='STANDARD'
-            )
-
-            assert 'stateMachineArn' in response
-            assert response['stateMachineArn'].endswith(sm_name)
-
-        finally:
-            # Cleanup
-            try:
-                # Find and delete the state machine
-                machines = sfn_client.list_state_machines()
-                for sm in machines.get('stateMachines', []):
-                    if sm['name'] == sm_name:
-                        sfn_client.delete_state_machine(stateMachineArn=sm['stateMachineArn'])
-            except Exception:
-                pass
+        sm_arn = create_state_machine(sm_name, definition)
+        assert sm_arn is not None
+        assert sm_arn.endswith(sm_name)
 
 
 @pytest.mark.sfn_local
