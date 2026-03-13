@@ -1,6 +1,6 @@
 # EFS Sub-State Machines
 
-This module contains reusable sub-State Machines for EFS operations. They are deployed via the existing `for_each` in `main.tf` alongside the core EFS State Machines.
+This module contains reusable sub-State Machines for EFS operations. They are deployed via `for_each` in `main.tf` alongside the core EFS State Machines.
 
 Sub-SFNs are self-contained building blocks: each handles its own errors via a named `Fail` state, making error routing predictable for parent workflows.
 
@@ -221,17 +221,97 @@ Ensures a Lambda function exists, creating it if needed. Optionally updates the 
 All failures terminate on state `Fail` with `Error: "ManageLambdaLifecycleFailed"`.
 The parent detects via `ErrorEquals: ["ManageLambdaLifecycleFailed"]`.
 
+## CheckFlagFileSync
+
+**File:** `check_flag_file_sync.asl.json`
+**States:** 26
+
+Verifies EFS replication sync by writing a flag file to the source EFS and checking for its appearance on the destination EFS. Manages the full lifecycle: Lambda creation (via ManageLambdaLifecycle), access point creation (via ManageAccessPoint), flag write/check, and cleanup. Uses 3-level nesting (parent -> CheckFlagFileSync -> ManageLambdaLifecycle/ManageAccessPoint).
+
+### Input
+
+```json
+{
+  "SourceFileSystemId": "fs-source123",
+  "DestinationFileSystemId": "fs-dest456",
+  "SourceAccount": {
+    "RoleArn": "arn:aws:iam::111111111111:role/EFSCrossAccountRole"
+  },
+  "DestinationAccount": {
+    "RoleArn": "arn:aws:iam::222222222222:role/EFSCrossAccountRole"
+  },
+  "LambdaConfig": {
+    "SourceLambdaPrefix": "prefix",
+    "DestinationLambdaPrefix": "prefix",
+    "SourceLambdaRoleArn": "arn:aws:iam::111111111111:role/LambdaRole",
+    "DestinationLambdaRoleArn": "arn:aws:iam::222222222222:role/LambdaRole",
+    "CodeS3Bucket": "deployment-bucket",
+    "CodeS3Key": "lambdas/check_flag_file.zip",
+    "SourceSubnetIds": ["subnet-abc"],
+    "SourceSecurityGroupIds": ["sg-abc"],
+    "DestinationSubnetIds": ["subnet-def"],
+    "DestinationSecurityGroupIds": ["sg-def"],
+    "ForceUpdateLambdaCode": false
+  },
+  "SourceSubpath": "",
+  "DestinationSubpath": "",
+  "FlagId": "uuid-string",
+  "Context": "my-context"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `SourceFileSystemId` | string | Yes | Source EFS file system ID |
+| `DestinationFileSystemId` | string | Yes | Destination EFS file system ID |
+| `SourceAccount.RoleArn` | string | Yes | IAM role for source account access |
+| `DestinationAccount.RoleArn` | string | Yes | IAM role for destination account access |
+| `LambdaConfig` | object | Yes | Lambda configuration for flag file check Lambdas |
+| `SourceSubpath` | string | Yes | Subpath within source EFS (empty for root) |
+| `DestinationSubpath` | string | Yes | Subpath within destination EFS (empty for root) |
+| `FlagId` | string | Yes | Unique flag file identifier (UUID) |
+| `Context` | string | Yes | Context identifier for Lambda naming |
+
+### Output
+
+```json
+{
+  "SyncVerified": true,
+  "FlagId": "uuid-string",
+  "SourceTime": "2024-01-01T00:00:00Z",
+  "DestinationTime": "2024-01-01T00:02:30Z",
+  "Status": "Verified"
+}
+```
+
+### Behavior
+
+- Ensures source and destination Lambdas exist via `ManageLambdaLifecycle` sub-SFN (2 calls).
+- Creates temporary access points on both file systems via `ManageAccessPoint` sub-SFN (2 calls).
+- Binds access points to Lambdas via `updateFunctionConfiguration`.
+- Writes a flag file to source EFS, waits for replication, then checks destination EFS.
+- Polls up to 15 times with 60s intervals for flag file appearance.
+- Cleans up flag files and access points (keeps Lambdas for reuse).
+- On timeout or error: best-effort cleanup of access points before failing.
+
+### Catch
+
+All failures terminate on state `Fail` with `Error: "CheckFlagFileSyncFailed"`.
+The parent detects via `ErrorEquals: ["CheckFlagFileSyncFailed"]`.
+
 ## Integration Pattern
 
-Parent workflows (Phase 2 refactoring) will call these sub-SFNs via `states:startExecution.sync:2`. The sub-SFN ARNs are injected using `templatefile()`:
+Parent workflows call sub-SFNs via `states:startExecution.sync:2`. The module uses three resource tiers to avoid circular ARN references:
 
 ```hcl
-# Phase 2 pattern — callers inject sub-SFN ARNs via templatefile()
-definition = templatefile("${path.module}/caller.asl.json", {
-  manage_filesystem_policy_arn = module.efs_sfn.step_function_arns["manage_filesystem_policy"]
-  manage_access_point_arn      = module.efs_sfn.step_function_arns["manage_access_point"]
-  manage_lambda_lifecycle_arn  = module.efs_sfn.step_function_arns["manage_lambda_lifecycle"]
-})
+# Tier 1: file() based — Phase 1 sub-SFNs (no ARN injection)
+resource "aws_sfn_state_machine" "efs" { ... }
+
+# Tier 2: templatefile() — Phase 2 sub-SFNs (reference Tier 1 ARNs)
+resource "aws_sfn_state_machine" "efs_sub_templated" { ... }
+
+# Tier 3: templatefile() — Refactored callers (reference Tier 1 + Tier 2 ARNs)
+resource "aws_sfn_state_machine" "efs_templated" { ... }
 ```
 
 The caller ASL references the ARN as a template variable:
@@ -254,12 +334,13 @@ The caller ASL references the ARN as a template variable:
 
 ## Naming
 
-Keys in `local.step_functions` use `snake_case`. The naming logic in `main.tf` converts them automatically:
+Keys in `local.step_functions` (and related maps) use `snake_case`. The naming logic in `main.tf` converts them automatically:
 
 | Key | Kebab (default) | Pascal |
 |-----|-----------------|--------|
 | `manage_filesystem_policy` | `{prefix}-efs-manage-filesystem-policy` | `{prefix}-EFS-ManageFilesystemPolicy` |
 | `manage_access_point` | `{prefix}-efs-manage-access-point` | `{prefix}-EFS-ManageAccessPoint` |
 | `manage_lambda_lifecycle` | `{prefix}-efs-manage-lambda-lifecycle` | `{prefix}-EFS-ManageLambdaLifecycle` |
+| `check_flag_file_sync` | `{prefix}-efs-check-flag-file-sync` | `{prefix}-EFS-CheckFlagFileSync` |
 
 No additional naming code is required. The wildcard IAM pattern `{prefix}-*` covers all sub-SFNs automatically.

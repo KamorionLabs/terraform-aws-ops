@@ -350,79 +350,47 @@
             {"Variable": "$.UpdateSourcePolicy", "IsPresent": true},
             {"Variable": "$.UpdateSourcePolicy", "BooleanEquals": true}
           ],
-          "Next": "GetSourceFileSystemPolicy"
+          "Next": "CallUpdateSourcePolicy"
         }
       ],
       "Default": "ShouldCreateDestinationEFS"
     },
-    "GetSourceFileSystemPolicy": {
+    "CallUpdateSourcePolicy": {
       "Type": "Task",
-      "Comment": "Get current file system policy on source EFS",
-      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Comment": "Add AllowReplicationWrite policy to source EFS via ManageFileSystemPolicy sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "FileSystemId.$": "$.SourceFileSystemId"
-      },
-      "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
-      },
-      "ResultPath": "$.SourcePolicy",
-      "Next": "CheckSourcePolicyHasReplicationStatement",
-      "Catch": [
-        {
-          "ErrorEquals": ["Efs.PolicyNotFound"],
-          "ResultPath": "$.SourcePolicyNotFound",
-          "Comment": "No policy exists - default allow all, replication works without it",
-          "Next": "ShouldCreateDestinationEFS"
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId.$": "$.SourceFileSystemId",
+          "Account.$": "$.SourceAccount",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowReplicationWrite",
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "elasticfilesystem.amazonaws.com"
+            },
+            "Action": [
+              "elasticfilesystem:ClientMount",
+              "elasticfilesystem:ClientWrite"
+            ],
+            "Resource.$": "$.SourceEFS.FileSystemArn",
+            "Condition": {
+              "Bool": {
+                "elasticfilesystem:AccessedViaMountTarget": "true"
+              }
+            }
+          }
         },
-        {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.Error",
-          "Next": "SetupFailed"
-        }
-      ]
-    },
-    "CheckSourcePolicyHasReplicationStatement": {
-      "Type": "Choice",
-      "Comment": "Check if source policy already contains AllowReplicationWrite statement",
-      "Choices": [
-        {
-          "Variable": "$.SourcePolicy.Policy",
-          "StringMatches": "*AllowReplicationWrite*",
-          "Next": "ShouldCreateDestinationEFS"
-        }
-      ],
-      "Default": "ParseSourcePolicy"
-    },
-    "ParseSourcePolicy": {
-      "Type": "Pass",
-      "Comment": "Parse source policy JSON string to object for JSONata manipulation",
-      "Parameters": {
-        "PolicyObject.$": "States.StringToJson($.SourcePolicy.Policy)"
+        "Name.$": "States.Format('{}-SrcPolicy', $$.Execution.Name)"
       },
-      "ResultPath": "$.ParsedSourcePolicy",
-      "Next": "MergeSourcePolicyJSONata"
-    },
-    "MergeSourcePolicyJSONata": {
-      "Type": "Pass",
-      "QueryLanguage": "JSONata",
-      "Comment": "Merge AllowReplicationWrite into existing source policy using JSONata",
-      "Assign": {
-        "mergedSourcePolicyString": "{% ($stmts := $type($states.input.ParsedSourcePolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedSourcePolicy.PolicyObject.Statement : [$states.input.ParsedSourcePolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $not($s.Sid = 'AllowReplicationWrite') }); $newStmt := {'Sid': 'AllowReplicationWrite', 'Effect': 'Allow', 'Principal': {'Service': 'elasticfilesystem.amazonaws.com'}, 'Action': ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'], 'Resource': $states.input.SourceEFS.FileSystemArn, 'Condition': {'Bool': {'elasticfilesystem:AccessedViaMountTarget': 'true'}}}; $string({'Version': '2012-10-17', 'Statement': $append($filtered, [$newStmt])})) %}"
+      "ResultSelector": {
+        "FileSystemId.$": "$.Output.FileSystemId",
+        "PolicyApplied.$": "$.Output.PolicyApplied",
+        "Status.$": "$.Output.Status"
       },
-      "Next": "UpdateSourcePolicyMerged"
-    },
-    "UpdateSourcePolicyMerged": {
-      "Type": "Task",
-      "Comment": "Put the merged policy back on the source EFS",
-      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
-      "Parameters": {
-        "FileSystemId.$": "$.SourceFileSystemId",
-        "Policy.$": "$mergedSourcePolicyString"
-      },
-      "Credentials": {
-        "RoleArn.$": "$.SourceAccount.RoleArn"
-      },
-      "ResultPath": null,
+      "ResultPath": "$.SourcePolicyResult",
       "Next": "ShouldCreateDestinationEFS",
       "Catch": [
         {
@@ -587,7 +555,7 @@
             {"Variable": "$.UpdateDestinationPolicy", "IsPresent": true},
             {"Variable": "$.UpdateDestinationPolicy", "BooleanEquals": true}
           ],
-          "Next": "GetDestinationFileSystemPolicy"
+          "Next": "CallAddDestCrossAccountPolicy"
         },
         {
           "Variable": "$.CreateDestinationEFS",
@@ -595,77 +563,39 @@
           "Next": "WaitPolicyPropagation"
         }
       ],
-      "Default": "BuildDestPolicyFromScratch"
+      "Default": "CallAddDestCrossAccountPolicy"
     },
-    "GetDestinationFileSystemPolicy": {
+    "CallAddDestCrossAccountPolicy": {
       "Type": "Task",
-      "Comment": "Get current file system policy on existing destination EFS",
-      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Comment": "Add AllowCrossAccountReplication statement to destination EFS via ManageFileSystemPolicy sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "FileSystemId.$": "$.DestinationEFS.FileSystemId"
-      },
-      "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
-      },
-      "ResultPath": "$.DestinationPolicy",
-      "Next": "CheckDestPolicyHasReplicationStatement",
-      "Catch": [
-        {
-          "ErrorEquals": ["Efs.PolicyNotFound"],
-          "ResultPath": "$.DestinationPolicyNotFound",
-          "Comment": "No policy exists - build from scratch",
-          "Next": "BuildDestPolicyFromScratch"
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+          "Account.$": "$.DestinationAccount",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowCrossAccountReplication",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS.$": "States.Format('arn:aws:iam::{}:root', $.SourceAccount.AccountId)"
+            },
+            "Action": [
+              "elasticfilesystem:DescribeFileSystems",
+              "elasticfilesystem:DescribeReplicationConfigurations",
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration",
+              "elasticfilesystem:ClientMount",
+              "elasticfilesystem:ClientWrite"
+            ],
+            "Resource.$": "$.DestinationEFS.FileSystemArn"
+          }
         },
-        {
-          "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.PolicyError",
-          "Next": "DestinationPolicyFailed"
-        }
-      ]
-    },
-    "CheckDestPolicyHasReplicationStatement": {
-      "Type": "Choice",
-      "Comment": "Check if destination policy already contains AllowCrossAccountReplication statement",
-      "Choices": [
-        {
-          "Variable": "$.DestinationPolicy.Policy",
-          "StringMatches": "*AllowCrossAccountReplication*",
-          "Next": "WaitPolicyPropagation"
-        }
-      ],
-      "Default": "ParseDestinationPolicy"
-    },
-    "ParseDestinationPolicy": {
-      "Type": "Pass",
-      "Comment": "Parse destination policy JSON string to object for JSONata manipulation",
-      "Parameters": {
-        "PolicyObject.$": "States.StringToJson($.DestinationPolicy.Policy)"
+        "Name.$": "States.Format('{}-DstPolicy1', $$.Execution.Name)"
       },
-      "ResultPath": "$.ParsedDestPolicy",
-      "Next": "MergeDestPolicyJSONata"
-    },
-    "MergeDestPolicyJSONata": {
-      "Type": "Pass",
-      "QueryLanguage": "JSONata",
-      "Comment": "Merge replication statements into existing destination policy using JSONata",
-      "Assign": {
-        "mergedDestPolicyString": "{% ($stmts := $type($states.input.ParsedDestPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedDestPolicy.PolicyObject.Statement : [$states.input.ParsedDestPolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $not($s.Sid = 'AllowCrossAccountReplication' or $s.Sid = 'AllowReplicationRole' or $s.Sid = 'AllowReplicationService') }); $destArn := $states.input.DestinationEFS.FileSystemArn; $srcRoot := 'arn:aws:iam::' & $string($states.input.SourceAccount.AccountId) & ':root'; $replRole := $states.input.ReplicationRoleArn; $newStmts := [{'Sid': 'AllowCrossAccountReplication', 'Effect': 'Allow', 'Principal': {'AWS': $srcRoot}, 'Action': ['elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeReplicationConfigurations', 'elasticfilesystem:CreateReplicationConfiguration', 'elasticfilesystem:DeleteReplicationConfiguration', 'elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'], 'Resource': $destArn}, {'Sid': 'AllowReplicationRole', 'Effect': 'Allow', 'Principal': {'AWS': $replRole}, 'Action': ['elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeReplicationConfigurations', 'elasticfilesystem:CreateReplicationConfiguration', 'elasticfilesystem:DeleteReplicationConfiguration', 'elasticfilesystem:ReplicationWrite'], 'Resource': $destArn}, {'Sid': 'AllowReplicationService', 'Effect': 'Allow', 'Principal': {'Service': 'elasticfilesystem.amazonaws.com'}, 'Action': ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite', 'elasticfilesystem:ReplicationWrite'], 'Resource': $destArn}]; $string({'Version': '2012-10-17', 'Statement': $append($filtered, $newStmts)})) %}"
-      },
-      "Next": "UpdateDestPolicyMerged"
-    },
-    "UpdateDestPolicyMerged": {
-      "Type": "Task",
-      "Comment": "Put the merged policy back on the existing destination EFS",
-      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
-      "Parameters": {
-        "FileSystemId.$": "$.DestinationEFS.FileSystemId",
-        "Policy.$": "$mergedDestPolicyString"
-      },
-      "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
-      },
-      "ResultPath": null,
-      "Next": "WaitPolicyPropagation",
+      "ResultPath": "$.DestPolicyResult1",
+      "Next": "CallAddDestReplicationRolePolicy",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -674,27 +604,71 @@
         }
       ]
     },
-    "BuildDestPolicyFromScratch": {
-      "Type": "Pass",
-      "QueryLanguage": "JSONata",
-      "Comment": "Build destination policy with the 3 replication statements (new EFS only)",
-      "Assign": {
-        "mergedDestPolicyString": "{% ($destArn := $states.input.DestinationEFS.FileSystemArn; $srcRoot := 'arn:aws:iam::' & $string($states.input.SourceAccount.AccountId) & ':root'; $replRole := $states.input.ReplicationRoleArn; $string({'Version': '2012-10-17', 'Statement': [{'Sid': 'AllowCrossAccountReplication', 'Effect': 'Allow', 'Principal': {'AWS': $srcRoot}, 'Action': ['elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeReplicationConfigurations', 'elasticfilesystem:CreateReplicationConfiguration', 'elasticfilesystem:DeleteReplicationConfiguration', 'elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite'], 'Resource': $destArn}, {'Sid': 'AllowReplicationRole', 'Effect': 'Allow', 'Principal': {'AWS': $replRole}, 'Action': ['elasticfilesystem:DescribeFileSystems', 'elasticfilesystem:DescribeReplicationConfigurations', 'elasticfilesystem:CreateReplicationConfiguration', 'elasticfilesystem:DeleteReplicationConfiguration', 'elasticfilesystem:ReplicationWrite'], 'Resource': $destArn}, {'Sid': 'AllowReplicationService', 'Effect': 'Allow', 'Principal': {'Service': 'elasticfilesystem.amazonaws.com'}, 'Action': ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite', 'elasticfilesystem:ReplicationWrite'], 'Resource': $destArn}]})) %}"
-      },
-      "Next": "CreateDestinationPolicy"
-    },
-    "CreateDestinationPolicy": {
+    "CallAddDestReplicationRolePolicy": {
       "Type": "Task",
-      "Comment": "Put the policy on the new destination EFS",
-      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Comment": "Add AllowReplicationRole statement to destination EFS via ManageFileSystemPolicy sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
-        "FileSystemId.$": "$.DestinationEFS.FileSystemId",
-        "Policy.$": "$mergedDestPolicyString"
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+          "Account.$": "$.DestinationAccount",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowReplicationRole",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS.$": "$.ReplicationRoleArn"
+            },
+            "Action": [
+              "elasticfilesystem:DescribeFileSystems",
+              "elasticfilesystem:DescribeReplicationConfigurations",
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration",
+              "elasticfilesystem:ReplicationWrite"
+            ],
+            "Resource.$": "$.DestinationEFS.FileSystemArn"
+          }
+        },
+        "Name.$": "States.Format('{}-DstPolicy2', $$.Execution.Name)"
       },
-      "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      "ResultPath": "$.DestPolicyResult2",
+      "Next": "CallAddDestReplicationServicePolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PolicyError",
+          "Next": "DestinationPolicyFailed"
+        }
+      ]
+    },
+    "CallAddDestReplicationServicePolicy": {
+      "Type": "Task",
+      "Comment": "Add AllowReplicationService statement to destination EFS via ManageFileSystemPolicy sub-SFN",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+          "Account.$": "$.DestinationAccount",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowReplicationService",
+            "Effect": "Allow",
+            "Principal": {
+              "Service": "elasticfilesystem.amazonaws.com"
+            },
+            "Action": [
+              "elasticfilesystem:ClientMount",
+              "elasticfilesystem:ClientWrite",
+              "elasticfilesystem:ReplicationWrite"
+            ],
+            "Resource.$": "$.DestinationEFS.FileSystemArn"
+          }
+        },
+        "Name.$": "States.Format('{}-DstPolicy3', $$.Execution.Name)"
       },
-      "ResultPath": null,
+      "ResultPath": "$.DestPolicyResult3",
       "Next": "WaitPolicyPropagation",
       "Catch": [
         {
