@@ -1,5 +1,5 @@
 {
-  "Comment": "Cross-account version: Runs a mysqldump command for a list of tables in an EKS job, saving the output to EFS. Ensures cluster is started before proceeding.",
+  "Comment": "Cross-account version: Runs a mysqldump command for a list of tables in an EKS job, saving the output to EFS. Supports both public (eks:runJob.sync) and private (k8s-proxy Lambda) access modes.",
   "StartAt": "EnsureClusterAvailable",
   "States": {
     "EnsureClusterAvailable": {
@@ -60,14 +60,26 @@
         }
       },
       "ResultPath": "$.EnsureNodegroupResult",
-      "Next": "GetEksClusterInfo",
+      "Next": "CheckAccessMode",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.EnsureNodegroupError",
-          "Next": "GetEksClusterInfo"
+          "Next": "CheckAccessMode"
         }
       ]
+    },
+    "CheckAccessMode": {
+      "Type": "Choice",
+      "Comment": "Route to GetEksClusterInfo for public mode, skip to InitPrivateDefaults for private mode",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetEksClusterInfo"
+        }
+      ],
+      "Default": "InitPrivateDefaults"
     },
     "GetEksClusterInfo": {
       "Type": "Task",
@@ -81,6 +93,19 @@
       "ResultPath": "$.EksCluster",
       "Next": "GetDbSecretValue",
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DumpFailed" }]
+    },
+    "InitPrivateDefaults": {
+      "Type": "Pass",
+      "Comment": "Inject stub EksCluster data so Map ItemSelector paths resolve in private mode (values never used)",
+      "Result": {
+        "Cluster": {
+          "Name": "unused",
+          "CertificateAuthority": { "Data": "unused" },
+          "Endpoint": "unused"
+        }
+      },
+      "ResultPath": "$.EksCluster",
+      "Next": "GetDbSecretValue"
     },
     "GetDbSecretValue": {
       "Type": "Task",
@@ -108,7 +133,10 @@
       "ItemsPath": "$.TablesToDump",
       "MaxConcurrency": 2,
       "ItemSelector": {
+        "AccessMode.$": "$.EKS.AccessMode",
         "EksCluster.$": "$.EksCluster",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+        "ClusterName.$": "$.EKS.ClusterName",
         "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn",
         "Namespace.$": "$.EKS.Namespace",
         "EksNodeSelector.$": "$.EKS.NodeSelector",
@@ -125,8 +153,20 @@
       },
       "ItemProcessor": {
         "ProcessorConfig": { "Mode": "INLINE" },
-        "StartAt": "RunEksJobForTable",
+        "StartAt": "CheckAccessModeForDump",
         "States": {
+          "CheckAccessModeForDump": {
+            "Type": "Choice",
+            "Comment": "Route to public eks:runJob.sync or private lambda:invoke job lifecycle",
+            "Choices": [
+              {
+                "Variable": "$.AccessMode",
+                "StringEquals": "public",
+                "Next": "RunEksJobForTable"
+              }
+            ],
+            "Default": "CreateDumpJob"
+          },
           "RunEksJobForTable": {
             "Type": "Task",
             "Resource": "arn:aws:states:::eks:runJob.sync",
@@ -182,6 +222,200 @@
               }
             },
             "End": true
+          },
+          "CreateDumpJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "createJob",
+                "ClusterName.$": "$.ClusterName",
+                "Namespace.$": "$.Namespace",
+                "Job": {
+                  "apiVersion": "batch/v1",
+                  "kind": "Job",
+                  "metadata": {
+                    "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
+                  },
+                  "spec": {
+                    "template": {
+                      "spec": {
+                        "serviceAccountName": "refresh",
+                        "nodeSelector.$": "$.EksNodeSelector",
+                        "tolerations.$": "$.EksTolerations",
+                        "volumes": [{
+                          "name": "shared-data",
+                          "persistentVolumeClaim": { "claimName.$": "$.EfsPvcName" }
+                        }],
+                        "containers": [{
+                          "name": "mysqldump",
+                          "image": "kamorion/mysql-s3:mysql8",
+                          "imagePullPolicy": "Always",
+                          "command": ["/dump.sh"],
+                          "volumeMounts": [{
+                            "name": "shared-data",
+                            "mountPath": "/refresh",
+                            "subPath.$": "$.DumpSubPath"
+                          }],
+                          "env": [
+                            { "name": "TZ", "value": "Europe/Paris" },
+                            { "name": "MYSQL_HOST", "value.$": "$.DbEndpoint" },
+                            { "name": "MYSQL_USER", "value.$": "$.DbUsername" },
+                            { "name": "MYSQL_PASSWORD", "value.$": "$.DbPassword" },
+                            { "name": "MYSQL_DATABASE", "value.$": "$.DatabaseName" },
+                            { "name": "MYSQL_TABLE", "value.$": "$.TableName" },
+                            { "name": "LOCAL_DIR", "value": "/refresh" }
+                          ]
+                        }],
+                        "restartPolicy": "Never"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultSelector": {
+              "JobName.$": "$.Payload.JobName",
+              "Namespace.$": "$.Payload.Namespace",
+              "ClusterName.$": "$.Payload.ClusterName"
+            },
+            "ResultPath": "$.JobInfo",
+            "Next": "WaitForDumpJob",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.CreateJobError",
+                "Next": "DumpJobFailed"
+              }
+            ]
+          },
+          "WaitForDumpJob": {
+            "Type": "Wait",
+            "Seconds": 15,
+            "Next": "CheckDumpJobStatus"
+          },
+          "CheckDumpJobStatus": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "getJobStatus",
+                "ClusterName.$": "$.JobInfo.ClusterName",
+                "Namespace.$": "$.JobInfo.Namespace",
+                "JobName.$": "$.JobInfo.JobName"
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultSelector": {
+              "Status.$": "$.Payload.Status",
+              "JobName.$": "$.Payload.JobName",
+              "Message.$": "$.Payload.Message"
+            },
+            "ResultPath": "$.JobStatus",
+            "Next": "DumpJobStatusChoice",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.CheckStatusError",
+                "Next": "DeleteDumpJobOnError"
+              }
+            ]
+          },
+          "DumpJobStatusChoice": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.JobStatus.Status",
+                "StringEquals": "Complete",
+                "Next": "DeleteDumpJob"
+              },
+              {
+                "Variable": "$.JobStatus.Status",
+                "StringEquals": "Failed",
+                "Next": "DeleteDumpJobOnError"
+              }
+            ],
+            "Default": "WaitForDumpJob"
+          },
+          "DeleteDumpJob": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "deleteJob",
+                "ClusterName.$": "$.JobInfo.ClusterName",
+                "Namespace.$": "$.JobInfo.Namespace",
+                "JobName.$": "$.JobInfo.JobName"
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "End": true
+          },
+          "DeleteDumpJobOnError": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "deleteJob",
+                "ClusterName.$": "$.JobInfo.ClusterName",
+                "Namespace.$": "$.JobInfo.Namespace",
+                "JobName.$": "$.JobInfo.JobName"
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "ResultPath": null,
+            "Next": "DumpJobFailed"
+          },
+          "DumpJobFailed": {
+            "Type": "Fail",
+            "Error": "DumpJobFailed",
+            "Cause": "The mysqldump K8s job failed or could not be monitored."
           }
         }
       },
