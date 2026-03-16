@@ -49,6 +49,15 @@ output "step_functions_utils" {
 }
 
 # -----------------------------------------------------------------------------
+# Step Functions - Sync Outputs
+# -----------------------------------------------------------------------------
+
+output "step_functions_sync" {
+  description = "Map of Sync Step Functions ARNs"
+  value       = module.step_functions_sync.step_function_arns
+}
+
+# -----------------------------------------------------------------------------
 # Orchestrator Outputs
 # -----------------------------------------------------------------------------
 
@@ -73,6 +82,7 @@ output "all_step_function_arns" {
     efs          = module.step_functions_efs.step_function_arns
     eks          = module.step_functions_eks.step_function_arns
     utils        = module.step_functions_utils.step_function_arns
+    sync         = module.step_functions_sync.step_function_arns
     orchestrator = module.orchestrator.step_function_arns
   }
 }
@@ -94,7 +104,7 @@ output "lambda_code_bucket_arn" {
 output "lambda_config" {
   description = "Lambda configuration for Step Functions input (S3 bucket and keys)"
   value = var.deploy_lambda_code ? {
-    check_flag_file  = module.lambda_code[0].check_flag_file_config
-    get_efs_subpath  = module.lambda_code[0].get_efs_subpath_config
+    check_flag_file = module.lambda_code[0].check_flag_file_config
+    get_efs_subpath = module.lambda_code[0].get_efs_subpath_config
   } : null
 }

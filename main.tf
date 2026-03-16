@@ -82,6 +82,23 @@ module "step_functions_utils" {
 }
 
 # -----------------------------------------------------------------------------
+# Step Functions - Sync Module
+# -----------------------------------------------------------------------------
+module "step_functions_sync" {
+  source = "./modules/step-functions/sync"
+
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
+
+  cross_account_role_arns = concat(var.source_role_arns, var.destination_role_arns)
+
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
+}
+
+# -----------------------------------------------------------------------------
 # IAM Roles for Cross-Account Access
 # -----------------------------------------------------------------------------
 module "iam" {
