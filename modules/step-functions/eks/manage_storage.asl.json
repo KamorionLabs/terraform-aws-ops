@@ -1,7 +1,19 @@
 {
-  "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account",
-  "StartAt": "GetEksClusterInfo",
+  "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode.",
+  "StartAt": "CheckAccessMode",
   "States": {
+    "CheckAccessMode": {
+      "Type": "Choice",
+      "Comment": "Route to public (eks:call via GetEksClusterInfo) or private (lambda:invoke) flow based on EKS.AccessMode",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetEksClusterInfo"
+        }
+      ],
+      "Default": "ChooseActionPrivate"
+    },
     "GetEksClusterInfo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
@@ -21,8 +33,10 @@
         }
       ]
     },
+
     "ChooseAction": {
       "Type": "Choice",
+      "Comment": "Public branch: route to Create or Delete flow using eks:call",
       "Choices": [
         {
           "Variable": "$.Action",
@@ -37,6 +51,24 @@
       ],
       "Default": "ProcessFailed"
     },
+    "ChooseActionPrivate": {
+      "Type": "Choice",
+      "Comment": "Private branch: route to Create or Delete flow using lambda:invoke",
+      "Choices": [
+        {
+          "Variable": "$.Action",
+          "StringEquals": "Create",
+          "Next": "GetEfsIdFromSsmPrivate"
+        },
+        {
+          "Variable": "$.Action",
+          "StringEquals": "Delete",
+          "Next": "DeletePvcPrivate"
+        }
+      ],
+      "Default": "ProcessFailed"
+    },
+
     "DeletePvc": {
       "Type": "Task",
       "Resource": "arn:aws:states:::eks:call",
@@ -68,10 +100,54 @@
         }
       ]
     },
+    "DeletePvcPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.Namespace, $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvcDelete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.PvcNotFound",
+          "Next": "DeletePvPrivate"
+        }
+      ]
+    },
     "WaitForPvcDelete": {
       "Type": "Wait",
       "Seconds": 5,
-      "Next": "DeletePv"
+      "Next": "CheckAccessModeForDeletePv"
+    },
+    "CheckAccessModeForDeletePv": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "DeletePv"
+        }
+      ],
+      "Default": "DeletePvPrivate"
     },
     "DeletePv": {
       "Type": "Task",
@@ -104,10 +180,54 @@
         }
       ]
     },
+    "DeletePvPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvDelete",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.PvNotFound",
+          "Next": "DeleteScPrivate"
+        }
+      ]
+    },
     "WaitForPvDelete": {
       "Type": "Wait",
       "Seconds": 5,
-      "Next": "DeleteSc"
+      "Next": "CheckAccessModeForDeleteSc"
+    },
+    "CheckAccessModeForDeleteSc": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "DeleteSc"
+        }
+      ],
+      "Default": "DeleteScPrivate"
     },
     "DeleteSc": {
       "Type": "Task",
@@ -140,6 +260,39 @@
         }
       ]
     },
+    "DeleteScPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.FileSystemName)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareDeleteOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.ScNotFound",
+          "Next": "PrepareDeleteOutput"
+        }
+      ]
+    },
     "PrepareDeleteOutput": {
       "Type": "Pass",
       "Parameters": {
@@ -150,6 +303,7 @@
       },
       "Next": "ProcessSucceeded"
     },
+
     "GetEfsIdFromSsm": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
@@ -164,6 +318,28 @@
       },
       "ResultPath": "$.EfsInfo",
       "Next": "CreateSc",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "GetEfsIdFromSsmPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name.$": "$.EfsIdSSMParameterName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "Id.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.EfsInfo",
+      "Next": "CreateScPrivate",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -219,10 +395,70 @@
         }
       ]
     },
+    "CreateScPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path": "/apis/storage.k8s.io/v1/storageclasses",
+          "RequestBody": {
+            "apiVersion": "storage.k8s.io/v1",
+            "kind": "StorageClass",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "provisioner": "efs.csi.aws.com",
+            "parameters": {
+              "provisioningMode": "efs-ap",
+              "fileSystemId.$": "$.EfsInfo.Id",
+              "directoryPerms": "0755"
+            },
+            "reclaimPolicy": "Delete",
+            "allowVolumeExpansion": true,
+            "volumeBindingMode": "Immediate"
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForStorageClass",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
     "WaitForStorageClass": {
       "Type": "Wait",
       "Seconds": 3,
-      "Next": "CreatePv"
+      "Next": "CheckAccessModeForCreatePv"
+    },
+    "CheckAccessModeForCreatePv": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "CreatePv"
+        }
+      ],
+      "Default": "CreatePvPrivate"
     },
     "CreatePv": {
       "Type": "Task",
@@ -275,10 +511,74 @@
         }
       ]
     },
+    "CreatePvPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path": "/api/v1/persistentvolumes",
+          "RequestBody": {
+            "apiVersion": "v1",
+            "kind": "PersistentVolume",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "spec": {
+              "capacity": {
+                "storage": "20Gi"
+              },
+              "volumeMode": "Filesystem",
+              "accessModes": ["ReadWriteMany"],
+              "persistentVolumeReclaimPolicy": "Retain",
+              "storageClassName.$": "$.FileSystemName",
+              "csi": {
+                "driver": "efs.csi.aws.com",
+                "volumeHandle.$": "$.EfsInfo.Id"
+              }
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPersistentVolume",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
     "WaitForPersistentVolume": {
       "Type": "Wait",
       "Seconds": 3,
-      "Next": "CreatePvc"
+      "Next": "CheckAccessModeForCreatePvc"
+    },
+    "CheckAccessModeForCreatePvc": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "CreatePvc"
+        }
+      ],
+      "Default": "CreatePvcPrivate"
     },
     "CreatePvc": {
       "Type": "Task",
@@ -315,6 +615,56 @@
       "Retry": [
         {
           "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "CreatePvcPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "POST",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.Namespace)",
+          "RequestBody": {
+            "apiVersion": "v1",
+            "kind": "PersistentVolumeClaim",
+            "metadata": {
+              "name.$": "$.FileSystemName"
+            },
+            "spec": {
+              "accessModes": ["ReadWriteMany"],
+              "storageClassName.$": "$.FileSystemName",
+              "resources": {
+                "requests": {
+                  "storage": "20Gi"
+                }
+              },
+              "volumeName.$": "$.FileSystemName"
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitForPvcBinding",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
           "IntervalSeconds": 2,
           "MaxAttempts": 3,
           "BackoffRate": 2

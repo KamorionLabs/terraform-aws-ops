@@ -1,7 +1,32 @@
 {
-  "Comment": "Cross-account: Verifies that EKS services are using the correct EFS subpath and restarts them if needed.",
-  "StartAt": "GetEksClusterInfo",
+  "Comment": "Cross-account: Verifies that EKS services are using the correct EFS subpath and restarts them if needed. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode.",
+  "StartAt": "CheckAccessMode",
   "States": {
+    "CheckAccessMode": {
+      "Type": "Choice",
+      "Comment": "Route to public (eks:call via GetEksClusterInfo) or private (lambda:invoke) flow based on EKS.AccessMode",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetEksClusterInfo"
+        }
+      ],
+      "Default": "InitPrivateDefaults"
+    },
+    "InitPrivateDefaults": {
+      "Type": "Pass",
+      "Comment": "Inject stub EksCluster so ItemSelector paths resolve. Values are unused in private mode.",
+      "Result": {
+        "Cluster": {
+          "Name": "unused",
+          "CertificateAuthority": { "Data": "unused" },
+          "Endpoint": "unused"
+        }
+      },
+      "ResultPath": "$.EksCluster",
+      "Next": "GetExpectedSubPath"
+    },
     "GetEksClusterInfo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
@@ -48,9 +73,12 @@
       "ItemsPath": "$.Services",
       "MaxConcurrency": 3,
       "ItemSelector": {
+        "AccessMode.$": "$.EKS.AccessMode",
         "ClusterName.$": "$.EksCluster.Cluster.Name",
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+        "EksClusterName.$": "$.EksClusterName",
         "Namespace.$": "$.Namespace",
         "ServiceName.$": "$$.Map.Item.Value.ServiceName",
         "ServiceType.$": "$$.Map.Item.Value.ServiceType",
@@ -61,8 +89,19 @@
         "ProcessorConfig": {
           "Mode": "INLINE"
         },
-        "StartAt": "GetService",
+        "StartAt": "CheckAccessModeForGet",
         "States": {
+          "CheckAccessModeForGet": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.AccessMode",
+                "StringEquals": "public",
+                "Next": "GetService"
+              }
+            ],
+            "Default": "GetServicePrivate"
+          },
           "GetService": {
             "Type": "Task",
             "Resource": "arn:aws:states:::eks:call",
@@ -86,10 +125,39 @@
               }
             ]
           },
+          "GetServicePrivate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "call",
+                "ClusterName.$": "$.EksClusterName",
+                "Method": "GET",
+                "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)"
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultSelector": {
+              "ResponseBody.$": "$.Payload.ResponseBody",
+              "StatusCode.$": "$.Payload.StatusCode"
+            },
+            "ResultPath": "$.ServiceDetails",
+            "Next": "ExtractCurrentSubPath",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "ResultPath": "$.ServiceError",
+                "Next": "ServiceNotFound"
+              }
+            ]
+          },
           "ExtractCurrentSubPath": {
             "Type": "Pass",
             "QueryLanguage": "JSONata",
-            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
+            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"AccessMode\": $states.input.AccessMode, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EksClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
             "Next": "DecideIfRestartNeeded"
           },
           "DecideIfRestartNeeded": {
@@ -106,7 +174,18 @@
                 "Next": "SubPathCorrect"
               }
             ],
-            "Default": "RestartService"
+            "Default": "CheckAccessModeForRestart"
+          },
+          "CheckAccessModeForRestart": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.AccessMode",
+                "StringEquals": "public",
+                "Next": "RestartService"
+              }
+            ],
+            "Default": "RestartServicePrivate"
           },
           "RestartService": {
             "Type": "Task",
@@ -131,6 +210,46 @@
             },
             "Credentials": {
               "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultPath": "$.RestartResult",
+            "Next": "WaitForRestart",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.RestartError",
+                "Next": "RestartFailed"
+              }
+            ]
+          },
+          "RestartServicePrivate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "call",
+                "ClusterName.$": "$.EksClusterName",
+                "Method": "PATCH",
+                "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)",
+                "RequestBody": {
+                  "spec": {
+                    "template": {
+                      "metadata": {
+                        "annotations": {
+                          "kubectl.kubernetes.io/restartedAt.$": "$$.State.EnteredTime"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultSelector": {
+              "ResponseBody.$": "$.Payload.ResponseBody",
+              "StatusCode.$": "$.Payload.StatusCode"
             },
             "ResultPath": "$.RestartResult",
             "Next": "WaitForRestart",

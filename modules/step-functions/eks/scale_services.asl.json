@@ -1,7 +1,32 @@
 {
-  "Comment": "Cross-account: Scales a list of EKS services (Deployments, StatefulSets) to a specified number of replicas.",
-  "StartAt": "GetEksClusterInfo",
+  "Comment": "Cross-account: Scales a list of EKS services (Deployments, StatefulSets) to a specified number of replicas. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode.",
+  "StartAt": "CheckAccessMode",
   "States": {
+    "CheckAccessMode": {
+      "Type": "Choice",
+      "Comment": "Route to public (eks:call via GetEksClusterInfo) or private (lambda:invoke) flow based on EKS.AccessMode",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetEksClusterInfo"
+        }
+      ],
+      "Default": "InitPrivateDefaults"
+    },
+    "InitPrivateDefaults": {
+      "Type": "Pass",
+      "Comment": "Inject stub EksCluster so ItemSelector paths resolve. Values are unused in private mode.",
+      "Result": {
+        "Cluster": {
+          "Name": "unused",
+          "CertificateAuthority": { "Data": "unused" },
+          "Endpoint": "unused"
+        }
+      },
+      "ResultPath": "$.EksCluster",
+      "Next": "ScaleServicesMap"
+    },
     "GetEksClusterInfo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
@@ -25,9 +50,12 @@
       "Type": "Map",
       "ItemsPath": "$.Services",
       "ItemSelector": {
+        "AccessMode.$": "$.EKS.AccessMode",
         "ClusterName.$": "$.EksCluster.Cluster.Name",
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+        "EksClusterName.$": "$.EksClusterName",
         "Namespace.$": "$.Namespace",
         "Replicas.$": "$.Replicas",
         "ServiceName.$": "$$.Map.Item.Value.ServiceName",
@@ -38,8 +66,19 @@
         "ProcessorConfig": {
           "Mode": "INLINE"
         },
-        "StartAt": "PatchService",
+        "StartAt": "CheckAccessModeForPatch",
         "States": {
+          "CheckAccessModeForPatch": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.AccessMode",
+                "StringEquals": "public",
+                "Next": "PatchService"
+              }
+            ],
+            "Default": "PatchServicePrivate"
+          },
           "PatchService": {
             "Type": "Task",
             "Resource": "arn:aws:states:::eks:call",
@@ -71,6 +110,48 @@
             "Catch": [
               {
                 "ErrorEquals": ["EKS.404"],
+                "ResultPath": "$.PatchError",
+                "Next": "ServiceNotFoundSkip"
+              }
+            ]
+          },
+          "PatchServicePrivate": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName.$": "$.K8sProxyLambdaArn",
+              "Payload": {
+                "Action": "call",
+                "ClusterName.$": "$.EksClusterName",
+                "Method": "PATCH",
+                "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}/scale', $.Namespace, $.ServiceType, $.ServiceName)",
+                "RequestBody": {
+                  "spec": {
+                    "replicas.$": "$.Replicas"
+                  }
+                }
+              }
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultSelector": {
+              "ResponseBody.$": "$.Payload.ResponseBody",
+              "StatusCode.$": "$.Payload.StatusCode"
+            },
+            "ResultPath": "$.PatchResult",
+            "Next": "WaitForScale",
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
                 "ResultPath": "$.PatchError",
                 "Next": "ServiceNotFoundSkip"
               }
@@ -125,10 +206,21 @@
               "NumericGreaterThan": 0
             }
           ],
-          "Next": "GetSecret"
+          "Next": "CheckAccessModeForSecret"
         }
       ],
       "Default": "PrepareOutput"
+    },
+    "CheckAccessModeForSecret": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetSecret"
+        }
+      ],
+      "Default": "GetSecretPrivate"
     },
     "GetSecret": {
       "Type": "Task",
@@ -158,6 +250,35 @@
         }
       ]
     },
+    "GetSecretPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "GET",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "ResponseBody.$": "$.Payload.ResponseBody",
+        "StatusCode.$": "$.Payload.StatusCode"
+      },
+      "ResultPath": "$.SecretResult",
+      "Next": "DeleteSecretPrivate",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.SecretError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
     "DeleteSecret": {
       "Type": "Task",
       "Resource": "arn:aws:states:::eks:call",
@@ -170,6 +291,35 @@
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.SecretDeleteResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SecretDeleteError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "DeleteSecretPrivate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EksClusterName",
+          "Method": "DELETE",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "ResponseBody.$": "$.Payload.ResponseBody",
+        "StatusCode.$": "$.Payload.StatusCode"
       },
       "ResultPath": "$.SecretDeleteResult",
       "Next": "PrepareOutput",
