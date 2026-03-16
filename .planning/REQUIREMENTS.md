@@ -35,8 +35,8 @@ Requirements pour la modularisation complete. Chaque requirement mappe a une pha
 - [x] **CON-02**: Consolider scale_services et scale_services_private en 1 fichier parametrise
 - [x] **CON-03**: Consolider verify_and_restart_services et verify_and_restart_services_private en 1 fichier parametrise
 - [ ] **CON-04**: Consolider run_archive_job et run_archive_job_private en 1 fichier avec gestion Jobs K8s unifiee
-- [ ] **CON-05**: Consolider run_mysqldump_on_eks et run_mysqldump_on_eks_private en 1 fichier
-- [ ] **CON-06**: Consolider run_mysqlimport_on_eks et run_mysqlimport_on_eks_private en 1 fichier
+- [x] **CON-05**: Consolider run_mysqldump_on_eks et run_mysqldump_on_eks_private en 1 fichier
+- [x] **CON-06**: Consolider run_mysqlimport_on_eks et run_mysqlimport_on_eks_private en 1 fichier
 
 ### Tests & CI
 
@@ -89,8 +89,8 @@ Deferred a un milestone futur.
 | CON-02 | Phase 3 | Complete |
 | CON-03 | Phase 3 | Complete |
 | CON-04 | Phase 3 | Pending |
-| CON-05 | Phase 3 | Pending |
-| CON-06 | Phase 3 | Pending |
+| CON-05 | Phase 3 | Complete |
+| CON-06 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 21 total

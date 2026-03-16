@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-16T09:00:47.448Z"
-last_activity: 2026-03-16 — Completed 03-01 EKS ASL consolidation (3 pairs merged, 3 _private files deleted)
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-16T09:06:21Z"
+last_activity: 2026-03-16 — Completed 03-02 DB ASL consolidation (2 pairs merged, 2 _private files deleted)
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State
@@ -26,18 +26,18 @@ See: .planning/PROJECT.md (updated 2026-03-13)
 ## Current Position
 
 Phase: 3 of 3 (Consolidation)
-Plan: 1 of 3 in current phase -- COMPLETE
+Plan: 2 of 3 in current phase -- COMPLETE
 Status: In Progress
-Last activity: 2026-03-16 — Completed 03-01 EKS ASL consolidation (3 pairs merged, 3 _private files deleted)
+Last activity: 2026-03-16 — Completed 03-02 DB ASL consolidation (2 pairs merged, 2 _private files deleted)
 
-Progress: [████████░░] 78%
+Progress: [█████████░] 89%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: 5min
-- Total execution time: 38min
+- Total execution time: 42min
 
 **By Phase:**
 
@@ -45,11 +45,11 @@ Progress: [████████░░] 78%
 |-------|-------|-------|----------|
 | 1. Extraction | 3/3 | 7min | 2min |
 | 2. Refactoring | 3/3 | 25min | 8min |
-| 3. Consolidation | 1/3 | 6min | 6min |
+| 3. Consolidation | 2/3 | 10min | 5min |
 
 **Recent Trend:**
-- Last 5 plans: 01-03 (2min), 02-01 (13min), 02-02 (7min), 02-03 (5min), 03-01 (6min)
-- Trend: Phase 3 consolidation comparable to Phase 2 refactoring complexity
+- Last 5 plans: 02-01 (13min), 02-02 (7min), 02-03 (5min), 03-01 (6min), 03-02 (4min)
+- Trend: Phase 3 consolidation faster than Phase 2 refactoring, pattern reuse accelerating
 
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
@@ -60,6 +60,7 @@ Progress: [████████░░] 78%
 | Phase 02-refactoring P02 | 7min | 2 tasks | 5 files |
 | Phase 02-refactoring P03 | 5min | 2 tasks | 5 files |
 | Phase 03-consolidation P01 | 6min | 2 tasks | 8 files |
+| Phase 03-consolidation P02 | 4min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,9 @@ Decisions recentes affectant le travail courant :
 - [Phase 03-consolidation]: Hybrid approach for manage_storage -- fork at ChooseAction/ChooseActionPrivate, share Wait states with CheckAccessMode routing
 - [Phase 03-consolidation]: InitPrivateDefaults stub pattern for Map-based ASLs to resolve ItemSelector paths when EksCluster absent in private mode
 - [Phase 03-consolidation]: AccessMode propagated as $.AccessMode inside Map ItemSelector for internal Choice routing
+- [Phase 03-consolidation]: run_mysqldump uses InitPrivateDefaults + inner Map CheckAccessModeForDump for per-table job execution mode routing
+- [Phase 03-consolidation]: run_mysqlimport uses dual CheckAccessMode: outer for GetEksClusterInfo skip, CheckAccessModeForImport for job lifecycle fork
+- [Phase 03-consolidation]: CheckSkipDeletion debug feature preserved in private import path only (not reachable from public path)
 
 ### Pending Todos
 
@@ -105,6 +109,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T09:00:47.446Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-03-16T09:06:21Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
