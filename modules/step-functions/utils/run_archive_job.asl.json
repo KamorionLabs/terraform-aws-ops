@@ -1,5 +1,5 @@
 {
-  "Comment": "Run archive job to sync MySQL dumps and media files to S3 in destination account",
+  "Comment": "Runs archive Kubernetes job. Supports both public (eks:runJob.sync) and private (k8s-proxy Lambda) access modes.",
   "StartAt": "GetClusterInfo",
   "States": {
     "GetClusterInfo": {
@@ -74,7 +74,19 @@
         "ParsedSecret.$": "States.StringToJson($.SecretValue.SecretString)"
       },
       "ResultPath": "$.ParsedSecretResult",
-      "Next": "GetEksClusterInfo"
+      "Next": "CheckAccessModeForJob"
+    },
+    "CheckAccessModeForJob": {
+      "Type": "Choice",
+      "Comment": "Route to public (eks:runJob.sync) or private (k8s-proxy Lambda) job lifecycle based on EKS access mode",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "GetEksClusterInfo"
+        }
+      ],
+      "Default": "CreateArchiveJob"
     },
     "GetEksClusterInfo": {
       "Type": "Task",
@@ -183,6 +195,226 @@
           "Next": "ArchiveFailed"
         }
       ]
+    },
+    "CreateArchiveJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "createJob",
+          "ClusterName.$": "$.EKS.ClusterName",
+          "Namespace.$": "$.EKS.Namespace",
+          "Job": {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+              "name.$": "States.Format('refresh-archive-{}', $.ExecutionName)",
+              "namespace.$": "$.EKS.Namespace"
+            },
+            "spec": {
+              "template": {
+                "metadata": {
+                  "name": "refresh-archive"
+                },
+                "spec": {
+                  "serviceAccountName.$": "$.EKS.ArchiveJob.ServiceAccount",
+                  "nodeSelector.$": "$.EKS.NodeSelector",
+                  "tolerations.$": "$.EKS.Tolerations",
+                  "volumes": [
+                    {
+                      "name": "shared-data",
+                      "persistentVolumeClaim": {
+                        "claimName.$": "$.EKS.ArchiveJob.PvcName"
+                      }
+                    },
+                    {
+                      "name": "shared-data-media",
+                      "persistentVolumeClaim": {
+                        "claimName.$": "$.EfsPvcName"
+                      }
+                    }
+                  ],
+                  "containers": [
+                    {
+                      "name": "mysql-archive",
+                      "image.$": "$.EKS.ArchiveJob.JobImage",
+                      "imagePullPolicy": "Always",
+                      "volumeMounts": [
+                        {
+                          "name": "shared-data",
+                          "mountPath": "/refresh",
+                          "subPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $.ExecutionName)"
+                        },
+                        {
+                          "name": "shared-data-media",
+                          "mountPath": "/shared-data-media",
+                          "subPath.$": "$.EfsSubPath"
+                        }
+                      ],
+                      "env": [
+                        {"name": "TZ", "value": "Europe/Paris"},
+                        {"name": "MYSQL_HOST", "value.$": "$.DbClusterInfo.Endpoint"},
+                        {"name": "MYSQL_USER", "value.$": "$.ParsedSecretResult.ParsedSecret.username"},
+                        {"name": "MYSQL_PASSWORD", "value.$": "$.ParsedSecretResult.ParsedSecret.password"},
+                        {"name": "MYSQL_DATABASE", "value.$": "$.Database.MySQLOperations.DatabaseName"},
+                        {"name": "S3_SYNC", "value": "true"},
+                        {"name": "S3_BUCKET", "value.$": "$.EKS.ArchiveJob.S3Bucket"},
+                        {"name": "S3_PREFIX", "value.$": "$.EKS.ArchiveJob.S3Prefix"},
+                        {"name": "SHARED_FOLDER", "value": "/refresh"},
+                        {"name": "SHARED_MEDIA_FOLDER", "value": "/shared-data-media"},
+                        {"name": "MEDIAFOLDER", "value.$": "$.EKS.ArchiveJob.MediaFolder"}
+                      ]
+                    }
+                  ],
+                  "restartPolicy": "Never"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "JobName.$": "$.Payload.JobName",
+        "Namespace.$": "$.Payload.Namespace",
+        "ClusterName.$": "$.Payload.ClusterName"
+      },
+      "ResultPath": "$.JobInfo",
+      "Next": "WaitForArchiveJob",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ArchiveFailed"
+        }
+      ]
+    },
+    "WaitForArchiveJob": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckArchiveJobStatus"
+    },
+    "CheckArchiveJobStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "getJobStatus",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultSelector": {
+        "Status.$": "$.Payload.Status",
+        "JobName.$": "$.Payload.JobName",
+        "Message.$": "$.Payload.Message"
+      },
+      "ResultPath": "$.JobStatus",
+      "Next": "ArchiveJobStatusChoice",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "DeleteArchiveJobOnError"
+        }
+      ]
+    },
+    "ArchiveJobStatusChoice": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.JobStatus.Status",
+          "StringEquals": "Complete",
+          "Next": "DeleteArchiveJob"
+        },
+        {
+          "Variable": "$.JobStatus.Status",
+          "StringEquals": "Failed",
+          "Next": "DeleteArchiveJobOnError"
+        }
+      ],
+      "Default": "WaitForArchiveJob"
+    },
+    "DeleteArchiveJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "deleteJob",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "PrepareOutput"
+    },
+    "DeleteArchiveJobOnError": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "deleteJob",
+          "ClusterName.$": "$.JobInfo.ClusterName",
+          "Namespace.$": "$.JobInfo.Namespace",
+          "JobName.$": "$.JobInfo.JobName"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "ResultPath": null,
+      "Next": "ArchiveJobFailed"
+    },
+    "ArchiveJobFailed": {
+      "Type": "Fail",
+      "Error": "ArchiveJobFailed",
+      "Cause": "The archive K8s job failed or could not be monitored."
     },
     "PrepareOutput": {
       "Type": "Pass",
