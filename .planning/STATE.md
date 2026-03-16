@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: completed
 stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-03-16T09:19:44.288Z"
+last_updated: "2026-03-16T12:15:01.085Z"
 last_activity: 2026-03-16 — Completed 03-03 Utils ASL consolidation + final cleanup (1 pair merged, eks_access_mode eliminated)
 progress:
   total_phases: 3
@@ -18,10 +18,10 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-13)
+See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutilisable testee independamment.
-**Current focus:** All phases complete
+**Current focus:** Milestone v1.0 shipped — planning next milestone
 
 ## Current Position
 

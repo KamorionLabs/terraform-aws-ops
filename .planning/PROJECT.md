@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Refactorisation des Step Functions ASL du projet terraform-aws-ops pour eliminer la duplication, reduire la complexite des gros fichiers, et consolider les paires public/private. Le projet couvre 44 fichiers ASL totalisant ~550 states, dont ~54 sont des duplications pures.
+Orchestrateur de refresh cross-account AWS utilisant Step Functions, avec des sous-SFN reutilisables, des fichiers ASL consolides (public/private unifies), et un CI complet. Le projet couvre 44 fichiers ASL modulaires avec 6 sous-SFN reutilisables et 0 duplication de patterns.
 
 ## Core Value
 
@@ -19,19 +19,24 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - ✓ Tests ASL de validation (JSON syntax, required fields, state transitions) — existing
 - ✓ CI/CD GitHub Actions (Terraform validation, security scanning) — existing
 - ✓ Checkers de readiness et comparateurs source/destination — existing
+- ✓ Sous-SFN ManageLambdaLifecycle reutilisable (elimine ~24 states dupliques) — v1.0
+- ✓ Sous-SFN ManageAccessPoint reutilisable (elimine ~12 states dupliques) — v1.0
+- ✓ Sous-SFN ManageFileSystemPolicy reutilisable (elimine ~18 states dupliques) — v1.0
+- ✓ Sous-SFN CheckFlagFileSync pour verification flag files EFS — v1.0
+- ✓ Sous-SFN EnsureSnapshotAvailable pour attente snapshots RDS — v1.0
+- ✓ Sous-SFN ClusterSwitchSequence pour sequence rename/delete/tag clusters — v1.0
+- ✓ Refactor check_replication_sync (72 → 27 states) — v1.0
+- ✓ Refactor setup_cross_account_replication (53 → 45 states) — v1.0
+- ✓ Refactor refresh_orchestrator (51 → 42 states) — v1.0
+- ✓ Refactor prepare_snapshot_for_restore (39 → 33 states) — v1.0
+- ✓ Consolidation des 6 paires public/private en 6 fichiers uniques via EKS.AccessMode — v1.0
+- ✓ Tests ASL de validation pour chaque nouvelle sous-SFN — v1.0
+- ✓ Tests de non-regression des interfaces (snapshots JSON) — v1.0
+- ✓ Fix CI GitHub Actions (strip_credentials, matrix EFS/DB) — v1.0
 
 ### Active
 
-- [ ] Sous-SFN ManageLambdaLifecycle reutilisable (elimine ~24 states dupliques)
-- [ ] Sous-SFN ManageAccessPoint reutilisable (elimine ~12 states dupliques)
-- [ ] Sous-SFN ManageFileSystemPolicy reutilisable (elimine ~18 states dupliques)
-- [ ] Refactor check_replication_sync (72 → ~35 states)
-- [ ] Refactor setup_cross_account_replication (53 → ~30 states)
-- [ ] Refactor refresh_orchestrator (51 → ~30 states)
-- [ ] Refactor prepare_snapshot_for_restore (39 → ~18 states)
-- [ ] Consolidation des 6 paires public/private en 6 fichiers uniques parametrises
-- [ ] Tests ASL de validation pour chaque nouvelle sous-SFN
-- [ ] Fix des tests CI GitHub Actions casses par les champs Credentials cross-account
+(None — next milestone requirements TBD)
 
 ### Out of Scope
 
@@ -39,33 +44,41 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - Ajout de monitoring/alerting — amelioration separee
 - Refactor des Lambda functions (monolithes 700+ lignes) — dette technique separee
 - Migration vers un templating ASL (Jinja, jsonnet) — trop de changement a la fois
+- Rollback automatique depuis le parent — impossible par design AWS SFN
+- Execution parallele sous-SFN — complexite concurrence, revisiter si latence mesuree
 
 ## Context
 
-- 44 fichiers ASL, ~550 states cumules
-- Plus gros fichier : check_replication_sync.asl.json (72 states)
-- 6 paires de fichiers public/private quasi-identiques (seule difference : lookup EKS initial)
-- ~54 states de duplication identifiee sur 3 patterns principaux (Lambda lifecycle, Access Point, FS Policy)
-- Tests ASL existants dans `tests/` (validation JSON, structure, transitions) — passent en local mais CI cassee avec champs Credentials
-- Structure Terraform : modules dans `modules/step-functions/` avec sous-modules par domaine
-- Plan de modularisation detaille dans `docs/modularization-plan.md`
+Shipped v1.0 — Step Functions Modularization complete.
+
+- 44 fichiers ASL, 6 sous-SFN reutilisables
+- Plus gros fichier : manage_storage.asl.json (31 states, unifie pub/priv)
+- 0 paires public/private restantes (6 consolidees via EKS.AccessMode)
+- 0 duplication de patterns (54 states dupliques elimines)
+- 916+ tests ASL passent (auto-decouverte via rglob)
+- Architecture Terraform : triple-map (EFS) et dual-map (DB) avec moved blocks
+- Commutateur pub/priv : EKS.AccessMode dans l'input SFN (runtime, pas deploy-time)
 
 ## Constraints
 
-- **Structure Terraform**: Nouvelles sous-SFN dans `modules/step-functions/` (structure existante)
-- **Backward compatibility**: Les interfaces d'input/output des SFN existantes ne doivent pas changer pour les appelants externes
-- **AWS Step Functions**: Sous-SFN via `states:startExecution.sync:2` — latence +2-3s par appel, transitions facturees
+- **Structure Terraform**: Sous-SFN dans `modules/step-functions/` (structure existante)
+- **Backward compatibility**: Interfaces d'input/output des SFN inchangees pour les appelants externes
+- **AWS Step Functions**: Sous-SFN via `states:startExecution.sync:2` — latence +2-3s par appel
 - **Passage de contexte**: Sous-SFN ne partagent pas les variables Assign du parent — tout via Input/Output
-- **Rollback**: Chaque sous-SFN doit gerer ses propres erreurs (Catch) — le parent ne peut pas annuler
+- **Rollback**: Chaque sous-SFN gere ses propres erreurs (Catch) — le parent ne peut pas annuler
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Extraire en sous-SFN plutot que templating | Reutilisation native AWS, testable independamment, pas de build step supplementaire | — Pending |
-| Phases sequentielles (1→2→3) | Phase 2 depend des sous-SFN de Phase 1 | — Pending |
-| Consolider pub/priv via champ Account.RoleArn optionnel | Elimine la divergence entre variantes, une seule source de verite | — Pending |
-| Seuil extraction : >= 4 states OU duplique >= 2 fois | Evite la sur-modularisation et le cout latence des appels sous-SFN | — Pending |
+| Extraire en sous-SFN plutot que templating | Reutilisation native AWS, testable independamment, pas de build step supplementaire | ✓ Good — 6 sous-SFN deployees, testees, reutilisees |
+| Phases sequentielles (1→2→3) | Phase 2 depend des sous-SFN de Phase 1 | ✓ Good — execution fluide, pas de blocages |
+| Consolider pub/priv via EKS.AccessMode (pas Account.RoleArn) | Pub/priv = exposition API K8s, pas cross-account. Choice state route selon le mode | ✓ Good — corrige le commutateur original |
+| Seuil extraction : >= 4 states OU duplique >= 2 fois | Evite la sur-modularisation et le cout latence des appels sous-SFN | ✓ Good — pas de sur-extraction |
+| Dual-map Terraform (file + templatefile) avec moved blocks | Zero impact sur les SFN existantes, migration declarative | ✓ Good — pas de destroy/recreate |
+| Three-tier Terraform pour EFS (avoid circular ARN refs) | efs → efs_sub_templated → efs_templated evite les references circulaires | ✓ Good — pattern propre |
+| $$.Execution.Input materialise via States.ArrayGetItem | Elimine SSM intermediary states, data inline dans InitializeState | ✓ Good — 3 refs resolues proprement |
+| Tests interface snapshots dans tests/snapshots/ | Non-regression automatisee des contrats Input/Output (REF-05) | ✓ Good — empeche les regressions silencieuses |
 
 ---
-*Last updated: 2026-03-13 after initialization*
+*Last updated: 2026-03-16 after v1.0 milestone*
