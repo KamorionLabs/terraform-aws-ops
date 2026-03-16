@@ -43,13 +43,3 @@ variable "naming_convention" {
   }
 }
 
-variable "eks_access_mode" {
-  description = "EKS API access mode: 'public' uses direct eks:call, 'private' uses Lambda proxy via private endpoint"
-  type        = string
-  default     = "public"
-
-  validation {
-    condition     = contains(["public", "private"], var.eks_access_mode)
-    error_message = "eks_access_mode must be 'public' or 'private'"
-  }
-}

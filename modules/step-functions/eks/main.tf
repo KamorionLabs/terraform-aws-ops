@@ -4,18 +4,16 @@
 # -----------------------------------------------------------------------------
 
 locals {
-  _suffix = var.eks_access_mode == "private" ? "_private" : ""
-
   step_functions = {
     # Storage Management
-    manage_storage = "manage_storage${local._suffix}.asl.json"
+    manage_storage = "manage_storage.asl.json"
 
     # Scaling - scale_nodegroup_asg uses aws-sdk only (not eks:call), no private variant needed
     scale_nodegroup_asg = "scale_nodegroup_asg.asl.json"
-    scale_services      = "scale_services${local._suffix}.asl.json"
+    scale_services      = "scale_services.asl.json"
 
     # Verification
-    verify_and_restart_services = "verify_and_restart_services${local._suffix}.asl.json"
+    verify_and_restart_services = "verify_and_restart_services.asl.json"
   }
 
   # Naming: pascal = "EKS-ManageStorage", kebab = "eks-manage-storage"
