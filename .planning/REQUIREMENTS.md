@@ -26,7 +26,7 @@ Requirements pour la synchronisation secrets/parametres. Chaque requirement mapp
 
 ### Infrastructure
 
-- [ ] **INFRA-01**: Module Terraform pour la SFN SyncConfigItems + Lambda(s) dans modules/step-functions/ avec ARN exporte
+- [x] **INFRA-01**: Module Terraform pour la SFN SyncConfigItems + Lambda(s) dans modules/step-functions/ avec ARN exporte
 - [ ] **INFRA-02**: Tests ASL de validation pour la nouvelle SFN (auto-decouverte via rglob existant)
 
 ## v2 Requirements
@@ -65,7 +65,7 @@ Deferred a un milestone futur.
 | ORCH-01 | Phase 6 | Pending |
 | ORCH-02 | Phase 6 | Pending |
 | ORCH-03 | Phase 6 | Pending |
-| INFRA-01 | Phase 4 | Pending |
+| INFRA-01 | Phase 4 | Complete |
 | INFRA-02 | Phase 5 | Pending |
 
 **Coverage:**

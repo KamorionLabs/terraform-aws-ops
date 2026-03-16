@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Secrets & Parameters Sync
-status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-16T16:28:00.000Z"
-last_activity: 2026-03-16 — Plan 04-01 executed (Lambda stub + ASL)
+status: completed
+stopped_at: Completed 04-02-PLAN.md (Phase 4 Foundation complete)
+last_updated: "2026-03-16T16:35:21.990Z"
+last_activity: 2026-03-16 — Plan 04-02 executed (Terraform module sync/ + root wiring)
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
+  completed_plans: 2
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 4 Foundation (Plan 01 complete, Plan 02 next)
+**Current focus:** Milestone v1.1 — Phase 4 Foundation COMPLETE (2/2 plans done)
 
 ## Current Position
 
-Phase: 4 of 6 (Foundation)
-Plan: 1 of 2 complete
-Status: Executing
-Last activity: 2026-03-16 — Plan 04-01 executed (Lambda stub + ASL)
+Phase: 4 of 6 (Foundation) -- COMPLETE
+Plan: 2 of 2 complete
+Status: Phase complete
+Last activity: 2026-03-16 — Plan 04-02 executed (Terraform module sync/ + root wiring)
 
-Progress (v1.1): [█████░░░░░] 50%
-Progress (overall): [█████.....] 50%
+Progress (v1.1): [██████████] 100%
+Progress (overall): [██████████] 100%
 
 ## Performance Metrics
 
@@ -51,11 +51,12 @@ Progress (overall): [█████.....] 50%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 4. Foundation | 1/2 | 4min | 4min |
+| 4. Foundation | 2/2 | 6min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 02-03 (5min), 03-01 (6min), 03-02 (4min), 03-03 (3min), 04-01 (4min)
+- Last 5 plans: 03-01 (6min), 03-02 (4min), 03-03 (3min), 04-01 (4min), 04-02 (2min)
 - Trend: Accelerating
+| Phase 04 P02 | 2min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -71,6 +72,9 @@ Decisions v1.1 :
 - [04-01]: Choice state inside Map iterator (per-item routing) rather than before Map
 - [04-01]: SyncSMItem/SyncSSMItem separate Task states calling same Lambda for Phase 5 extensibility
 - [04-01]: MaxConcurrency 1 for sequential processing in Phase 4
+- [04-02]: Lambda deployed inline (archive_file) like audit/ module, not via lambda-code S3
+- [04-02]: IAM policy STS-only + CloudWatch Logs -- SM/SSM permissions on cross-account roles
+- [04-02]: cross_account_role_arns = concat(source_role_arns, destination_role_arns)
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T16:28:00.000Z
-Stopped at: Completed 04-01-PLAN.md
-Resume file: .planning/phases/04-foundation/04-02-PLAN.md
+Last session: 2026-03-16T16:35:21.989Z
+Stopped at: Completed 04-02-PLAN.md (Phase 4 Foundation complete)
+Resume file: None
