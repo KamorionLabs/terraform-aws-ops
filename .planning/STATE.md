@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-16T00:50:39.060Z"
-last_activity: 2026-03-13 — Completed 02-03 Orchestrator module refactoring (ClusterSwitchSequence sub-SFN, refresh_orchestrator 51->42)
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-16T09:00:47.448Z"
+last_activity: 2026-03-16 — Completed 03-01 EKS ASL consolidation (3 pairs merged, 3 _private files deleted)
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_plans: 9
+  completed_plans: 7
+  percent: 78
 ---
 
 # Project State
@@ -21,23 +21,23 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-13)
 
 **Core value:** Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutilisable testee independamment.
-**Current focus:** Phase 2 — Refactoring
+**Current focus:** Phase 3 — Consolidation
 
 ## Current Position
 
-Phase: 2 of 3 (Refactoring) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
+Phase: 3 of 3 (Consolidation)
+Plan: 1 of 3 in current phase -- COMPLETE
 Status: In Progress
-Last activity: 2026-03-13 — Completed 02-03 Orchestrator module refactoring (ClusterSwitchSequence sub-SFN, refresh_orchestrator 51->42)
+Last activity: 2026-03-16 — Completed 03-01 EKS ASL consolidation (3 pairs merged, 3 _private files deleted)
 
-Progress: [██████████] 100%
+Progress: [████████░░] 78%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 7
 - Average duration: 5min
-- Total execution time: 32min
+- Total execution time: 38min
 
 **By Phase:**
 
@@ -45,11 +45,11 @@ Progress: [██████████] 100%
 |-------|-------|-------|----------|
 | 1. Extraction | 3/3 | 7min | 2min |
 | 2. Refactoring | 3/3 | 25min | 8min |
-| 3. Consolidation | 0/TBD | - | - |
+| 3. Consolidation | 1/3 | 6min | 6min |
 
 **Recent Trend:**
-- Last 5 plans: 01-02 (2min), 01-03 (2min), 02-01 (13min), 02-02 (7min), 02-03 (5min)
-- Trend: Phase 2 plans more complex (~8min avg vs ~2min Phase 1)
+- Last 5 plans: 01-03 (2min), 02-01 (13min), 02-02 (7min), 02-03 (5min), 03-01 (6min)
+- Trend: Phase 3 consolidation comparable to Phase 2 refactoring complexity
 
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
@@ -59,6 +59,7 @@ Progress: [██████████] 100%
 | Phase 02-refactoring P01 | 13min | 3 tasks | 12 files |
 | Phase 02-refactoring P02 | 7min | 2 tasks | 5 files |
 | Phase 02-refactoring P03 | 5min | 2 tasks | 5 files |
+| Phase 03-consolidation P01 | 6min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Decisions recentes affectant le travail courant :
 - [Phase 02-refactoring]: Flat ARN template variables in orchestrator ASL to avoid map lookup syntax breaking JSON
 - [Phase 02-refactoring]: ClusterSwitchSequence at 12 states -- includes PrepareOutput and SwitchComplete for proper output formatting
 - [Phase 02-refactoring]: refresh_orchestrator at 42 states (not ~30) -- only cluster switch extraction, Choice simplification deferred
+- [Phase 03-consolidation]: Hybrid approach for manage_storage -- fork at ChooseAction/ChooseActionPrivate, share Wait states with CheckAccessMode routing
+- [Phase 03-consolidation]: InitPrivateDefaults stub pattern for Map-based ASLs to resolve ItemSelector paths when EksCluster absent in private mode
+- [Phase 03-consolidation]: AccessMode propagated as $.AccessMode inside Map ItemSelector for internal Choice routing
 
 ### Pending Todos
 
@@ -101,6 +105,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-16T00:50:39.058Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-consolidation/03-CONTEXT.md
+Last session: 2026-03-16T09:00:47.446Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: None
