@@ -54,25 +54,25 @@ Deferred a un milestone futur.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SYNC-01 | TBD | Pending |
-| SYNC-02 | TBD | Pending |
-| SYNC-03 | TBD | Pending |
-| SYNC-04 | TBD | Pending |
-| SYNC-05 | TBD | Pending |
-| SYNC-06 | TBD | Pending |
-| SYNC-07 | TBD | Pending |
-| SYNC-08 | TBD | Pending |
-| ORCH-01 | TBD | Pending |
-| ORCH-02 | TBD | Pending |
-| ORCH-03 | TBD | Pending |
-| INFRA-01 | TBD | Pending |
-| INFRA-02 | TBD | Pending |
+| SYNC-01 | Phase 4 | Pending |
+| SYNC-02 | Phase 5 | Pending |
+| SYNC-03 | Phase 5 | Pending |
+| SYNC-04 | Phase 5 | Pending |
+| SYNC-05 | Phase 5 | Pending |
+| SYNC-06 | Phase 5 | Pending |
+| SYNC-07 | Phase 5 | Pending |
+| SYNC-08 | Phase 4 | Pending |
+| ORCH-01 | Phase 6 | Pending |
+| ORCH-02 | Phase 6 | Pending |
+| ORCH-03 | Phase 6 | Pending |
+| INFRA-01 | Phase 4 | Pending |
+| INFRA-02 | Phase 5 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13
+- Mapped to phases: 13
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after initial definition*
+*Last updated: 2026-03-16 after roadmap creation*
