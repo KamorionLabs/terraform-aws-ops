@@ -9,14 +9,14 @@ Requirements pour la synchronisation secrets/parametres. Chaque requirement mapp
 
 ### Sync Engine
 
-- [ ] **SYNC-01**: SFN SyncConfigItems unique traitant Secrets Manager et SSM Parameter Store via Choice state sur le type — un seul flow (fetch → transform → write) avec backend-specific API calls
+- [x] **SYNC-01**: SFN SyncConfigItems unique traitant Secrets Manager et SSM Parameter Store via Choice state sur le type — un seul flow (fetch → transform → write) avec backend-specific API calls
 - [ ] **SYNC-02**: Fetch cross-account des valeurs source via IAM role assumption (sts:AssumeRole) avec support multi-region
 - [ ] **SYNC-03**: Path mapping configurable — renommage des chemins source vers destination (ex: /rubix/bene-prod/app/* → /digital/prd/app/mro-bene/*)
 - [ ] **SYNC-04**: Transformations de valeurs dans les secrets JSON — remplacement de valeurs par cle (regex ou literal) avec regles configurables dans l'input
 - [ ] **SYNC-05**: Creation automatique du secret/parametre cote destination si inexistant, mise a jour si existant avec valeur differente
 - [ ] **SYNC-06**: Merge mode — preserver les cles destination-only lors de la mise a jour d'un secret JSON (pas d'ecrasement des cles ajoutees cote destination)
 - [ ] **SYNC-07**: Recursive traversal pour SSM — copier tous les parametres sous un path donne avec mapping de path applique a chacun
-- [ ] **SYNC-08**: Lambda(s) generique(s) pour la logique fetch/transform/write — pas de logique metier Rubix-specifique hardcodee
+- [x] **SYNC-08**: Lambda(s) generique(s) pour la logique fetch/transform/write — pas de logique metier Rubix-specifique hardcodee
 
 ### Integration Orchestrator
 
@@ -54,14 +54,14 @@ Deferred a un milestone futur.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SYNC-01 | Phase 4 | Pending |
+| SYNC-01 | Phase 4 | Complete |
 | SYNC-02 | Phase 5 | Pending |
 | SYNC-03 | Phase 5 | Pending |
 | SYNC-04 | Phase 5 | Pending |
 | SYNC-05 | Phase 5 | Pending |
 | SYNC-06 | Phase 5 | Pending |
 | SYNC-07 | Phase 5 | Pending |
-| SYNC-08 | Phase 4 | Pending |
+| SYNC-08 | Phase 4 | Complete |
 | ORCH-01 | Phase 6 | Pending |
 | ORCH-02 | Phase 6 | Pending |
 | ORCH-03 | Phase 6 | Pending |
