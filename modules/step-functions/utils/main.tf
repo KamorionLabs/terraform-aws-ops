@@ -4,14 +4,12 @@
 # -----------------------------------------------------------------------------
 
 locals {
-  _eks_suffix = var.eks_access_mode == "private" ? "_private" : ""
-
   step_functions = {
     # Tagging
     tag_resources = "tag_resources.asl.json"
 
     # Archive (uses EKS)
-    run_archive_job = "run_archive_job${local._eks_suffix}.asl.json"
+    run_archive_job = "run_archive_job.asl.json"
 
     # Preparation & Cleanup
     prepare_refresh  = "prepare_refresh.asl.json"
