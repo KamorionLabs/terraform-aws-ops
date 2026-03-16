@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutilisable testee independamment.
-**Current focus:** Milestone v1.0 shipped — planning next milestone
+**Current focus:** Milestone v1.1 — Secrets & Parameters Sync
 
 ## Current Position
 
-Phase: 3 of 3 (Consolidation) -- COMPLETE
-Plan: 3 of 3 in current phase -- COMPLETE
-Status: Complete
-Last activity: 2026-03-16 — Completed 03-03 Utils ASL consolidation + final cleanup (1 pair merged, eks_access_mode eliminated)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-03-16 — Milestone v1.1 started
 
 Progress: [██████████] 100%
 

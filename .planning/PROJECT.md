@@ -36,7 +36,12 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 
 ### Active
 
-(None — next milestone requirements TBD)
+- [ ] SFN generique pour synchroniser des secrets SM cross-account avec path mapping configurable
+- [ ] SFN generique pour synchroniser des parametres SSM cross-account avec path mapping configurable
+- [ ] Transformations de valeurs configurables dans les secrets JSON (remplacement endpoints, IPs, etc.)
+- [ ] Creation automatique des secrets/parametres cote destination si inexistants
+- [ ] Merge mode : preserver les cles destination-only lors de la sync
+- [ ] Configuration via l'input JSON de l'orchestrateur (optionnel, activable par refresh)
 
 ### Out of Scope
 
@@ -46,6 +51,17 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - Migration vers un templating ASL (Jinja, jsonnet) — trop de changement a la fois
 - Rollback automatique depuis le parent — impossible par design AWS SFN
 - Execution parallele sous-SFN — complexite concurrence, revisiter si latence mesuree
+
+## Current Milestone: v1.1 Secrets & Parameters Sync
+
+**Goal:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS source et destination, avec transformations configurables.
+
+**Target features:**
+- Sync secrets Secrets Manager cross-account avec path mapping
+- Sync parametres SSM cross-account avec path mapping
+- Transformations de valeurs dans les secrets JSON
+- Creation si inexistant, merge mode, key filtering
+- Configuration via input JSON (optionnel dans le refresh orchestrator)
 
 ## Context
 
@@ -58,6 +74,8 @@ Shipped v1.0 — Step Functions Modularization complete.
 - 916+ tests ASL passent (auto-decouverte via rglob)
 - Architecture Terraform : triple-map (EFS) et dual-map (DB) avec moved blocks
 - Commutateur pub/priv : EKS.AccessMode dans l'input SFN (runtime, pas deploy-time)
+- Lambdas compare-secrets-manager et compare-ssm existent deja (comparaison, pas sync)
+- Patterns de mapping NBS→NH documentes (path mapping, value transformations, 6 instances)
 
 ## Constraints
 
@@ -81,4 +99,4 @@ Shipped v1.0 — Step Functions Modularization complete.
 | Tests interface snapshots dans tests/snapshots/ | Non-regression automatisee des contrats Input/Output (REF-05) | ✓ Good — empeche les regressions silencieuses |
 
 ---
-*Last updated: 2026-03-16 after v1.0 milestone*
+*Last updated: 2026-03-16 after v1.1 milestone start*
