@@ -53,15 +53,20 @@ Plans:
 - [x] 02-03-PLAN.md — Module Orchestrator: ClusterSwitchSequence + refactoring refresh_orchestrator
 
 ### Phase 3: Consolidation
-**Goal**: Les 6 paires de fichiers public/private sont remplacees par 6 fichiers uniques parametrises via Account.RoleArn optionnel, eliminant la divergence silencieuse entre variantes.
+**Goal**: Les 6 paires de fichiers public/private sont remplacees par 6 fichiers uniques parametrises via EKS.AccessMode dans l'input SFN, eliminant la divergence silencieuse entre variantes et la variable Terraform eks_access_mode.
 **Depends on**: Phase 2
 **Requirements**: CON-01, CON-02, CON-03, CON-04, CON-05, CON-06
 **Success Criteria** (what must be TRUE):
-  1. Les 6 paires de fichiers ASL (manage_storage, scale_services, verify_and_restart_services, run_archive_job, run_mysqldump_on_eks, run_mysqlimport_on_eks) sont consolidees en 6 fichiers uniques avec un Choice state gatant le chemin Credentials
-  2. Le champ Account.RoleArn est le seul commutateur public/private — absent signifie execution locale, present signifie cross-account via Credentials
-  3. Les modules Terraform EKS, Utils et DB sont mis a jour (logique _suffix supprimee) et le CI matrix est mis a jour pour les fichiers renommes/supprimes
-  4. L'orchestrateur de refresh ne reference plus les ARNs *_private (les anciens fichiers sont supprimes)
-**Plans**: TBD
+  1. Les 6 paires de fichiers ASL (manage_storage, scale_services, verify_and_restart_services, run_archive_job, run_mysqldump_on_eks, run_mysqlimport_on_eks) sont consolidees en 6 fichiers uniques avec un Choice state CheckAccessMode gatant le chemin selon $.EKS.AccessMode
+  2. Le champ EKS.AccessMode est le seul commutateur public/private — "public" route vers eks:call/eks:runJob.sync, "private" route vers lambda:invoke/cycle Lambda
+  3. Les modules Terraform EKS, Utils et DB sont mis a jour (logique _suffix/_eks_suffix supprimee, variable eks_access_mode supprimee)
+  4. Les 6 fichiers _private sont supprimes, zero reference a eks_access_mode dans modules/step-functions/
+**Plans:** 3 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Module EKS: consolider manage_storage + scale_services + verify_and_restart_services, supprimer 3 _private, retirer _suffix et eks_access_mode
+- [ ] 03-02-PLAN.md — Module DB: consolider run_mysqldump_on_eks + run_mysqlimport_on_eks, supprimer 2 _private, retirer _eks_suffix et eks_access_mode
+- [ ] 03-03-PLAN.md — Module Utils: consolider run_archive_job, supprimer 1 _private, retirer _eks_suffix et eks_access_mode, verification finale cross-module
 
 ## Progress
 
@@ -72,4 +77,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Extraction | 3/3 | Complete | 2026-03-13 |
 | 2. Refactoring | 3/3 | Complete | 2026-03-13 |
-| 3. Consolidation | 0/TBD | Not started | - |
+| 3. Consolidation | 0/3 | Not started | - |
