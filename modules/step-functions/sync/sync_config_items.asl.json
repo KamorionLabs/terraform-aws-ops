@@ -1,0 +1,140 @@
+{
+  "Comment": "Sync config items (secrets/parameters) between AWS accounts - routes SM/SSM via Choice state per item",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.ConfigSync.Enabled",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.ConfigSync.Items",
+              "IsPresent": true
+            }
+          ],
+          "Next": "MapOverItems"
+        }
+      ],
+      "Default": "SyncSkipped"
+    },
+    "MapOverItems": {
+      "Type": "Map",
+      "ItemsPath": "$.ConfigSync.Items",
+      "ItemSelector": {
+        "Item.$": "$$.Map.Item.Value",
+        "SourceAccount.$": "$.ConfigSync.SourceAccount",
+        "DestinationAccount.$": "$.ConfigSync.DestinationAccount"
+      },
+      "MaxConcurrency": 1,
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "CheckType",
+        "States": {
+          "CheckType": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.Item.Type",
+                "StringEquals": "SecretsManager",
+                "Next": "SyncSMItem"
+              },
+              {
+                "Variable": "$.Item.Type",
+                "StringEquals": "SSMParameter",
+                "Next": "SyncSSMItem"
+              }
+            ],
+            "Default": "UnsupportedType"
+          },
+          "SyncSMItem": {
+            "Type": "Task",
+            "Resource": "${SyncConfigItemsLambdaArn}",
+            "End": true,
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "ItemFailed"
+              }
+            ]
+          },
+          "SyncSSMItem": {
+            "Type": "Task",
+            "Resource": "${SyncConfigItemsLambdaArn}",
+            "End": true,
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "Next": "ItemFailed"
+              }
+            ]
+          },
+          "UnsupportedType": {
+            "Type": "Fail",
+            "Error": "UnsupportedTypeError",
+            "Cause": "Item.Type must be SecretsManager or SSMParameter"
+          },
+          "ItemFailed": {
+            "Type": "Fail",
+            "Error": "SyncItemFailed",
+            "Cause": "Failed to sync config item"
+          }
+        }
+      },
+      "ResultPath": "$.SyncResults",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "sync_config_items",
+        "ItemsProcessed.$": "$.SyncResults"
+      },
+      "Next": "SyncSucceeded"
+    },
+    "SyncSkipped": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Skipped",
+        "ModuleName": "sync_config_items",
+        "Reason": "ConfigSync disabled or no items"
+      },
+      "Next": "SyncSucceeded"
+    },
+    "SyncSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}
