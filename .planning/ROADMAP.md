@@ -12,9 +12,9 @@ Ce projet elimine la duplication dans les 44 fichiers ASL de l'orchestrateur de 
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Extraction** - Creer les trois sous-SFN reutilisables et reparer le CI
-- [ ] **Phase 2: Refactoring** - Remplacer la duplication inline par des appels aux sous-SFN
-- [ ] **Phase 3: Consolidation** - Fusionner les 6 paires public/private en fichiers parametrises
+- [x] **Phase 1: Extraction** - Creer les trois sous-SFN reutilisables et reparer le CI
+- [x] **Phase 2: Refactoring** - Remplacer la duplication inline par des appels aux sous-SFN
+- [x] **Phase 3: Consolidation** - Fusionner les 6 paires public/private en fichiers parametrises
 
 ## Phase Details
 
@@ -31,9 +31,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3/3 plans executed (Complete)
 
 Plans:
-- [ ] 01-01-PLAN.md — CI fix (strip_credentials, matrix EFS, audit $$.Execution.Input)
-- [ ] 01-02-PLAN.md — Extraction ManageFileSystemPolicy + Terraform registration + README
-- [ ] 01-03-PLAN.md — Extraction ManageAccessPoint + ManageLambdaLifecycle + README final
+- [x] 01-01-PLAN.md — CI fix (strip_credentials, matrix EFS, audit $$.Execution.Input)
+- [x] 01-02-PLAN.md — Extraction ManageFileSystemPolicy + Terraform registration + README
+- [x] 01-03-PLAN.md — Extraction ManageAccessPoint + ManageLambdaLifecycle + README final
 
 ### Phase 2: Refactoring
 **Goal**: Les quatre fichiers de domaine complexes (check_replication_sync, setup_cross_account_replication, refresh_orchestrator, prepare_snapshot_for_restore) ont remplace leurs blocs dupliques inline par des appels aux sous-SFN de Phase 1, avec des interfaces externes inchangees.
@@ -61,12 +61,12 @@ Plans:
   2. Le champ EKS.AccessMode est le seul commutateur public/private — "public" route vers eks:call/eks:runJob.sync, "private" route vers lambda:invoke/cycle Lambda
   3. Les modules Terraform EKS, Utils et DB sont mis a jour (logique _suffix/_eks_suffix supprimee, variable eks_access_mode supprimee)
   4. Les 6 fichiers _private sont supprimes, zero reference a eks_access_mode dans modules/step-functions/
-**Plans:** 3 plans
+**Plans:** 3/3 plans executed (Complete)
 
 Plans:
-- [ ] 03-01-PLAN.md — Module EKS: consolider manage_storage + scale_services + verify_and_restart_services, supprimer 3 _private, retirer _suffix et eks_access_mode
-- [ ] 03-02-PLAN.md — Module DB: consolider run_mysqldump_on_eks + run_mysqlimport_on_eks, supprimer 2 _private, retirer _eks_suffix et eks_access_mode
-- [ ] 03-03-PLAN.md — Module Utils: consolider run_archive_job, supprimer 1 _private, retirer _eks_suffix et eks_access_mode, verification finale cross-module
+- [x] 03-01-PLAN.md — Module EKS: consolider manage_storage + scale_services + verify_and_restart_services, supprimer 3 _private, retirer _suffix et eks_access_mode
+- [x] 03-02-PLAN.md — Module DB: consolider run_mysqldump_on_eks + run_mysqlimport_on_eks, supprimer 2 _private, retirer _eks_suffix et eks_access_mode
+- [x] 03-03-PLAN.md — Module Utils: consolider run_archive_job, supprimer 1 _private, retirer _eks_suffix et eks_access_mode, verification finale cross-module
 
 ## Progress
 
@@ -77,4 +77,4 @@ Phases execute in numeric order: 1 → 2 → 3
 |-------|----------------|--------|-----------|
 | 1. Extraction | 3/3 | Complete | 2026-03-13 |
 | 2. Refactoring | 3/3 | Complete | 2026-03-13 |
-| 3. Consolidation | 0/3 | Not started | - |
+| 3. Consolidation | 3/3 | Complete | 2026-03-16 |
