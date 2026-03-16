@@ -37,11 +37,11 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full details
   2. La SFN contient un Choice state qui route vers le branch Secrets Manager ou SSM Parameter Store selon le type d'item en input
   3. La Lambda generique accepte un input structure (type, source, destination, credentials) et retourne un output structure -- sans logique metier Rubix-specifique hardcodee
   4. `terraform plan` passe sans erreur avec le nouveau module integre
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md — Lambda stub sync_config_items + tests unitaires + ASL SyncConfigItems avec Choice state
+- [ ] 04-02-PLAN.md — Module Terraform sync/ + wiring root main.tf et outputs.tf
 
 ### Phase 5: Sync Engine
 **Goal**: Le flow complet fetch cross-account, transformation de valeurs, et ecriture destination fonctionne pour SM et SSM -- avec path mapping, merge mode, creation automatique, et recursive traversal
@@ -79,6 +79,6 @@ Plans:
 | 1. Extraction | v1.0 | 3/3 | Complete | 2026-03-13 |
 | 2. Refactoring | v1.0 | 3/3 | Complete | 2026-03-13 |
 | 3. Consolidation | v1.0 | 3/3 | Complete | 2026-03-16 |
-| 4. Foundation | v1.1 | 0/? | Not started | - |
+| 4. Foundation | v1.1 | 0/2 | Planning | - |
 | 5. Sync Engine | v1.1 | 0/? | Not started | - |
 | 6. Orchestrator Integration | v1.1 | 0/? | Not started | - |
