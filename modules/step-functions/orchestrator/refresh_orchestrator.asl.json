@@ -161,6 +161,7 @@
         "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId",
         "MergedDatabaseTags.$": "$.Tags",
         "MergedEfsTags.$": "$.Tags",
+        "ConfigSync.$": "$.ConfigSync",
         "ComputedDumpSubPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $$.Execution.Name)"
       },
       "Next": "CheckEFSReplicationMode"
@@ -1469,7 +1470,7 @@
           "Next": "RotateDatabaseSecrets"
         }
       ],
-      "Default": "Phase4PostSwitchEKS"
+      "Default": "CheckConfigSyncOption"
     },
     "RotateDatabaseSecrets": {
       "Type": "Task",
@@ -1487,13 +1488,65 @@
         "Name.$": "States.Format('{}-RotateSecrets', $$.Execution.Name)"
       },
       "ResultPath": "$.RotateSecretsResult",
-      "Next": "Phase4PostSwitchEKS",
+      "Next": "CheckConfigSyncOption",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.RotateSecretsError",
+          "Next": "CheckConfigSyncOption"
+        }
+      ]
+    },
+    "CheckConfigSyncOption": {
+      "Type": "Choice",
+      "Comment": "Optionally sync config items (secrets/parameters) to destination account",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.ConfigSync.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ConfigSync.Enabled",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "ExecuteSyncConfigItems"
+        }
+      ],
+      "Default": "Phase4PostSwitchEKS"
+    },
+    "ExecuteSyncConfigItems": {
+      "Type": "Task",
+      "Comment": "Sync secrets and parameters from source to destination account",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn": "${sync_config_items_arn}",
+        "Input": {
+          "ConfigSync": {
+            "Enabled": true,
+            "Items.$": "$.ConfigSync.Items",
+            "SourceAccount.$": "$.SourceAccount",
+            "DestinationAccount.$": "$.DestinationAccount"
+          }
+        },
+        "Name.$": "States.Format('{}-SyncConfigItems', $$.Execution.Name)"
+      },
+      "ResultSelector": {
+        "Status.$": "$.Output.Status",
+        "Results.$": "$.Output.Results"
+      },
+      "ResultPath": "$.SyncResult",
+      "Next": "Phase4PostSwitchEKS",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.SyncError",
           "Next": "Phase4PostSwitchEKS"
         }
       ]
