@@ -70,3 +70,9 @@ variable "utils_step_function_arns" {
   type        = map(string)
   default     = {}
 }
+
+variable "sync_step_function_arns" {
+  description = "Map of Sync Step Function ARNs"
+  type        = map(string)
+  default     = {}
+}

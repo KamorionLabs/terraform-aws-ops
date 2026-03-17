@@ -130,4 +130,5 @@ module "orchestrator" {
   efs_step_function_arns   = module.step_functions_efs.step_function_arns
   eks_step_function_arns   = module.step_functions_eks.step_function_arns
   utils_step_function_arns = module.step_functions_utils.step_function_arns
+  sync_step_function_arns  = module.step_functions_sync.step_function_arns
 }

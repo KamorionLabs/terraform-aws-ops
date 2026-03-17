@@ -37,6 +37,7 @@ resource "aws_sfn_state_machine" "orchestrator" {
 
     # Flat ARN variables for sub-SFN calls in ASL (avoids map lookup syntax in JSON)
     cluster_switch_sequence_arn = var.db_step_function_arns["cluster_switch_sequence"]
+    sync_config_items_arn       = lookup(var.sync_step_function_arns, "sync_config_items", "")
   })
 
   logging_configuration {
