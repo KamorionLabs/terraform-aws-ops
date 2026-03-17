@@ -628,7 +628,7 @@
                   "Next": "CheckEKSFields"
                 }
               ],
-              "Default": "ConfigPassed"
+              "Default": "CheckConfigSyncConditional"
             },
             "CheckEKSFields": {
               "Type": "Choice",
@@ -722,7 +722,7 @@
                   "Next": "CheckNotifyFields"
                 }
               ],
-              "Default": "ConfigPassed"
+              "Default": "CheckConfigSyncConditional"
             },
             "CheckNotifyFields": {
               "Type": "Choice",
@@ -733,7 +733,7 @@
                     {"Variable": "$.Notifications.DynamoDB.TableName", "IsPresent": true},
                     {"Variable": "$.Notifications.SNS.TopicArn", "IsPresent": true}
                   ],
-                  "Next": "ConfigPassed"
+                  "Next": "CheckConfigSyncConditional"
                 }
               ],
               "Default": "ConfigMissing_Notifications"
@@ -741,6 +741,41 @@
             "ConfigMissing_Notifications": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "Notifications", "Required": ["DynamoDB.TableName", "SNS.TopicArn"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+
+            "CheckConfigSyncConditional": {
+              "Type": "Choice",
+              "Comment": "If ConfigSync enabled, verify Items array and SFN ARN",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.ConfigSync.Enabled", "IsPresent": true},
+                    {"Variable": "$.ConfigSync.Enabled", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckConfigSyncFields"
+                }
+              ],
+              "Default": "ConfigPassed"
+            },
+            "CheckConfigSyncFields": {
+              "Type": "Choice",
+              "Comment": "Verify ConfigSync.Items exists and SFN ARN is present",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.ConfigSync.Items", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Sync.SyncConfigItems", "IsPresent": true}
+                  ],
+                  "Next": "ConfigPassed"
+                }
+              ],
+              "Default": "ConfigMissing_ConfigSync"
+            },
+            "ConfigMissing_ConfigSync": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "ConfigSync", "Required": ["ConfigSync.Items", "StepFunctions.Sync.SyncConfigItems"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
