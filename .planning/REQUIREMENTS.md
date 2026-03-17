@@ -20,9 +20,9 @@ Requirements pour la synchronisation secrets/parametres. Chaque requirement mapp
 
 ### Integration Orchestrator
 
-- [ ] **ORCH-01**: Section ConfigSync optionnelle dans l'input JSON du refresh orchestrator — si absente ou Enabled=false, la sync est ignoree
-- [ ] **ORCH-02**: Orchestrateur appelle SyncConfigItems via startExecution.sync:2 quand ConfigSync.Enabled=true
-- [ ] **ORCH-03**: Phase d'execution configurable dans l'input (post-restore, pre-verify, etc.)
+- [x] **ORCH-01**: Section ConfigSync optionnelle dans l'input JSON du refresh orchestrator — si absente ou Enabled=false, la sync est ignoree
+- [x] **ORCH-02**: Orchestrateur appelle SyncConfigItems via startExecution.sync:2 quand ConfigSync.Enabled=true
+- [x] **ORCH-03**: Phase d'execution configurable dans l'input (post-restore, pre-verify, etc.)
 
 ### Infrastructure
 
@@ -62,9 +62,9 @@ Deferred a un milestone futur.
 | SYNC-06 | Phase 5 | Complete |
 | SYNC-07 | Phase 5 | Complete |
 | SYNC-08 | Phase 4 | Complete |
-| ORCH-01 | Phase 6 | Pending |
-| ORCH-02 | Phase 6 | Pending |
-| ORCH-03 | Phase 6 | Pending |
+| ORCH-01 | Phase 6 | Complete |
+| ORCH-02 | Phase 6 | Complete |
+| ORCH-03 | Phase 6 | Complete |
 | INFRA-01 | Phase 4 | Complete |
 | INFRA-02 | Phase 5 | Complete |
 

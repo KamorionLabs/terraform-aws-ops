@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Secrets & Parameters Sync
 status: completed
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-17T11:40:10.630Z"
-last_activity: 2026-03-17 — Plan 05-02 executed (full sync engine Lambda implementation)
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-17T11:59:58.889Z"
+last_activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
 progress:
   total_phases: 3
-  completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 3
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 5 Sync Engine COMPLETE (2/2 plans done)
+**Current focus:** Milestone v1.1 — Phase 6 Orchestrator Integration COMPLETE (1/1 plan done)
 
 ## Current Position
 
-Phase: 5 of 6 (Sync Engine)
-Plan: 2 of 2 complete
-Status: Phase complete
-Last activity: 2026-03-17 — Plan 05-02 executed (full sync engine Lambda implementation)
+Phase: 6 of 6 (Orchestrator Integration)
+Plan: 1 of 1 complete
+Status: Milestone v1.1 complete
+Last activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
 
 Progress (v1.1): [██████████] 100%
 Progress (overall): [██████████] 100%
@@ -53,12 +53,14 @@ Progress (overall): [██████████] 100%
 |-------|-------|-------|----------|
 | 4. Foundation | 2/2 | 6min | 3min |
 | 5. Sync Engine | 2/2 | 7min | 3.5min |
+| 6. Orchestrator Integration | 1/1 | 3min | 3min |
 
 **Recent Trend:**
-- Last 5 plans: 03-03 (3min), 04-01 (4min), 04-02 (2min), 05-01 (4min), 05-02 (3min)
+- Last 5 plans: 04-01 (4min), 04-02 (2min), 05-01 (4min), 05-02 (3min), 06-01 (3min)
 - Trend: Stable
 | Phase 05 P01 | 4min | 2 tasks | 2 files |
 | Phase 05 P02 | 3min | 2 tasks | 1 file |
+| Phase 06 P01 | 3min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +86,8 @@ Decisions v1.1 :
 - [05-02]: Non-JSON MergeMode keeps destination value when it exists (no overwrite)
 - [05-02]: SM write uses update-first pattern (put_secret_value, fallback to create_secret)
 - [05-02]: SSM recursive reuses list_matching_parameters internally for wildcard path expansion
+- [06-01]: lookup() with empty default for sync_config_items_arn to avoid errors when sync module not deployed
+- [06-01]: ConfigSync preserved in MergePrepareResults to survive PrepareRefresh phase
 
 ### Pending Todos
 
@@ -96,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T11:40:10.627Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-orchestrator-integration/06-CONTEXT.md
+Last session: 2026-03-17T11:59:58.887Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None
