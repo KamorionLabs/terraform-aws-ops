@@ -60,17 +60,17 @@ Plans:
 - [ ] 05-02-PLAN.md — Implementation Lambda sync_config_items avec fetch/transform/merge/write + tests GREEN
 
 ### Phase 6: Orchestrator Integration
-**Goal**: L'orchestrateur de refresh appelle SyncConfigItems de maniere optionnelle via une section ConfigSync dans l'input JSON, a la phase d'execution configurable
+**Goal**: L'orchestrateur de refresh appelle SyncConfigItems de maniere optionnelle via une section ConfigSync dans l'input JSON, avec activation configurable (Enabled=true/false)
 **Depends on**: Phase 5
 **Requirements**: ORCH-01, ORCH-02, ORCH-03
 **Success Criteria** (what must be TRUE):
   1. Quand ConfigSync est absent ou Enabled=false dans l'input JSON, le refresh_orchestrator ignore completement la sync et son comportement est identique a avant
   2. Quand ConfigSync.Enabled=true, l'orchestrateur appelle SyncConfigItems via startExecution.sync:2 avec la configuration fournie
   3. La phase d'execution de la sync est configurable dans l'input (post-restore, pre-verify, etc.) -- pas hardcodee a un point fixe du flow
-**Plans**: TBD
+**Plans**: 1 plan
 
 Plans:
-- [ ] 06-01: TBD
+- [ ] 06-01-PLAN.md — ASL CheckConfigSyncOption + ExecuteSyncConfigItems states + Terraform ARN wiring
 
 ## Progress
 
@@ -81,4 +81,4 @@ Plans:
 | 3. Consolidation | v1.0 | 3/3 | Complete | 2026-03-16 |
 | 4. Foundation | v1.1 | 0/2 | Planning | - |
 | 5. Sync Engine | v1.1 | 0/2 | Planning | - |
-| 6. Orchestrator Integration | v1.1 | 0/? | Not started | - |
+| 6. Orchestrator Integration | v1.1 | 0/1 | Planning | - |
