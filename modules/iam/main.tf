@@ -89,6 +89,23 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
   })
 }
 
+resource "aws_iam_role_policy" "orchestrator_lambda_invoke" {
+  name = "${var.prefix}-lambda-invoke"
+  role = aws_iam_role.orchestrator.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "InvokeLambdas"
+        Effect = "Allow"
+        Action = "lambda:InvokeFunction"
+        Resource = "arn:aws:lambda:${data.aws_region.current.id}:${local.orchestrator_account_id}:function:${var.prefix}-*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy" "orchestrator_logging" {
   name = "${var.prefix}-logging"
   role = aws_iam_role.orchestrator.id
