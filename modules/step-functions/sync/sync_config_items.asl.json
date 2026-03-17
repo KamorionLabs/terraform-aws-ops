@@ -72,6 +72,7 @@
                 "ErrorEquals": [
                   "States.ALL"
                 ],
+                "ResultPath": "$.ErrorInfo",
                 "Next": "ItemFailed"
               }
             ]
@@ -96,19 +97,38 @@
                 "ErrorEquals": [
                   "States.ALL"
                 ],
+                "ResultPath": "$.ErrorInfo",
                 "Next": "ItemFailed"
               }
             ]
           },
           "UnsupportedType": {
-            "Type": "Fail",
-            "Error": "UnsupportedTypeError",
-            "Cause": "Item.Type must be SecretsManager or SSMParameter"
+            "Type": "Pass",
+            "Parameters": {
+              "statusCode": 200,
+              "result": {
+                "status": "error",
+                "source.$": "$.Item.SourcePath",
+                "destination.$": "$.Item.DestinationPath",
+                "type.$": "$.Item.Type",
+                "message": "Unsupported item type - must be SecretsManager or SSMParameter"
+              }
+            },
+            "End": true
           },
           "ItemFailed": {
-            "Type": "Fail",
-            "Error": "SyncItemFailed",
-            "Cause": "Failed to sync config item"
+            "Type": "Pass",
+            "Parameters": {
+              "statusCode": 200,
+              "result": {
+                "status": "error",
+                "source.$": "$.Item.SourcePath",
+                "destination.$": "$.Item.DestinationPath",
+                "type.$": "$.Item.Type",
+                "message": "Lambda execution failed (infrastructure error)"
+              }
+            },
+            "End": true
           }
         }
       },
@@ -120,7 +140,7 @@
       "Parameters": {
         "Status": "Completed",
         "ModuleName": "sync_config_items",
-        "ItemsProcessed.$": "$.SyncResults"
+        "Results.$": "$.SyncResults"
       },
       "Next": "SyncSucceeded"
     },
