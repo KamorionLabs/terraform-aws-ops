@@ -618,21 +618,21 @@
 
             "CheckSFNEKSConditional": {
               "Type": "Choice",
-              "Comment": "If EKS enabled, check EKS config and SFN ARNs",
+              "Comment": "If EKS.Options.ScaleServices enabled, check services config and SFN ARNs",
               "Choices": [
                 {
                   "And": [
-                    {"Variable": "$.EKS.Enabled", "IsPresent": true},
-                    {"Variable": "$.EKS.Enabled", "BooleanEquals": true}
+                    {"Variable": "$.EKS.Options.ScaleServices", "IsPresent": true},
+                    {"Variable": "$.EKS.Options.ScaleServices", "BooleanEquals": true}
                   ],
-                  "Next": "CheckEKSFields"
+                  "Next": "CheckEKSScaleServicesFields"
                 }
               ],
-              "Default": "CheckConfigSyncConditional"
+              "Default": "CheckEKSManageStorageConditional"
             },
-            "CheckEKSFields": {
+            "CheckEKSScaleServicesFields": {
               "Type": "Choice",
-              "Comment": "Verify EKS config fields and SFN ARNs",
+              "Comment": "Verify EKS fields required for ScaleServices (ClusterName, Namespace, Services, SFN ARNs)",
               "Choices": [
                 {
                   "And": [
@@ -640,23 +640,57 @@
                     {"Variable": "$.EKS.Namespace", "IsPresent": true},
                     {"Variable": "$.EKS.Services", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.ScaleServices", "IsPresent": true},
-                    {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.VerifyAndRestartServices", "IsPresent": true}
                   ],
-                  "Next": "CheckEKSConditionalArns"
+                  "Next": "CheckEKSManageStorageConditional"
                 }
               ],
-              "Default": "ConfigMissing_EKS"
+              "Default": "ConfigMissing_EKSScaleServices"
             },
-            "ConfigMissing_EKS": {
+            "ConfigMissing_EKSScaleServices": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EKS", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.ManageStorage", "StepFunctions.EKS.VerifyAndRestartServices"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ScaleServices", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.VerifyAndRestartServices"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
-            "CheckEKSConditionalArns": {
+            "CheckEKSManageStorageConditional": {
               "Type": "Choice",
-              "Comment": "If RunArchiveJob enabled, check SFN ARN and ScaleNodegroupAsg",
+              "Comment": "If EKS.Options.ManageStorage enabled, check storage config and SFN ARN",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.Options.ManageStorage", "IsPresent": true},
+                    {"Variable": "$.EKS.Options.ManageStorage", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEKSManageStorageFields"
+                }
+              ],
+              "Default": "CheckEKSArchiveJobConditional"
+            },
+            "CheckEKSManageStorageFields": {
+              "Type": "Choice",
+              "Comment": "Verify EKS fields required for ManageStorage (ClusterName, Namespace, SFN ARN)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.ClusterName", "IsPresent": true},
+                    {"Variable": "$.EKS.Namespace", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true}
+                  ],
+                  "Next": "CheckEKSArchiveJobConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EKSManageStorage"
+            },
+            "ConfigMissing_EKSManageStorage": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ManageStorage", "Required": ["ClusterName", "Namespace", "StepFunctions.EKS.ManageStorage"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEKSArchiveJobConditional": {
+              "Type": "Choice",
+              "Comment": "If RunArchiveJob enabled, check SFN ARN",
               "Choices": [
                 {
                   "And": [
@@ -1350,24 +1384,29 @@
         },
 
         {
-          "Comment": "Branch 4: EKS - Validate destination cluster exists (if EKS enabled)",
+          "Comment": "Branch 4: EKS - Validate destination cluster exists (if ScaleServices or ManageStorage enabled)",
           "StartAt": "CheckEKSEnabled_V",
           "States": {
             "CheckEKSEnabled_V": {
               "Type": "Choice",
+              "Comment": "Run EKS validation if ScaleServices or ManageStorage is true",
               "Choices": [
                 {
-                  "Variable": "$.EKS.Enabled",
-                  "IsPresent": false,
-                  "Next": "EKSSkipped"
+                  "And": [
+                    {"Variable": "$.EKS.Options.ScaleServices", "IsPresent": true},
+                    {"Variable": "$.EKS.Options.ScaleServices", "BooleanEquals": true}
+                  ],
+                  "Next": "InitEKSChecks"
                 },
                 {
-                  "Variable": "$.EKS.Enabled",
-                  "BooleanEquals": false,
-                  "Next": "EKSSkipped"
+                  "And": [
+                    {"Variable": "$.EKS.Options.ManageStorage", "IsPresent": true},
+                    {"Variable": "$.EKS.Options.ManageStorage", "BooleanEquals": true}
+                  ],
+                  "Next": "InitEKSChecks"
                 }
               ],
-              "Default": "InitEKSChecks"
+              "Default": "EKSSkipped"
             },
             "EKSSkipped": {
               "Type": "Pass",

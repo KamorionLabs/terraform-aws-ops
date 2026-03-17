@@ -1252,19 +1252,40 @@
     },
     "CheckEKSEnabled_PreSwitch": {
       "Type": "Choice",
+      "Comment": "Check if ScaleServices is enabled for pre-switch scale down",
       "Choices": [
         {
           "And": [
             {
-              "Variable": "$.EKS.Enabled",
+              "Variable": "$.EKS.Options.ScaleServices",
               "IsPresent": true
             },
             {
-              "Variable": "$.EKS.Enabled",
+              "Variable": "$.EKS.Options.ScaleServices",
               "BooleanEquals": true
             }
           ],
           "Next": "ScaleDownServices"
+        }
+      ],
+      "Default": "CheckManageStoragePreSwitch"
+    },
+    "CheckManageStoragePreSwitch": {
+      "Type": "Choice",
+      "Comment": "Check if ManageStorage is enabled for pre-switch storage deletion",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Options.ManageStorage",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Options.ManageStorage",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "DeleteEKSStorage"
         }
       ],
       "Default": "CheckEFSCrossAccountFinalSync"
@@ -1286,14 +1307,14 @@
         "Name.$": "States.Format('{}-ScaleDownServices', $$.Execution.Name)"
       },
       "ResultPath": "$.ScaleDownResult",
-      "Next": "DeleteEKSStorage",
+      "Next": "CheckManageStoragePreSwitch",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.ScaleDownError",
-          "Next": "DeleteEKSStorage"
+          "Next": "CheckManageStoragePreSwitch"
         }
       ]
     },
@@ -1558,19 +1579,40 @@
     },
     "CheckEKSEnabled_PostSwitch": {
       "Type": "Choice",
+      "Comment": "Check if ManageStorage is enabled for post-switch storage creation",
       "Choices": [
         {
           "And": [
             {
-              "Variable": "$.EKS.Enabled",
+              "Variable": "$.EKS.Options.ManageStorage",
               "IsPresent": true
             },
             {
-              "Variable": "$.EKS.Enabled",
+              "Variable": "$.EKS.Options.ManageStorage",
               "BooleanEquals": true
             }
           ],
           "Next": "CreateEKSStorage"
+        }
+      ],
+      "Default": "CheckScaleServicesPostSwitch"
+    },
+    "CheckScaleServicesPostSwitch": {
+      "Type": "Choice",
+      "Comment": "Check if ScaleServices is enabled for post-switch scale up",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Options.ScaleServices",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Options.ScaleServices",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "ScaleUpServices"
         }
       ],
       "Default": "Phase5Cleanup"
@@ -1593,14 +1635,14 @@
         "Name.$": "States.Format('{}-CreateEKSStorage', $$.Execution.Name)"
       },
       "ResultPath": "$.CreateStorageResult",
-      "Next": "ScaleUpServices",
+      "Next": "CheckScaleServicesPostSwitch",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.CreateStorageError",
-          "Next": "Phase5Cleanup"
+          "Next": "CheckScaleServicesPostSwitch"
         }
       ]
     },
