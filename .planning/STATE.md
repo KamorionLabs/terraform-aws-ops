@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Secrets & Parameters Sync
 status: executing
-stopped_at: Completed 05-01-PLAN.md
-last_updated: "2026-03-17T10:19:29.443Z"
-last_activity: 2026-03-17 — Plan 05-01 executed (TDD tests + ASL error handling fix)
+stopped_at: Completed 05-02-PLAN.md
+last_updated: "2026-03-17T10:24:00Z"
+last_activity: 2026-03-17 — Plan 05-02 executed (full sync engine Lambda implementation)
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 5 Sync Engine IN PROGRESS (1/2 plans done)
+**Current focus:** Milestone v1.1 — Phase 5 Sync Engine COMPLETE (2/2 plans done)
 
 ## Current Position
 
 Phase: 5 of 6 (Sync Engine)
-Plan: 1 of 2 complete
-Status: In progress
-Last activity: 2026-03-17 — Plan 05-01 executed (TDD tests + ASL error handling fix)
+Plan: 2 of 2 complete
+Status: Phase complete
+Last activity: 2026-03-17 — Plan 05-02 executed (full sync engine Lambda implementation)
 
-Progress (v1.1): [████████░░] 75%
-Progress (overall): [████████░░] 75%
+Progress (v1.1): [██████████] 100%
+Progress (overall): [██████████] 100%
 
 ## Performance Metrics
 
@@ -52,12 +52,13 @@ Progress (overall): [████████░░] 75%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 4. Foundation | 2/2 | 6min | 3min |
-| 5. Sync Engine | 1/2 | 4min | 4min |
+| 5. Sync Engine | 2/2 | 7min | 3.5min |
 
 **Recent Trend:**
-- Last 5 plans: 03-02 (4min), 03-03 (3min), 04-01 (4min), 04-02 (2min), 05-01 (4min)
+- Last 5 plans: 03-03 (3min), 04-01 (4min), 04-02 (2min), 05-01 (4min), 05-02 (3min)
 - Trend: Stable
 | Phase 05 P01 | 4min | 2 tasks | 2 files |
+| Phase 05 P02 | 3min | 2 tasks | 1 file |
 
 ## Accumulated Context
 
@@ -79,6 +80,10 @@ Decisions v1.1 :
 - [05-01]: ItemFailed/UnsupportedType changed from Fail to Pass states for continue+rapport Map semantics
 - [05-01]: Catch blocks use ResultPath $.ErrorInfo to preserve original input for error reporting
 - [05-01]: PrepareOutput uses Results.$ instead of ItemsProcessed.$ for SyncResults passthrough
+- [05-02]: map_destination_path takes full source_pattern (not just prefix) for consistent wildcard handling
+- [05-02]: Non-JSON MergeMode keeps destination value when it exists (no overwrite)
+- [05-02]: SM write uses update-first pattern (put_secret_value, fallback to create_secret)
+- [05-02]: SSM recursive reuses list_matching_parameters internally for wildcard path expansion
 
 ### Pending Todos
 
@@ -91,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T10:19:29.441Z
-Stopped at: Completed 05-01-PLAN.md
-Resume file: .planning/phases/05-sync-engine/05-01-SUMMARY.md
+Last session: 2026-03-17T10:24:00Z
+Stopped at: Completed 05-02-PLAN.md
+Resume file: .planning/phases/05-sync-engine/05-02-SUMMARY.md
