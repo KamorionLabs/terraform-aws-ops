@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Secrets & Parameters Sync
-status: completed
-stopped_at: Phase 5 context gathered
-last_updated: "2026-03-17T09:28:11.050Z"
-last_activity: 2026-03-16 — Plan 04-02 executed (Terraform module sync/ + root wiring)
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-03-17T10:19:29.443Z"
+last_activity: 2026-03-17 — Plan 05-01 executed (TDD tests + ASL error handling fix)
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  total_plans: 4
+  completed_plans: 3
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 4 Foundation COMPLETE (2/2 plans done)
+**Current focus:** Milestone v1.1 — Phase 5 Sync Engine IN PROGRESS (1/2 plans done)
 
 ## Current Position
 
-Phase: 4 of 6 (Foundation) -- COMPLETE
-Plan: 2 of 2 complete
-Status: Phase complete
-Last activity: 2026-03-16 — Plan 04-02 executed (Terraform module sync/ + root wiring)
+Phase: 5 of 6 (Sync Engine)
+Plan: 1 of 2 complete
+Status: In progress
+Last activity: 2026-03-17 — Plan 05-01 executed (TDD tests + ASL error handling fix)
 
-Progress (v1.1): [██████████] 100%
-Progress (overall): [██████████] 100%
+Progress (v1.1): [████████░░] 75%
+Progress (overall): [████████░░] 75%
 
 ## Performance Metrics
 
@@ -52,11 +52,12 @@ Progress (overall): [██████████] 100%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 4. Foundation | 2/2 | 6min | 3min |
+| 5. Sync Engine | 1/2 | 4min | 4min |
 
 **Recent Trend:**
-- Last 5 plans: 03-01 (6min), 03-02 (4min), 03-03 (3min), 04-01 (4min), 04-02 (2min)
-- Trend: Accelerating
-| Phase 04 P02 | 2min | 2 tasks | 6 files |
+- Last 5 plans: 03-02 (4min), 03-03 (3min), 04-01 (4min), 04-02 (2min), 05-01 (4min)
+- Trend: Stable
+| Phase 05 P01 | 4min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,9 @@ Decisions v1.1 :
 - [04-02]: Lambda deployed inline (archive_file) like audit/ module, not via lambda-code S3
 - [04-02]: IAM policy STS-only + CloudWatch Logs -- SM/SSM permissions on cross-account roles
 - [04-02]: cross_account_role_arns = concat(source_role_arns, destination_role_arns)
+- [05-01]: ItemFailed/UnsupportedType changed from Fail to Pass states for continue+rapport Map semantics
+- [05-01]: Catch blocks use ResultPath $.ErrorInfo to preserve original input for error reporting
+- [05-01]: PrepareOutput uses Results.$ instead of ItemsProcessed.$ for SyncResults passthrough
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T09:28:11.047Z
-Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-sync-engine/05-CONTEXT.md
+Last session: 2026-03-17T10:19:29.441Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-sync-engine/05-01-SUMMARY.md
