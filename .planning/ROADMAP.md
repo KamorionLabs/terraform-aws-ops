@@ -53,11 +53,11 @@ Plans:
   3. Les valeurs JSON des secrets sont transformees selon les regles configurees (remplacement regex ou literal par cle) et le merge mode preserve les cles destination-only
   4. Les secrets/parametres sont crees cote destination si inexistants, mis a jour si la valeur differe, et le recursive traversal copie tous les parametres sous un path SSM donne
   5. Les tests ASL de validation passent pour la SFN SyncConfigItems (auto-decouverte via rglob existant)
-**Plans**: TBD
+**Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
+- [ ] 05-01-PLAN.md — Tests comportementaux TDD RED (SYNC-02 a SYNC-07) + fix ASL ItemFailed Pass pour continue+rapport
+- [ ] 05-02-PLAN.md — Implementation Lambda sync_config_items avec fetch/transform/merge/write + tests GREEN
 
 ### Phase 6: Orchestrator Integration
 **Goal**: L'orchestrateur de refresh appelle SyncConfigItems de maniere optionnelle via une section ConfigSync dans l'input JSON, a la phase d'execution configurable
@@ -80,5 +80,5 @@ Plans:
 | 2. Refactoring | v1.0 | 3/3 | Complete | 2026-03-13 |
 | 3. Consolidation | v1.0 | 3/3 | Complete | 2026-03-16 |
 | 4. Foundation | v1.1 | 0/2 | Planning | - |
-| 5. Sync Engine | v1.1 | 0/? | Not started | - |
+| 5. Sync Engine | v1.1 | 0/2 | Planning | - |
 | 6. Orchestrator Integration | v1.1 | 0/? | Not started | - |
