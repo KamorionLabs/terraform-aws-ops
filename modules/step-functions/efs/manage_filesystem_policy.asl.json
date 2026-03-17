@@ -16,7 +16,7 @@
       "Next": "ParseCurrentPolicy",
       "Catch": [
         {
-          "ErrorEquals": ["Efs.PolicyNotFound"],
+          "ErrorEquals": ["Efs.PolicyNotFound", "Efs.PolicyNotFoundException"],
           "ResultPath": "$.PolicyNotFound",
           "Comment": "No policy exists yet - route based on action",
           "Next": "CheckActionOnMissingPolicy"
