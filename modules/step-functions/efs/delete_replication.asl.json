@@ -5,8 +5,8 @@
     "PrepareDeletionContext": {
       "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Comment": "Determine deletion mode: destination-side (cross-region) or source-side (same region). For cross-region, use destination account credentials since source EFS is in a different region than the SFN.",
-      "Output": "{% ($sfnRegion := $split($states.context.StateMachine.Id, ':')[3]; $isCrossRegion := $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $sfnRegion and $exists($states.input.DestinationFileSystemId); $merge([$states.input, {'DeletionRoleArn': $isCrossRegion ? $states.input.DestinationAccount.RoleArn : $states.input.SourceAccount.RoleArn, 'DescribeFileSystemId': $isCrossRegion ? $states.input.DestinationFileSystemId : $states.input.SourceFileSystemId, 'SkipSourcePolicyCleanup': $isCrossRegion}])) %}",
+      "Comment": "Determine deletion mode: destination-side (cross-account or cross-region) or source-side (same account+region). Cross-account replication must be deleted from the destination side. Cross-region also requires destination-side deletion since source EFS is unreachable from the SFN region.",
+      "Output": "{% ($sfnRegion := $split($states.context.StateMachine.Id, ':')[3]; $isCrossRegion := $exists($states.input.SourceAccount.Region) and $states.input.SourceAccount.Region != $sfnRegion; $isCrossAccount := $exists($states.input.SourceAccount.AccountId) and $exists($states.input.DestinationAccount.AccountId) and $states.input.SourceAccount.AccountId != $states.input.DestinationAccount.AccountId; $useDestinationSide := ($isCrossAccount or $isCrossRegion) and $exists($states.input.DestinationFileSystemId); $merge([$states.input, {'DeletionRoleArn': $useDestinationSide ? $states.input.DestinationAccount.RoleArn : $states.input.SourceAccount.RoleArn, 'DescribeFileSystemId': $useDestinationSide ? $states.input.DestinationFileSystemId : $states.input.SourceFileSystemId, 'SkipSourcePolicyCleanup': $isCrossRegion}])) %}",
       "Next": "GetReplicationConfig"
     },
     "GetReplicationConfig": {
