@@ -339,26 +339,21 @@
             },
             "CreateEFSMountTargets_Repl": {
               "Type": "Task",
+              "QueryLanguage": "JSONata",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
-              "Parameters": {
-                "StateMachineArn.$": "$.StepFunctions.EFS.CreateFilesystem",
-                "Input": {
-                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
-                  "SubnetIds.$": "$.EFS.Network.SubnetIds",
-                  "SecurityGroupIds.$": "$.EFS.Network.SecurityGroupIds",
-                  "LifecyclePolicies.$": "$.EFS.Lifecycle",
-                  "DestinationAccount.$": "$.DestinationAccount"
-                },
-                "Name.$": "States.Format('{}-CreateMountTargets', $$.Execution.Name)"
+              "Arguments": {
+                "StateMachineArn": "{% $states.input.StepFunctions.EFS.CreateFilesystem %}",
+                "Input": "{% $merge([{'FileSystemId': $states.input.EfsRestoreResult.Output.FileSystemId, 'SubnetIds': $states.input.EFS.Network.SubnetIds, 'SecurityGroupIds': $states.input.EFS.Network.SecurityGroupIds, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.EFS.Lifecycle) ? {'LifecyclePolicies': $states.input.EFS.Lifecycle} : {}]) %}",
+                "Name": "{% $states.context.Execution.Name & '-CreateMountTargets' %}"
               },
-              "ResultPath": "$.EfsConfigureResult",
+              "Output": "{% $merge([$states.input, {'EfsConfigureResult': $states.result}]) %}",
               "Next": "CheckStoreInSSM_Repl",
               "Catch": [
                 {
                   "ErrorEquals": [
                     "States.ALL"
                   ],
-                  "ResultPath": "$.Error",
+                  "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
                   "Next": "EFSReplicationFailed_Repl"
                 }
               ]
