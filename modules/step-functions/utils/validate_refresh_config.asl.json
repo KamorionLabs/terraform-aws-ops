@@ -494,10 +494,67 @@
                     {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
                     {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true}
                   ],
-                  "Next": "CheckEFSDestinationMode"
+                  "Next": "CheckEFSContextFields"
                 }
               ],
               "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSContextFields": {
+              "Type": "Choice",
+              "Comment": "Verify EFS.Context and EFS.LambdaConfig are present (required for CheckReplicationSync)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Context", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig.EnableFlagFileCheck", "IsPresent": true},
+                    {"Variable": "$.EFS.SSMParameters.EfsSubPath", "IsPresent": true},
+                    {"Variable": "$.EFS.SSMParameters.SourceEfsSubPath", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSFlagFileConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EFSContext"
+            },
+            "ConfigMissing_EFSContext": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.Context", "Required": ["EFS.Context", "EFS.LambdaConfig", "EFS.LambdaConfig.EnableFlagFileCheck", "EFS.SSMParameters.EfsSubPath", "EFS.SSMParameters.SourceEfsSubPath"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEFSFlagFileConditional": {
+              "Type": "Choice",
+              "Comment": "If EnableFlagFileCheck is true, verify Lambda prefix fields and SSM sync requirement",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.LambdaConfig.EnableFlagFileCheck", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEFSFlagFileFields"
+                }
+              ],
+              "Default": "CheckEFSDestinationMode"
+            },
+            "CheckEFSFlagFileFields": {
+              "Type": "Choice",
+              "Comment": "Verify Lambda prefix fields and SyncConfigItems ARN (needed to sync SSM subpath before flag check)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.LambdaConfig.SourceLambdaPrefix", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig.DestinationLambdaPrefix", "IsPresent": true},
+                    {"Variable": "$.StepFunctions.Sync.SyncConfigItems", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSDestinationMode"
+                }
+              ],
+              "Default": "ConfigMissing_EFSFlagFile"
+            },
+            "ConfigMissing_EFSFlagFile": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.FlagFileCheck", "Required": ["LambdaConfig.SourceLambdaPrefix", "LambdaConfig.DestinationLambdaPrefix", "StepFunctions.Sync.SyncConfigItems (for SSM subpath sync)"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
             },
             "CheckEFSDestinationMode": {
               "Type": "Choice",
