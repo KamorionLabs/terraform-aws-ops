@@ -388,15 +388,16 @@ def merge_values(
 # ---------------------------------------------------------------------------
 
 
-def sync_secret(event: dict) -> dict:
+def sync_secret(event: dict, dry_run: bool = False) -> dict:
     """
     Sync a Secrets Manager secret from source to destination.
 
     Handles: cross-account fetch, wildcard expansion, transforms,
-    merge mode, and auto-create.
+    merge mode, and auto-create. Supports dry_run for preview.
 
     Args:
         event: Full Lambda event with Item, SourceAccount, DestinationAccount
+        dry_run: If True, preview changes without writing
 
     Returns:
         Result dict with status, source, destination, type, message
@@ -442,7 +443,7 @@ def sync_secret(event: dict) -> dict:
     if len(pairs) == 1 and "*" not in source_path:
         src, dst = pairs[0]
         result = _sync_single_secret(
-            source_client, dest_client, src, dst, transforms, merge_mode
+            source_client, dest_client, src, dst, transforms, merge_mode, dry_run
         )
         return result
 
@@ -454,7 +455,7 @@ def sync_secret(event: dict) -> dict:
     for src, dst in pairs:
         try:
             result = _sync_single_secret(
-                source_client, dest_client, src, dst, transforms, merge_mode
+                source_client, dest_client, src, dst, transforms, merge_mode, dry_run
             )
             details.append(
                 {"source": src, "destination": dst, "status": result["status"]}
@@ -491,6 +492,7 @@ def _sync_single_secret(
     dest_path: str,
     transforms: dict,
     merge_mode: bool,
+    dry_run: bool = False,
 ) -> dict:
     """
     Sync a single secret from source to destination.
@@ -518,6 +520,10 @@ def _sync_single_secret(
         transformed_value = _handle_merge_mode(
             dest_client, dest_path, source_value, transformed_value, transforms
         )
+
+    # Dry run: read destination and compare, don't write
+    if dry_run:
+        return _dry_run_secret(dest_client, source_path, dest_path, transformed_value)
 
     # Write to destination
     write_status = _write_secret(dest_client, dest_path, transformed_value)
@@ -575,6 +581,52 @@ def _handle_merge_mode(
     return dest_value
 
 
+def _dry_run_secret(
+    dest_client: Any,
+    source_path: str,
+    dest_path: str,
+    new_value: str,
+) -> dict:
+    """Preview what would happen without writing."""
+    try:
+        dest_response = dest_client.get_secret_value(SecretId=dest_path)
+        current_value = dest_response["SecretString"]
+        if current_value == new_value:
+            action = "no-change"
+        else:
+            action = "would-update"
+    except dest_client.exceptions.ResourceNotFoundException:
+        current_value = None
+        action = "would-create"
+
+    result = {
+        "status": "dry-run",
+        "action": action,
+        "source": source_path,
+        "destination": dest_path,
+        "type": "SecretsManager",
+        "message": f"Dry run: {action}",
+    }
+
+    # Include value previews for JSON secrets (keys only, not values)
+    try:
+        new_data = json.loads(new_value)
+        if isinstance(new_data, dict):
+            result["newKeys"] = sorted(new_data.keys())
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if current_value:
+        try:
+            cur_data = json.loads(current_value)
+            if isinstance(cur_data, dict):
+                result["currentKeys"] = sorted(cur_data.keys())
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return result
+
+
 def _write_secret(dest_client: Any, dest_path: str, value: str) -> str:
     """
     Write a secret to the destination account.
@@ -603,15 +655,17 @@ def _write_secret(dest_client: Any, dest_path: str, value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def sync_parameter(event: dict) -> dict:
+def sync_parameter(event: dict, dry_run: bool = False) -> dict:
     """
     Sync an SSM parameter from source to destination.
 
     Handles: cross-account fetch, wildcard expansion with recursive
     traversal, transforms, and auto-create with Type preservation.
+    Supports dry_run for preview.
 
     Args:
         event: Full Lambda event with Item, SourceAccount, DestinationAccount
+        dry_run: If True, preview changes without writing
 
     Returns:
         Result dict with status, source, destination, type, message
@@ -656,6 +710,10 @@ def sync_parameter(event: dict) -> dict:
 
     # Apply transforms
     transformed_value = apply_transforms(value, transforms)
+
+    # Dry run: compare without writing
+    if dry_run:
+        return _dry_run_parameter(dest_client, source_path, dest_path, transformed_value, param_type)
 
     # Write to destination
     dest_client.put_parameter(
@@ -753,6 +811,44 @@ def _sync_parameters_recursive(
     }
 
 
+def _dry_run_parameter(
+    dest_client: Any,
+    source_path: str,
+    dest_path: str,
+    new_value: str,
+    param_type: str,
+) -> dict:
+    """Preview what would happen for an SSM parameter without writing."""
+    try:
+        dest_response = dest_client.get_parameter(
+            Name=dest_path, WithDecryption=True
+        )
+        current_value = dest_response["Parameter"]["Value"]
+        if current_value == new_value:
+            action = "no-change"
+        else:
+            action = "would-update"
+    except dest_client.exceptions.ParameterNotFound:
+        current_value = None
+        action = "would-create"
+
+    result = {
+        "status": "dry-run",
+        "action": action,
+        "source": source_path,
+        "destination": dest_path,
+        "type": "SSMParameter",
+        "paramType": param_type,
+        "message": f"Dry run: {action}",
+    }
+
+    if action == "would-update":
+        result["currentValue"] = current_value
+        result["newValue"] = new_value
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Lambda entry point
 # ---------------------------------------------------------------------------
@@ -776,19 +872,21 @@ def lambda_handler(event: dict, context: Any) -> dict:
     source_path = item.get("SourcePath", "")
     dest_path = item.get("DestinationPath", "")
     item_type = item.get("Type", "unknown")
+    dry_run = event.get("DryRun", False)
 
     try:
         logger.info(
-            "Processing item: type=%s, source=%s, destination=%s",
+            "Processing item: type=%s, source=%s, destination=%s, dry_run=%s",
             item_type,
             source_path,
             dest_path,
+            dry_run,
         )
 
         if item_type == "SecretsManager":
-            result = sync_secret(event)
+            result = sync_secret(event, dry_run=dry_run)
         elif item_type == "SSMParameter":
-            result = sync_parameter(event)
+            result = sync_parameter(event, dry_run=dry_run)
         else:
             return {
                 "statusCode": 200,

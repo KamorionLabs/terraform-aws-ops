@@ -1,7 +1,14 @@
 {
   "Comment": "Sync config items (secrets/parameters) between AWS accounts - routes SM/SSM via Choice state per item",
-  "StartAt": "ValidateInput",
+  "StartAt": "InitDefaults",
   "States": {
+    "InitDefaults": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Default DryRun to false if not provided",
+      "Output": "{% $merge([$states.input, {'ConfigSync': $merge([$states.input.ConfigSync, {'DryRun': $exists($states.input.ConfigSync.DryRun) ? $states.input.ConfigSync.DryRun : false}])}]) %}",
+      "Next": "ValidateInput"
+    },
     "ValidateInput": {
       "Type": "Choice",
       "Choices": [
@@ -27,7 +34,8 @@
       "ItemSelector": {
         "Item.$": "$$.Map.Item.Value",
         "SourceAccount.$": "$.ConfigSync.SourceAccount",
-        "DestinationAccount.$": "$.ConfigSync.DestinationAccount"
+        "DestinationAccount.$": "$.ConfigSync.DestinationAccount",
+        "DryRun.$": "$.ConfigSync.DryRun"
       },
       "MaxConcurrency": 1,
       "ItemProcessor": {
