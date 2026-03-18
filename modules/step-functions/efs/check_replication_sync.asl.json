@@ -6,7 +6,7 @@
       "Type": "Pass",
       "QueryLanguage": "JSONata",
       "Comment": "Initialize state and build Lambda names. DestinationSubpathSSMParameter is optional - if absent, destination subpath defaults to source subpath (replica has same directory structure).",
-      "Assign": {
+      "Output": {
         "SourceFileSystemId": "{% $states.input.SourceFileSystemId %}",
         "DestinationFileSystemId": "{% $states.input.DestinationFileSystemId %}",
         "SourceAccount": "{% $states.input.SourceAccount %}",
