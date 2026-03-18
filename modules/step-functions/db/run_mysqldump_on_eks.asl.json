@@ -1,7 +1,14 @@
 {
   "Comment": "Cross-account version: Runs a mysqldump command for a list of tables in an EKS job, saving the output to EFS. Supports both public (eks:runJob.sync) and private (k8s-proxy Lambda) access modes.",
-  "StartAt": "EnsureClusterAvailable",
+  "StartAt": "InitDefaults",
   "States": {
+    "InitDefaults": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Default CleanupJobs to true if not provided",
+      "Output": "{% $merge([$states.input, {'CleanupJobs': $exists($states.input.CleanupJobs) ? $states.input.CleanupJobs : false}]) %}",
+      "Next": "EnsureClusterAvailable"
+    },
     "EnsureClusterAvailable": {
       "Type": "Task",
       "Comment": "Ensure cluster is started and available before mysqldump",
@@ -149,7 +156,8 @@
         "DatabaseName.$": "$$.Map.Item.Value.Database",
         "TableName.$": "$$.Map.Item.Value.Table",
         "JobIndex.$": "$$.Map.Item.Index",
-        "OrchestratorExecutionName.$": "$.OrchestratorExecutionName"
+        "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+        "CleanupJobs.$": "$.CleanupJobs"
       },
       "ItemProcessor": {
         "ProcessorConfig": { "Mode": "INLINE" },
@@ -185,7 +193,7 @@
                   "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
                 },
                 "spec": {
-                  "ttlSecondsAfterFinished": 3600,
+                  "ttlSecondsAfterFinished": 86400,
                   "template": {
                     "spec": {
                       "serviceAccountName": "refresh",
@@ -350,7 +358,7 @@
               {
                 "Variable": "$.JobStatus.Status",
                 "StringEquals": "Complete",
-                "Next": "DeleteDumpJob"
+                "Next": "CheckCleanupJobsFlag"
               },
               {
                 "Variable": "$.JobStatus.Status",
@@ -359,6 +367,23 @@
               }
             ],
             "Default": "WaitForDumpJob"
+          },
+          "CheckCleanupJobsFlag": {
+            "Type": "Choice",
+            "Comment": "Delete job after completion unless CleanupJobs is explicitly false (TTL 24h as safety net)",
+            "Choices": [
+              {
+                "Variable": "$.CleanupJobs",
+                "BooleanEquals": false,
+                "Next": "DumpJobKept"
+              }
+            ],
+            "Default": "DeleteDumpJob"
+          },
+          "DumpJobKept": {
+            "Type": "Pass",
+            "Comment": "Job kept for inspection (TTL will clean up after 24h)",
+            "End": true
           },
           "DeleteDumpJob": {
             "Type": "Task",
