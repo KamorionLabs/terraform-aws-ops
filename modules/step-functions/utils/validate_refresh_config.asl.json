@@ -89,7 +89,7 @@
                     {"Variable": "$.Database.Target.ServerlessConfig.MinCapacity", "IsPresent": true},
                     {"Variable": "$.Database.Target.ServerlessConfig.MaxCapacity", "IsPresent": true}
                   ],
-                  "Next": "CheckDatabaseNetworkFields"
+                  "Next": "CheckDatabaseInstanceItems"
                 }
               ],
               "Default": "ConfigMissing_DBTarget"
@@ -97,6 +97,24 @@
             "ConfigMissing_DBTarget": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "Database.Target", "Required": ["Database.Target.ClusterIdentifier", "Database.Target.InstanceIdentifierPrefix", "Database.Target.InstanceClass", "Database.Target.Instances"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckDatabaseInstanceItems": {
+              "Type": "Choice",
+              "QueryLanguage": "JSONata",
+              "Comment": "Verify each item in Database.Target.Instances has DbInstanceClass and Engine",
+              "Choices": [
+                {
+                  "Condition": "{% $count($states.input.Database.Target.Instances) > 0 and $count($filter($states.input.Database.Target.Instances, function($i) { $exists($i.DbInstanceClass) and $exists($i.Engine) })) = $count($states.input.Database.Target.Instances) %}",
+                  "Next": "CheckDatabaseNetworkFields"
+                }
+              ],
+              "Default": "ConfigMissing_DBInstanceItems"
+            },
+            "ConfigMissing_DBInstanceItems": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Target.Instances[]", "Required": ["DbInstanceClass", "Engine"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
