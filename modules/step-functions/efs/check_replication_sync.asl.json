@@ -4,24 +4,25 @@
   "States": {
     "InitializeState": {
       "Type": "Pass",
-      "Comment": "Initialize state and build Lambda names. Materialize SSM param names from input for sub-SFN compatibility.",
-      "Parameters": {
-        "SourceFileSystemId.$": "$.SourceFileSystemId",
-        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
-        "SourceAccount.$": "$.SourceAccount",
-        "DestinationAccount.$": "$.DestinationAccount",
-        "Context.$": "$.Context",
-        "LambdaConfig.$": "$.LambdaConfig",
+      "QueryLanguage": "JSONata",
+      "Comment": "Initialize state and build Lambda names. DestinationSubpathSSMParameter is optional - if absent, destination subpath defaults to source subpath (replica has same directory structure).",
+      "Assign": {
+        "SourceFileSystemId": "{% $states.input.SourceFileSystemId %}",
+        "DestinationFileSystemId": "{% $states.input.DestinationFileSystemId %}",
+        "SourceAccount": "{% $states.input.SourceAccount %}",
+        "DestinationAccount": "{% $states.input.DestinationAccount %}",
+        "Context": "{% $states.input.Context %}",
+        "LambdaConfig": "{% $states.input.LambdaConfig %}",
         "WaitSeconds": 120,
         "MaxWaitCount": 120,
         "WaitCount": 0,
-        "Mode.$": "States.ArrayGetItem(States.Array($.Mode, 'wait'), 0)",
-        "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.SourceLambdaPrefix, $.Context)",
-        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)",
+        "Mode": "{% $exists($states.input.Mode) ? $states.input.Mode : 'wait' %}",
+        "SourceLambdaName": "{% $states.input.LambdaConfig.SourceLambdaPrefix & '-check-flag-file-' & $states.input.Context %}",
+        "DestinationLambdaName": "{% $states.input.LambdaConfig.DestinationLambdaPrefix & '-check-flag-file-' & $states.input.Context %}",
         "SourceSubpath": "",
         "DestinationSubpath": "",
-        "SourceSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.SourceSubpathSSMParameter, ''), 0)",
-        "DestinationSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.DestinationSubpathSSMParameter, ''), 0)"
+        "SourceSubpathSSMParameter": "{% $exists($states.input.SourceSubpathSSMParameter) ? $states.input.SourceSubpathSSMParameter : '' %}",
+        "DestinationSubpathSSMParameter": "{% $exists($states.input.DestinationSubpathSSMParameter) ? $states.input.DestinationSubpathSSMParameter : '' %}"
       },
       "Next": "CheckIfSubpathConfigured"
     },
@@ -95,8 +96,9 @@
         "SourceSubpathSSMParameter.$": "$.SourceSubpathSSMParameter",
         "DestinationSubpathSSMParameter.$": "$.DestinationSubpathSSMParameter",
         "SourceSubpath.$": "$.SourceSubpathResult.Value",
-        "DestinationSubpath.$": "$.DestinationSubpath"
+        "DestinationSubpath.$": "$.SourceSubpathResult.Value"
       },
+      "Comment": "Default DestinationSubpath to source value (replica has same structure). Overridden by ReadDestinationSubpathFromSSM if configured.",
       "Next": "CheckIfDestinationSubpathConfigured"
     },
     "CheckIfDestinationSubpathConfigured": {

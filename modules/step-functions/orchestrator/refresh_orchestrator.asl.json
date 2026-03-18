@@ -307,7 +307,6 @@
                   "Context.$": "$.EFS.Context",
                   "LambdaConfig.$": "$.EFS.LambdaConfig",
                   "SourceSubpathSSMParameter.$": "$.EFS.SSMParameters.SourceEfsSubPath",
-                  "DestinationSubpathSSMParameter.$": "$.EFS.SSMParameters.EfsSubPath",
                   "Mode": "wait"
                 },
                 "Name.$": "States.Format('{}-CheckReplSync', $$.Execution.Name)"
@@ -986,7 +985,6 @@
                   "Context.$": "$.EFS.Context",
                   "LambdaConfig.$": "$.EFS.LambdaConfig",
                   "SourceSubpathSSMParameter.$": "$.EFS.SSMParameters.SourceEfsSubPath",
-                  "DestinationSubpathSSMParameter.$": "$.EFS.SSMParameters.EfsSubPath",
                   "Mode": "wait"
                 },
                 "Name.$": "States.Format('{}-CheckReplSyncInit', $$.Execution.Name)"
