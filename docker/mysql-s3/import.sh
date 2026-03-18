@@ -56,7 +56,7 @@ mkdir -p "$LOCAL_DIR"
 if [[ -n "${S3_SYNC:-}" ]]; then
   s3_uri="s3://${S3_BUCKET}/${S3_PREFIX:+${S3_PREFIX}/}"
   echo "Syncing files from ${s3_uri} to ${LOCAL_DIR}"
-  aws s3 sync "$s3_uri" "$LOCAL_DIR"
+  aws s3 sync "$s3_uri" "$LOCAL_DIR" --delete
   echo "S3 sync complete"
 fi
 
