@@ -189,11 +189,19 @@
     },
     "CheckSourcePolicyForCleanup": {
       "Type": "Choice",
-      "Comment": "Check if source policy contains AllowReplicationWrite to clean up",
+      "Comment": "Check if source policy contains replication statements to clean up",
       "Choices": [
         {
-          "Variable": "$.SourcePolicyForCleanup.Policy",
-          "StringMatches": "*AllowReplicationWrite*",
+          "Or": [
+            {
+              "Variable": "$.SourcePolicyForCleanup.Policy",
+              "StringMatches": "*AllowReplicationWrite*"
+            },
+            {
+              "Variable": "$.SourcePolicyForCleanup.Policy",
+              "StringMatches": "*AllowCrossAccountReplicationManagement*"
+            }
+          ],
           "Next": "ParseSourcePolicyForCleanup"
         }
       ],
@@ -211,10 +219,10 @@
     "CleanSourcePolicyJSONata": {
       "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Comment": "Remove AllowReplicationWrite statement from source policy using JSONata",
+      "Comment": "Remove AllowReplicationWrite and AllowCrossAccountReplicationManagement statements from source policy",
       "Assign": {
-        "cleanedSourcePolicyString": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $filtered := $filter($stmts, function($s) { $s.Sid != 'AllowReplicationWrite' }); $string({'Version': '2012-10-17', 'Statement': $filtered})) %}",
-        "cleanedPolicyEmpty": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $count($filter($stmts, function($s) { $s.Sid != 'AllowReplicationWrite' })) = 0) %}"
+        "cleanedSourcePolicyString": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $replicationSids := ['AllowReplicationWrite', 'AllowCrossAccountReplicationManagement']; $filtered := $filter($stmts, function($s) { $not($s.Sid in $replicationSids) }); $string({'Version': '2012-10-17', 'Statement': $filtered})) %}",
+        "cleanedPolicyEmpty": "{% ($stmts := $type($states.input.ParsedCleanupPolicy.PolicyObject.Statement) = 'array' ? $states.input.ParsedCleanupPolicy.PolicyObject.Statement : [$states.input.ParsedCleanupPolicy.PolicyObject.Statement]; $replicationSids := ['AllowReplicationWrite', 'AllowCrossAccountReplicationManagement']; $count($filter($stmts, function($s) { $not($s.Sid in $replicationSids) })) = 0) %}"
       },
       "Next": "CheckCleanedPolicyEmpty"
     },

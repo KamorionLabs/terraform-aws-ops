@@ -357,7 +357,7 @@
     },
     "CallUpdateSourcePolicy": {
       "Type": "Task",
-      "Comment": "Add AllowReplicationWrite policy to source EFS via ManageFileSystemPolicy sub-SFN",
+      "Comment": "Add AllowReplicationWrite policy to source EFS (EFS service data replication)",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Parameters": {
         "StateMachineArn": "${manage_filesystem_policy_arn}",
@@ -391,11 +391,48 @@
         "Status.$": "$.Output.Status"
       },
       "ResultPath": "$.SourcePolicyResult",
-      "Next": "ShouldCreateDestinationEFS",
+      "Next": "CallUpdateSourcePolicyCrossAccount",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.PolicyError",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
+    },
+    "CallUpdateSourcePolicyCrossAccount": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Add AllowCrossAccountReplicationManagement policy to source EFS (allows destination account to create/delete/describe replication)",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId": "{% $states.input.SourceFileSystemId %}",
+          "Account": "{% $states.input.SourceAccount %}",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowCrossAccountReplicationManagement",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "{% 'arn:aws:iam::' & $states.input.DestinationAccount.AccountId & ':root' %}"
+            },
+            "Action": [
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration",
+              "elasticfilesystem:DescribeReplicationConfigurations"
+            ],
+            "Resource": "{% $states.input.SourceEFS.FileSystemArn %}"
+          }
+        },
+        "Name": "{% $states.context.Execution.Name & '-SrcPolyCrossAcct' %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "ShouldCreateDestinationEFS",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'PolicyError': $states.errorOutput}]) %}",
           "Next": "SourcePolicyUpdateFailed"
         }
       ]
