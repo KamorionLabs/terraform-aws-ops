@@ -106,7 +106,7 @@
               "Comment": "Verify each item in Database.Target.Instances has DbInstanceClass and Engine",
               "Choices": [
                 {
-                  "Condition": "{% $count($states.input.Database.Target.Instances) > 0 and $count($filter($states.input.Database.Target.Instances, function($i) { $exists($i.DbInstanceClass) and $exists($i.Engine) })) = $count($states.input.Database.Target.Instances) %}",
+                  "Condition": "{% $count($states.input.Database.Target.Instances) > 0 and $count($filter($states.input.Database.Target.Instances, function($i) { $exists($i.DbInstanceClass) and $exists($i.PromotionTier) })) = $count($states.input.Database.Target.Instances) %}",
                   "Next": "CheckDatabaseNetworkFields"
                 }
               ],
@@ -114,7 +114,7 @@
             },
             "ConfigMissing_DBInstanceItems": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "Database.Target.Instances[]", "Required": ["DbInstanceClass", "Engine"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Target.Instances[]", "Required": ["DbInstanceClass", "PromotionTier"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
