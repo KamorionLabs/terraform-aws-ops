@@ -195,7 +195,7 @@
         "FileSystemArn.$": "$.FileSystems[0].FileSystemArn"
       },
       "ResultPath": "$.VerifiedDestination",
-      "Next": "PrepareExistingOutput",
+      "Next": "EnsureCrossAccountPolicyOnExisting",
       "Catch": [
         {
           "ErrorEquals": ["Efs.FileSystemNotFoundException", "Efs.AccessDeniedException"],
@@ -206,6 +206,63 @@
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.VerifyError",
           "Next": "ExistingReplicationMismatch"
+        }
+      ]
+    },
+    "EnsureCrossAccountPolicyOnExisting": {
+      "Type": "Choice",
+      "Comment": "For existing replication, ensure cross-account management policy exists on source EFS (needed for delete). Only if cross-account and UpdateSourcePolicy is true.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.UpdateSourcePolicy", "IsPresent": true},
+            {"Variable": "$.UpdateSourcePolicy", "BooleanEquals": true},
+            {
+              "Not": {
+                "Variable": "$.SourceAccount.AccountId",
+                "StringEqualsPath": "$.DestinationAccount.AccountId"
+              }
+            }
+          ],
+          "Next": "CallCrossAccountPolicyOnExisting"
+        }
+      ],
+      "Default": "PrepareExistingOutput"
+    },
+    "CallCrossAccountPolicyOnExisting": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Add AllowCrossAccountReplicationManagement policy to source EFS for existing replication",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId": "{% $states.input.SourceFileSystemId %}",
+          "Account": "{% $states.input.SourceAccount %}",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowCrossAccountReplicationManagement",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "{% 'arn:aws:iam::' & $states.input.DestinationAccount.AccountId & ':root' %}"
+            },
+            "Action": [
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration",
+              "elasticfilesystem:DescribeReplicationConfigurations"
+            ],
+            "Resource": "{% $states.input.SourceEFS.FileSystemArn %}"
+          }
+        },
+        "Name": "{% $states.context.Execution.Name & '-ExistCrossAcctPol' %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "PrepareExistingOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'CrossAccountPolicyError': $states.errorOutput}]) %}",
+          "Next": "PrepareExistingOutput"
         }
       ]
     },
