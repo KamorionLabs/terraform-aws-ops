@@ -1296,9 +1296,10 @@
             },
             "ReplicationAlreadyExists": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "Error": "Source EFS already has an active replication configuration. Delete it before starting a new refresh."},
+              "Comment": "Existing replication is accepted - setup_cross_account_replication will reuse it if destination matches",
+              "Result": {"Status": "PASSED", "Note": "Existing replication found - will be reused by setup step"},
               "ResultPath": "$.V.ExistingReplication",
-              "Next": "EFSFailed"
+              "Next": "CheckDestinationEFSMode"
             },
             "NoExistingReplication": {
               "Type": "Pass",
