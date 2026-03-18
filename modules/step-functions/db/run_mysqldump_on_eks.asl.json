@@ -412,29 +412,8 @@
             "End": true
           },
           "DeleteDumpJobOnError": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName.$": "$.K8sProxyLambdaArn",
-              "Payload": {
-                "Action": "deleteJob",
-                "ClusterName.$": "$.JobInfo.ClusterName",
-                "Namespace.$": "$.JobInfo.Namespace",
-                "JobName.$": "$.JobInfo.JobName"
-              }
-            },
-            "Credentials": {
-              "RoleArn.$": "$.DestinationAccountRoleArn"
-            },
-            "Retry": [
-              {
-                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
-                "IntervalSeconds": 5,
-                "MaxAttempts": 3,
-                "BackoffRate": 2
-              }
-            ],
-            "ResultPath": null,
+            "Type": "Pass",
+            "Comment": "Job kept on error for log inspection (TTL 24h as safety net)",
             "Next": "DumpJobFailed"
           },
           "DumpJobFailed": {
