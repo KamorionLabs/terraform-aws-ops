@@ -12,8 +12,14 @@ variable "orchestrator_role_arn" {
   type        = string
 }
 
+variable "lambda_role_arn" {
+  description = "ARN of an externally managed IAM role for the sync Lambda. When provided, the module skips creating its own role and uses this one instead."
+  type        = string
+  default     = null
+}
+
 variable "cross_account_role_arns" {
-  description = "List of cross-account role ARNs that the Lambda can assume"
+  description = "List of cross-account role ARNs that the Lambda can assume (only used when lambda_role_arn is null)"
   type        = list(string)
   default     = []
 }

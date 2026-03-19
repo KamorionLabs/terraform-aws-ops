@@ -28,6 +28,6 @@ output "lambda_function_name" {
 }
 
 output "lambda_role_arn" {
-  description = "ARN of the Lambda execution role"
-  value       = aws_iam_role.lambda_sync_config_items.arn
+  description = "ARN of the Lambda execution role (external or module-managed)"
+  value       = local.lambda_role_arn
 }

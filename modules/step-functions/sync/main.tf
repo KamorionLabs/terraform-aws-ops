@@ -28,6 +28,10 @@ data "archive_file" "sync_config_items" {
   output_path = "${path.module}/../../../lambdas/sync-config-items.zip"
 }
 
+locals {
+  lambda_role_arn = var.lambda_role_arn != null ? var.lambda_role_arn : aws_iam_role.lambda_sync_config_items[0].arn
+}
+
 resource "aws_lambda_function" "sync_config_items" {
   function_name = "${var.prefix}-sync-config-items"
   description   = "Sync config items (secrets/parameters) between AWS accounts"
@@ -38,7 +42,7 @@ resource "aws_lambda_function" "sync_config_items" {
   handler = "sync_config_items.lambda_handler"
   runtime = "python3.12"
   timeout = 300
-  role    = aws_iam_role.lambda_sync_config_items.arn
+  role    = local.lambda_role_arn
 
   environment {
     variables = {
@@ -57,7 +61,8 @@ resource "aws_lambda_function" "sync_config_items" {
 # -----------------------------------------------------------------------------
 
 resource "aws_iam_role" "lambda_sync_config_items" {
-  name = "${var.prefix}-lambda-sync-config-items"
+  count = var.lambda_role_arn == null ? 1 : 0
+  name  = "${var.prefix}-lambda-sync-config-items"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -76,8 +81,9 @@ resource "aws_iam_role" "lambda_sync_config_items" {
 }
 
 resource "aws_iam_role_policy" "lambda_sync_config_items" {
-  name = "${var.prefix}-lambda-sync-config-items"
-  role = aws_iam_role.lambda_sync_config_items.id
+  count = var.lambda_role_arn == null ? 1 : 0
+  name  = "${var.prefix}-lambda-sync-config-items"
+  role  = aws_iam_role.lambda_sync_config_items[0].id
 
   policy = jsonencode({
     Version = "2012-10-17"
