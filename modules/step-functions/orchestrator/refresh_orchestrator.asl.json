@@ -1529,39 +1529,102 @@
               "BooleanEquals": true
             }
           ],
-          "Next": "ExecuteSyncConfigItems"
+          "Next": "DescribeSourceClusterForSync"
         }
       ],
       "Default": "Phase4PostSwitchEKS"
     },
+    "DescribeSourceClusterForSync": {
+      "Type": "Task",
+      "Comment": "Get source cluster endpoints (writer + reader) for host replacement transforms",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "db-cluster-id",
+            "Values.$": "States.Array($.Database.Source.ClusterIdentifier)"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "WriterEndpoint.$": "$.DbClusters[0].Endpoint",
+        "ReaderEndpoint.$": "$.DbClusters[0].ReaderEndpoint"
+      },
+      "ResultPath": "$.SyncSourceEndpoints",
+      "Next": "DescribeDestClusterForSync",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SyncSourceEndpointsError",
+          "Next": "ExecuteSyncConfigItems"
+        }
+      ]
+    },
+    "DescribeDestClusterForSync": {
+      "Type": "Task",
+      "Comment": "Get destination (restored) cluster endpoints for host replacement transforms",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Parameters": {
+        "Filters": [
+          {
+            "Name": "db-cluster-id",
+            "Values.$": "States.Array($.ResourceNames.TmpDbClusterIdentifier)"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "WriterEndpoint.$": "$.DbClusters[0].Endpoint",
+        "ReaderEndpoint.$": "$.DbClusters[0].ReaderEndpoint"
+      },
+      "ResultPath": "$.SyncDestEndpoints",
+      "Next": "InjectHostTransforms",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SyncDestEndpointsError",
+          "Next": "ExecuteSyncConfigItems"
+        }
+      ]
+    },
+    "InjectHostTransforms": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Inject dynamic host replace transforms into ConfigSync items that have Type=SecretsManager and contain database paths. Replaces full writer and reader hostnames from source to destination.",
+      "Output": "{% ( $srcWriter := $states.input.SyncSourceEndpoints.WriterEndpoint; $srcReader := $states.input.SyncSourceEndpoints.ReaderEndpoint; $dstWriter := $states.input.SyncDestEndpoints.WriterEndpoint; $dstReader := $states.input.SyncDestEndpoints.ReaderEndpoint; $hostTransforms := { 'host': {'replace': [{'from': $srcWriter, 'to': $dstWriter}]}, 'host_ro': {'replace': [{'from': $srcReader, 'to': $dstReader}]}, 'jdbcUrl': {'replace': [{'from': $srcWriter, 'to': $dstWriter}]}, 'jdbcReadOnlyUrl': {'replace': [{'from': $srcReader, 'to': $dstReader}]}, 'dbClusterIdentifier': {'replace': [{'from': $states.input.Database.Source.ClusterIdentifier, 'to': $states.input.ResourceNames.TmpDbClusterIdentifier}]}, 'masterarn': {'skip': true}, 'password': {'skip': true}, 'username': {'skip': true} }; $enrichedItems := $map($states.input.ConfigSync.Items, function($item) { $item.Type = 'SecretsManager' and $contains($item.SourcePath, $states.input.Database.Source.ClusterIdentifier) ? $merge([$item, {'Transforms': $merge([$item.Transforms, $hostTransforms])}]) : $item }); $merge([$states.input, {'ConfigSync': $merge([$states.input.ConfigSync, {'Items': $enrichedItems}])}]) ) %}",
+      "Next": "ExecuteSyncConfigItems"
+    },
     "ExecuteSyncConfigItems": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Sync secrets and parameters from source to destination account",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
-      "Parameters": {
+      "Arguments": {
         "StateMachineArn": "${sync_config_items_arn}",
         "Input": {
           "ConfigSync": {
             "Enabled": true,
-            "Items.$": "$.ConfigSync.Items",
-            "SourceAccount.$": "$.SourceAccount",
-            "DestinationAccount.$": "$.DestinationAccount"
+            "DryRun": "{% $exists($states.input.ConfigSync.DryRun) ? $states.input.ConfigSync.DryRun : false %}",
+            "Items": "{% $states.input.ConfigSync.Items %}",
+            "SourceAccount": "{% $states.input.SourceAccount %}",
+            "DestinationAccount": "{% $states.input.DestinationAccount %}"
           }
         },
-        "Name.$": "States.Format('{}-SyncConfigItems', $$.Execution.Name)"
+        "Name": "{% $states.context.Execution.Name & '-SyncConfigItems' %}"
       },
-      "ResultSelector": {
-        "Status.$": "$.Output.Status",
-        "Results.$": "$.Output.Results"
-      },
-      "ResultPath": "$.SyncResult",
+      "Output": "{% $merge([$states.input, {'SyncResult': {'Status': $states.result.Output.Status, 'Results': $states.result.Output.Results}}]) %}",
       "Next": "Phase4PostSwitchEKS",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "ResultPath": "$.SyncError",
+          "Output": "{% $merge([$states.input, {'SyncError': $states.errorOutput}]) %}",
           "Next": "Phase4PostSwitchEKS"
         }
       ]
