@@ -194,6 +194,7 @@
       "Comment": "Format output with switch completion status",
       "Parameters": {
         "TargetClusterIdentifier.$": "$.TargetClusterIdentifier",
+        "DbClusterArn.$": "$.RenameNewResult.Output.DbClusterArn",
         "Status": "SwitchComplete",
         "SwitchCompletedAt.$": "$$.State.EnteredTime"
       },

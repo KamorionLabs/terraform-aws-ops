@@ -152,7 +152,7 @@
       "ItemsPath": "$.ClusterInfo.Instances",
       "ItemSelector": {
         "OldDbInstanceIdentifier.$": "$$.Map.Item.Value.DbInstanceIdentifier",
-        "NewDbInstanceIdentifier.$": "States.Format('{}-{}', $.NewInstanceIdentifierPrefix, $$.Map.Item.Index)",
+        "NewDbInstanceIdentifier.$": "States.Format('{}-{}', $.NewInstanceIdentifierPrefix, States.MathAdd($$.Map.Item.Index, 1))",
         "DestinationAccount.$": "$.DestinationAccount"
       },
       "ItemProcessor": {

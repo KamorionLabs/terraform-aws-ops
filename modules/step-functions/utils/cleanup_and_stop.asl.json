@@ -77,7 +77,7 @@
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.Utils.TagResources",
                 "Input": {
-                  "ResourceARNList.$": "States.Array($.RenameNewResult.Output.DbClusterArn)",
+                  "ResourceARNList.$": "States.Array($.RenameNewResult.DbClusterArn)",
                   "SourceTagList.$": "$.CurrentDatabaseTags.TagList",
                   "ConfigTags.$": "$.MergedDatabaseTags",
                   "DestinationAccount.$": "$.DestinationAccount"

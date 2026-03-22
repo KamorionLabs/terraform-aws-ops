@@ -7,7 +7,7 @@
       "ItemsPath": "$.DbInstances",
       "MaxConcurrency": 1,
       "ItemSelector": {
-        "DbInstanceIdentifier.$": "States.Format('{}-{}', $.DbInstanceIdentifierPrefix, $$.Map.Item.Index)",
+        "DbInstanceIdentifier.$": "States.Format('{}-{}', $.DbInstanceIdentifierPrefix, States.MathAdd($$.Map.Item.Index, 1))",
         "DbClusterIdentifier.$": "$.DbClusterIdentifier",
         "DbInstanceClass.$": "$$.Map.Item.Value.DbInstanceClass",
         "DbParameterGroupName.$": "$.DbParameterGroupName",
