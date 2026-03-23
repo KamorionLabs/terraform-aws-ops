@@ -216,14 +216,28 @@
         {
           "ErrorEquals": ["States.TaskFailed"],
           "ResultPath": "$.PvNotFound",
-          "Next": "DeleteScPrivate"
+          "Next": "CheckDeleteStorageClassOption"
         }
       ]
     },
     "WaitForPvDelete": {
       "Type": "Wait",
       "Seconds": 5,
-      "Next": "CheckAccessModeForDeleteSc"
+      "Next": "CheckDeleteStorageClassOption"
+    },
+    "CheckDeleteStorageClassOption": {
+      "Type": "Choice",
+      "Comment": "Only delete StorageClass if DeleteStorageClass=true. SC is often shared across webshops.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.DeleteStorageClass", "IsPresent": true},
+            {"Variable": "$.DeleteStorageClass", "BooleanEquals": true}
+          ],
+          "Next": "CheckAccessModeForDeleteSc"
+        }
+      ],
+      "Default": "PrepareDeleteOutput"
     },
     "CheckAccessModeForDeleteSc": {
       "Type": "Choice",
@@ -324,7 +338,7 @@
         "Id.$": "$.Parameter.Value"
       },
       "ResultPath": "$.EfsInfo",
-      "Next": "CreateSc",
+      "Next": "CheckCreateStorageClassOption",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -346,7 +360,7 @@
         "Id.$": "$.Parameter.Value"
       },
       "ResultPath": "$.EfsInfo",
-      "Next": "CreateScPrivate",
+      "Next": "CheckCreateStorageClassOption",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -354,6 +368,31 @@
           "Next": "ProcessFailed"
         }
       ]
+    },
+    "CheckCreateStorageClassOption": {
+      "Type": "Choice",
+      "Comment": "Only create StorageClass if CreateStorageClass=true. SC is often shared and already exists.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.CreateStorageClass", "IsPresent": true},
+            {"Variable": "$.CreateStorageClass", "BooleanEquals": true}
+          ],
+          "Next": "CheckAccessModeForCreateSc"
+        }
+      ],
+      "Default": "CheckAccessModeForCreatePv"
+    },
+    "CheckAccessModeForCreateSc": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "CreateSc"
+        }
+      ],
+      "Default": "CreateScPrivate"
     },
     "CreateSc": {
       "Type": "Task",
