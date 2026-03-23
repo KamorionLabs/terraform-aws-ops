@@ -31,7 +31,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Parameters": {
-        "Name.$": "$.EksClusterName"
+        "Name.$": "$.EKS.ClusterName"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -70,7 +70,7 @@
     },
     "VerifyServicesMap": {
       "Type": "Map",
-      "ItemsPath": "$.Services",
+      "ItemsPath": "$.EKS.Services",
       "MaxConcurrency": 3,
       "ItemSelector": {
         "AccessMode.$": "$.EKS.AccessMode",
@@ -78,10 +78,10 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
-        "EksClusterName.$": "$.EksClusterName",
-        "Namespace.$": "$.Namespace",
-        "ServiceName.$": "$$.Map.Item.Value.ServiceName",
-        "ServiceType.$": "$$.Map.Item.Value.ServiceType",
+        "EksClusterName.$": "$.EKS.ClusterName",
+        "Namespace.$": "$.EKS.Namespace",
+        "ServiceName.$": "$$.Map.Item.Value.Name",
+        "ServiceType.$": "$$.Map.Item.Value.Kind",
         "ExpectedSubPath.$": "$.ExpectedSubPath.SubPath",
         "DestinationAccount.$": "$.DestinationAccount"
       },
@@ -132,7 +132,7 @@
               "FunctionName.$": "$.K8sProxyLambdaArn",
               "Payload": {
                 "Action": "call",
-                "ClusterName.$": "$.EksClusterName",
+                "ClusterName.$": "$.EKS.ClusterName",
                 "Method": "GET",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)"
               }
@@ -157,7 +157,7 @@
           "ExtractCurrentSubPath": {
             "Type": "Pass",
             "QueryLanguage": "JSONata",
-            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"AccessMode\": $states.input.AccessMode, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EksClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
+            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"AccessMode\": $states.input.AccessMode, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EKS.ClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
             "Next": "DecideIfRestartNeeded"
           },
           "DecideIfRestartNeeded": {
@@ -228,7 +228,7 @@
               "FunctionName.$": "$.K8sProxyLambdaArn",
               "Payload": {
                 "Action": "call",
-                "ClusterName.$": "$.EksClusterName",
+                "ClusterName.$": "$.EKS.ClusterName",
                 "Method": "PATCH",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)",
                 "RequestBody": {
@@ -310,7 +310,7 @@
     "PrepareOutput": {
       "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Output": "{% { \"Status\": \"Completed\", \"ModuleName\": \"verify_and_restart_services\", \"PrimaryIdentifier\": $states.input.EksClusterName, \"Summary\": { \"TotalServices\": $count($states.input.VerificationResults), \"Restarted\": $count($states.input.VerificationResults[Status='Restarted']), \"OK\": $count($states.input.VerificationResults[Status='OK']), \"NotFound\": $count($states.input.VerificationResults[Status='NotFound']), \"Failed\": $count($states.input.VerificationResults[Status='Failed']), \"RestartedServices\": $states.input.VerificationResults[Status='Restarted'].ServiceName } } %}",
+      "Output": "{% { \"Status\": \"Completed\", \"ModuleName\": \"verify_and_restart_services\", \"PrimaryIdentifier\": $states.input.EKS.ClusterName, \"Summary\": { \"TotalServices\": $count($states.input.VerificationResults), \"Restarted\": $count($states.input.VerificationResults[Status='Restarted']), \"OK\": $count($states.input.VerificationResults[Status='OK']), \"NotFound\": $count($states.input.VerificationResults[Status='NotFound']), \"Failed\": $count($states.input.VerificationResults[Status='Failed']), \"RestartedServices\": $states.input.VerificationResults[Status='Restarted'].ServiceName } } %}",
       "Next": "VerificationSucceeded"
     },
     "VerificationFailed": {

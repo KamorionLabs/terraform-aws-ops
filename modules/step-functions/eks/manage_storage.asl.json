@@ -18,7 +18,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Parameters": {
-        "Name.$": "$.EksClusterName"
+        "Name.$": "$.EKS.ClusterName"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -77,7 +77,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "DELETE",
-        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.Namespace, $.FileSystemName)"
+        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.FileSystemName)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -107,9 +107,9 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.Namespace, $.FileSystemName)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.FileSystemName)"
         }
       },
       "Credentials": {
@@ -187,7 +187,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
           "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.FileSystemName)"
         }
@@ -267,7 +267,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
           "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.FileSystemName)"
         }
@@ -299,7 +299,7 @@
         "Status": "Completed",
         "ModuleName": "manage_storage",
         "Action": "Delete",
-        "EksClusterName.$": "$.EksClusterName"
+        "EksClusterName.$": "$.EKS.ClusterName"
       },
       "Next": "ProcessSucceeded"
     },
@@ -402,7 +402,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "POST",
           "Path": "/apis/storage.k8s.io/v1/storageclasses",
           "RequestBody": {
@@ -518,7 +518,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "POST",
           "Path": "/api/v1/persistentvolumes",
           "RequestBody": {
@@ -588,7 +588,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "POST",
-        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.Namespace)",
+        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.EKS.Namespace)",
         "RequestBody": {
           "apiVersion": "v1",
           "kind": "PersistentVolumeClaim",
@@ -635,9 +635,9 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "POST",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.Namespace)",
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.EKS.Namespace)",
           "RequestBody": {
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
@@ -689,7 +689,7 @@
         "Status": "Completed",
         "ModuleName": "manage_storage",
         "Action": "Create",
-        "EksClusterName.$": "$.EksClusterName",
+        "EksClusterName.$": "$.EKS.ClusterName",
         "EfsFileSystemId.$": "$.EfsInfo.Id"
       },
       "Next": "ProcessSucceeded"

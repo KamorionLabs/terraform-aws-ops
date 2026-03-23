@@ -31,7 +31,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Parameters": {
-        "Name.$": "$.EksClusterName"
+        "Name.$": "$.EKS.ClusterName"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -48,18 +48,18 @@
     },
     "ScaleServicesMap": {
       "Type": "Map",
-      "ItemsPath": "$.Services",
+      "ItemsPath": "$.EKS.Services",
       "ItemSelector": {
         "AccessMode.$": "$.EKS.AccessMode",
         "ClusterName.$": "$.EksCluster.Cluster.Name",
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
-        "EksClusterName.$": "$.EksClusterName",
-        "Namespace.$": "$.Namespace",
+        "EksClusterName.$": "$.EKS.ClusterName",
+        "Namespace.$": "$.EKS.Namespace",
         "Replicas.$": "$.Replicas",
-        "ServiceName.$": "$$.Map.Item.Value.ServiceName",
-        "ServiceType.$": "$$.Map.Item.Value.ServiceType",
+        "ServiceName.$": "$$.Map.Item.Value.Name",
+        "ServiceType.$": "$$.Map.Item.Value.Kind",
         "DestinationAccount.$": "$.DestinationAccount"
       },
       "ItemProcessor": {
