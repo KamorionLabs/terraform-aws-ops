@@ -1323,6 +1323,9 @@
         "Input": {
           "EKS.$": "$.EKS",
           "FileSystemName.$": "$.EFS.Name",
+          "PvcName.$": "$.EKS.Storage.PvcName",
+          "PvName.$": "$.EKS.Storage.PvName",
+          "StorageClassName.$": "$.EKS.Storage.StorageClassName",
           "Action": "Delete",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
@@ -1682,6 +1685,9 @@
         "Input": {
           "EKS.$": "$.EKS",
           "FileSystemName.$": "$.EFS.Name",
+          "PvcName.$": "$.EKS.Storage.PvcName",
+          "PvName.$": "$.EKS.Storage.PvName",
+          "StorageClassName.$": "$.EKS.Storage.StorageClassName",
           "Action": "Create",
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",

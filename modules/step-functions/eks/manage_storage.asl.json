@@ -1,7 +1,14 @@
 {
   "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode.",
-  "StartAt": "CheckAccessMode",
+  "StartAt": "InitStorageNames",
   "States": {
+    "InitStorageNames": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Resolve storage resource names. Uses PvcName/PvName/StorageClassName from input if provided, otherwise falls back to FileSystemName for backwards compatibility.",
+      "Output": "{% $merge([$states.input, {'ResolvedNames': {'Pvc': $exists($states.input.PvcName) ? $states.input.PvcName : $states.input.FileSystemName, 'Pv': $exists($states.input.PvName) ? $states.input.PvName : $states.input.FileSystemName, 'StorageClass': $exists($states.input.StorageClassName) ? $states.input.StorageClassName : $states.input.FileSystemName}}]) %}",
+      "Next": "CheckAccessMode"
+    },
     "CheckAccessMode": {
       "Type": "Choice",
       "Comment": "Route to public (eks:call via GetEksClusterInfo) or private (lambda:invoke) flow based on EKS.AccessMode",
@@ -77,7 +84,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "DELETE",
-        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.FileSystemName)"
+        "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.ResolvedNames.Pvc)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -109,7 +116,7 @@
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.FileSystemName)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.ResolvedNames.Pvc)"
         }
       },
       "Credentials": {
@@ -157,7 +164,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "DELETE",
-        "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.FileSystemName)"
+        "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.ResolvedNames.Pv)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -189,7 +196,7 @@
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
-          "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.FileSystemName)"
+          "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.ResolvedNames.Pv)"
         }
       },
       "Credentials": {
@@ -237,7 +244,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "DELETE",
-        "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.FileSystemName)"
+        "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.ResolvedNames.StorageClass)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -269,7 +276,7 @@
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
-          "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.FileSystemName)"
+          "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.ResolvedNames.StorageClass)"
         }
       },
       "Credentials": {
@@ -361,7 +368,7 @@
           "apiVersion": "storage.k8s.io/v1",
           "kind": "StorageClass",
           "metadata": {
-            "name.$": "$.FileSystemName"
+            "name.$": "$.ResolvedNames.StorageClass"
           },
           "provisioner": "efs.csi.aws.com",
           "parameters": {
@@ -409,7 +416,7 @@
             "apiVersion": "storage.k8s.io/v1",
             "kind": "StorageClass",
             "metadata": {
-              "name.$": "$.FileSystemName"
+              "name.$": "$.ResolvedNames.StorageClass"
             },
             "provisioner": "efs.csi.aws.com",
             "parameters": {
@@ -473,7 +480,7 @@
           "apiVersion": "v1",
           "kind": "PersistentVolume",
           "metadata": {
-            "name.$": "$.FileSystemName"
+            "name.$": "$.ResolvedNames.Pv"
           },
           "spec": {
             "capacity": {
@@ -482,7 +489,7 @@
             "volumeMode": "Filesystem",
             "accessModes": ["ReadWriteMany"],
             "persistentVolumeReclaimPolicy": "Retain",
-            "storageClassName.$": "$.FileSystemName",
+            "storageClassName.$": "$.ResolvedNames.StorageClass",
             "csi": {
               "driver": "efs.csi.aws.com",
               "volumeHandle.$": "$.EfsInfo.Id"
@@ -525,7 +532,7 @@
             "apiVersion": "v1",
             "kind": "PersistentVolume",
             "metadata": {
-              "name.$": "$.FileSystemName"
+              "name.$": "$.ResolvedNames.Pv"
             },
             "spec": {
               "capacity": {
@@ -534,7 +541,7 @@
               "volumeMode": "Filesystem",
               "accessModes": ["ReadWriteMany"],
               "persistentVolumeReclaimPolicy": "Retain",
-              "storageClassName.$": "$.FileSystemName",
+              "storageClassName.$": "$.ResolvedNames.StorageClass",
               "csi": {
                 "driver": "efs.csi.aws.com",
                 "volumeHandle.$": "$.EfsInfo.Id"
@@ -593,17 +600,17 @@
           "apiVersion": "v1",
           "kind": "PersistentVolumeClaim",
           "metadata": {
-            "name.$": "$.FileSystemName"
+            "name.$": "$.ResolvedNames.Pvc"
           },
           "spec": {
             "accessModes": ["ReadWriteMany"],
-            "storageClassName.$": "$.FileSystemName",
+            "storageClassName.$": "$.ResolvedNames.StorageClass",
             "resources": {
               "requests": {
                 "storage": "20Gi"
               }
             },
-            "volumeName.$": "$.FileSystemName"
+            "volumeName.$": "$.ResolvedNames.Pv"
           }
         }
       },
@@ -642,17 +649,17 @@
             "apiVersion": "v1",
             "kind": "PersistentVolumeClaim",
             "metadata": {
-              "name.$": "$.FileSystemName"
+              "name.$": "$.ResolvedNames.Pvc"
             },
             "spec": {
               "accessModes": ["ReadWriteMany"],
-              "storageClassName.$": "$.FileSystemName",
+              "storageClassName.$": "$.ResolvedNames.StorageClass",
               "resources": {
                 "requests": {
                   "storage": "20Gi"
                 }
               },
-              "volumeName.$": "$.FileSystemName"
+              "volumeName.$": "$.ResolvedNames.Pv"
             }
           }
         }
