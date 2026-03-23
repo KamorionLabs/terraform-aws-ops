@@ -175,13 +175,59 @@
                   "Next": "EFSCleanupComplete"
                 }
               ],
-              "Default": "CheckDeleteOldEFSOption"
+              "Default": "CheckRetagOldEFS"
+            },
+            "CheckRetagOldEFS": {
+              "Type": "Choice",
+              "Comment": "Retag old EFS with -old suffix on Name tag to distinguish from new EFS",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.OldEfsFileSystemId", "IsPresent": true},
+                    {"Variable": "$.OldEfsFileSystemId", "IsNull": false}
+                  ],
+                  "Next": "RetagOldEFS"
+                }
+              ],
+              "Default": "EFSCleanupComplete"
+            },
+            "RetagOldEFS": {
+              "Type": "Task",
+              "QueryLanguage": "JSONata",
+              "Comment": "Change Name tag of old EFS to add -old suffix",
+              "Resource": "arn:aws:states:::aws-sdk:efs:tagResource",
+              "Credentials": {
+                "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+              },
+              "Arguments": {
+                "ResourceId": "{% $states.input.OldEfsFileSystemId %}",
+                "Tags": [
+                  {
+                    "Key": "Name",
+                    "Value": "{% $states.input.EFS.Name & '-old' %}"
+                  },
+                  {
+                    "Key": "refresh-replaced-by",
+                    "Value": "{% $states.input.OrchestratorExecutionName %}"
+                  }
+                ]
+              },
+              "Output": "{% $states.input %}",
+              "Next": "CheckDeleteOldEFSOption",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Output": "{% $merge([$states.input, {'RetagEfsError': $states.errorOutput}]) %}",
+                  "Next": "CheckDeleteOldEFSOption"
+                }
+              ]
             },
             "CheckDeleteOldEFSOption": {
               "Type": "Choice",
               "Choices": [
                 {
                   "And": [
+                    {"Variable": "$.EFS.Options.DeleteOldEfs", "IsPresent": true},
                     {"Variable": "$.EFS.Options.DeleteOldEfs", "BooleanEquals": true},
                     {"Variable": "$.OldEfsFileSystemId", "IsPresent": true},
                     {"Variable": "$.OldEfsFileSystemId", "IsNull": false}
