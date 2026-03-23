@@ -259,6 +259,7 @@
     },
     "NoSubpathFound": {
       "Type": "Pass",
+      "Comment": "No restore subpath found - use root path (common for EFS replication where data is at root)",
       "Parameters": {
         "FileSystemId.$": "$.FileSystemId",
         "FileSystemArn.$": "$.FileSystemArn",
@@ -268,15 +269,16 @@
         "LambdaName.$": "$.LambdaName",
         "UniqueId.$": "$.UniqueId",
         "AccessPoint.$": "$.AccessPoint",
-        "LambdaResult.$": "$.LambdaResult",
+        "LambdaResult": {
+          "EfsRestoreDir": {
+            "subpath": "."
+          }
+        },
         "EfsIdSSMParameterName.$": "$.EfsIdSSMParameterName",
-        "EfsSubPathSSMParameterName.$": "$.EfsSubPathSSMParameterName",
-        "NoSubpathError": {
-          "Message": "Lambda did not return a valid subpath"
-        }
+        "EfsSubPathSSMParameterName.$": "$.EfsSubPathSSMParameterName"
       },
       "ResultPath": "$",
-      "Next": "CleanupAccessPoint"
+      "Next": "UpdateEfsIdSSM"
     },
     "UpdateEfsIdSSM": {
       "Type": "Task",
