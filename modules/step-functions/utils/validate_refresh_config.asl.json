@@ -656,7 +656,7 @@
                     {"Variable": "$.EFS.SSMParameters.EfsSubPath", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM", "IsPresent": true}
                   ],
-                  "Next": "CheckSFNEFSFields"
+                  "Next": "CheckEFSLambdaCodeFields"
                 }
               ],
               "Default": "ConfigMissing_EFSSSM"
@@ -664,6 +664,28 @@
             "ConfigMissing_EFSSSM": {
               "Type": "Pass",
               "Result": {"Status": "FAILED", "MissingGroup": "EFS.SSM", "Required": ["SSMParameters.EfsId", "SSMParameters.EfsSubPath", "StepFunctions.EFS.GetSubpathAndStoreInSSM"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEFSLambdaCodeFields": {
+              "Type": "Choice",
+              "Comment": "Verify LambdaConfig fields needed for dynamic Lambda creation (get-efs-subpath)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.LambdaConfig.Prefix", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig.CodeS3Bucket", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig.CodeS3Key", "IsPresent": true},
+                    {"Variable": "$.EFS.LambdaConfig.LambdaRoleArn", "IsPresent": true}
+                  ],
+                  "Next": "CheckSFNEFSFields"
+                }
+              ],
+              "Default": "ConfigMissing_EFSLambdaCode"
+            },
+            "ConfigMissing_EFSLambdaCode": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.LambdaConfig (StoreInSSM)", "Required": ["LambdaConfig.Prefix", "LambdaConfig.CodeS3Bucket", "LambdaConfig.CodeS3Key", "LambdaConfig.LambdaRoleArn"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
