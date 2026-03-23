@@ -772,6 +772,9 @@
                   "And": [
                     {"Variable": "$.EKS.ClusterName", "IsPresent": true},
                     {"Variable": "$.EKS.Namespace", "IsPresent": true},
+                    {"Variable": "$.EKS.Storage.PvcName", "IsPresent": true},
+                    {"Variable": "$.EKS.Storage.PvName", "IsPresent": true},
+                    {"Variable": "$.EKS.Storage.StorageClassName", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.ManageStorage", "IsPresent": true}
                   ],
                   "Next": "CheckEKSArchiveJobConditional"
@@ -781,7 +784,7 @@
             },
             "ConfigMissing_EKSManageStorage": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ManageStorage", "Required": ["ClusterName", "Namespace", "StepFunctions.EKS.ManageStorage"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ManageStorage", "Required": ["ClusterName", "Namespace", "EKS.Storage.PvcName", "EKS.Storage.PvName", "EKS.Storage.StorageClassName", "StepFunctions.EKS.ManageStorage"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
