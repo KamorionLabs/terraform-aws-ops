@@ -459,10 +459,69 @@
         {
           "Variable": "$.ClusterStatus.DbClusters[0].Status",
           "StringEquals": "available",
-          "Next": "PrepareOutput"
+          "Next": "CheckModifyClusterSettings"
         }
       ],
       "Default": "WaitClusterRestore"
+    },
+    "CheckModifyClusterSettings": {
+      "Type": "Choice",
+      "Comment": "Apply post-restore cluster settings if ClusterSettings is provided in input",
+      "Choices": [
+        {
+          "Variable": "$.ClusterSettings",
+          "IsPresent": true,
+          "Next": "ModifyClusterSettings"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "ModifyClusterSettings": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Apply cluster settings (backup retention, maintenance windows, performance insights, cloudwatch logs) that cannot be set at restore time",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBCluster",
+      "Credentials": {
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+      },
+      "Arguments": "{% ( $settings := $states.input.ClusterSettings; $params := {'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'ApplyImmediately': true}; $params := $exists($settings.BackupRetentionPeriod) ? $merge([$params, {'BackupRetentionPeriod': $settings.BackupRetentionPeriod}]) : $params; $params := $exists($settings.PreferredBackupWindow) ? $merge([$params, {'PreferredBackupWindow': $settings.PreferredBackupWindow}]) : $params; $params := $exists($settings.PreferredMaintenanceWindow) ? $merge([$params, {'PreferredMaintenanceWindow': $settings.PreferredMaintenanceWindow}]) : $params; $params := $exists($settings.EnablePerformanceInsights) ? $merge([$params, {'EnablePerformanceInsights': $settings.EnablePerformanceInsights}]) : $params; $params := $exists($settings.PerformanceInsightsKmsKeyId) and $settings.EnablePerformanceInsights ? $merge([$params, {'PerformanceInsightsKmsKeyId': $settings.PerformanceInsightsKmsKeyId}]) : $params; $params := $exists($settings.CloudwatchLogsExports) ? $merge([$params, {'CloudwatchLogsExportConfiguration': {'DisableLogTypes': ['audit', 'error', 'general', 'slowquery'], 'EnableLogTypes': $settings.CloudwatchLogsExports}}]) : $params; $params ) %}",
+      "ResultPath": null,
+      "Next": "WaitModifyComplete",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ModifyError",
+          "Comment": "Don't fail the restore for modify errors - settings can be applied later via IaC",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "WaitModifyComplete": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckModifyStatus"
+    },
+    "CheckModifyStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": { "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier" },
+      "ResultPath": "$.ModifyCheckResult",
+      "Next": "IsModifyComplete",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.ModifyCheckError", "Next": "PrepareOutput" }]
+    },
+    "IsModifyComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ModifyCheckResult.DbClusters[0].Status",
+          "StringEquals": "available",
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitModifyComplete"
     },
     "PrepareOutput": {
       "Type": "Pass",

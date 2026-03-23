@@ -506,7 +506,7 @@
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
               "Arguments": {
                 "StateMachineArn": "{% $states.input.StepFunctions.Database.RestoreCluster %}",
-                "Input": "{% $merge([{'RestoreType': $states.input.Database.Source.RestoreType, 'SnapshotMode': 'create-manual', 'PrepareSnapshotStateMachineArn': $states.input.StepFunctions.Database.PrepareSnapshotForRestore, 'SourceDBClusterIdentifier': $states.input.Database.Source.ClusterIdentifier, 'TmpDbClusterIdentifier': $states.input.ResourceNames.TmpDbClusterIdentifier, 'DbInstanceClass': $states.input.Database.Target.InstanceClass, 'AuroraServerlessMinCapacity': $states.input.Database.Target.ServerlessConfig.MinCapacity, 'AuroraServerlessMaxCapacity': $states.input.Database.Target.ServerlessConfig.MaxCapacity, 'DbSubnetGroupName': $states.input.Database.Network.SubnetGroupName, 'VpcSecurityGroupIds': $states.input.Database.Network.SecurityGroupIds, 'DbClusterParameterGroupName': $states.input.Database.Parameters.ClusterParameterGroupName, 'KmsKeyId': $states.input.Database.Secrets.KmsKeyId, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Source.ProxyLambdaArn) ? {'ProxyLambdaArn': $states.input.Database.Source.ProxyLambdaArn} : {}]) %}",
+                "Input": "{% $merge([{'RestoreType': $states.input.Database.Source.RestoreType, 'SnapshotMode': 'create-manual', 'PrepareSnapshotStateMachineArn': $states.input.StepFunctions.Database.PrepareSnapshotForRestore, 'SourceDBClusterIdentifier': $states.input.Database.Source.ClusterIdentifier, 'TmpDbClusterIdentifier': $states.input.ResourceNames.TmpDbClusterIdentifier, 'DbInstanceClass': $states.input.Database.Target.InstanceClass, 'AuroraServerlessMinCapacity': $states.input.Database.Target.ServerlessConfig.MinCapacity, 'AuroraServerlessMaxCapacity': $states.input.Database.Target.ServerlessConfig.MaxCapacity, 'DbSubnetGroupName': $states.input.Database.Network.SubnetGroupName, 'VpcSecurityGroupIds': $states.input.Database.Network.SecurityGroupIds, 'DbClusterParameterGroupName': $states.input.Database.Parameters.ClusterParameterGroupName, 'KmsKeyId': $states.input.Database.Secrets.KmsKeyId, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Source.ProxyLambdaArn) ? {'ProxyLambdaArn': $states.input.Database.Source.ProxyLambdaArn} : {}, $exists($states.input.Database.ClusterSettings) ? {'ClusterSettings': $states.input.Database.ClusterSettings} : {}]) %}",
                 "Name": "{% $states.context.Execution.Name & '-RestoreDatabase' %}"
               },
               "Output": "{% $merge([$states.input, {'RestoreResult': $states.result}]) %}",
@@ -786,6 +786,7 @@
                   "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
                   "DbClusterParameterGroupName.$": "$.Database.Parameters.ClusterParameterGroupName",
                   "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "ClusterSettings.$": "$.Database.ClusterSettings",
                   "SourceAccount.$": "$.SourceAccount",
                   "DestinationAccount.$": "$.DestinationAccount"
                 },
