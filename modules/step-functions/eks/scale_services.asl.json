@@ -336,7 +336,7 @@
       "Parameters": {
         "Status": "Completed",
         "ModuleName": "scale_services",
-        "PrimaryIdentifier.$": "$.EksClusterName",
+        "PrimaryIdentifier.$": "$.EKS.ClusterName",
         "Replicas.$": "$.Replicas"
       },
       "Next": "ScaleSucceeded"
