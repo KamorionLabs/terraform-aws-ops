@@ -1295,9 +1295,7 @@
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
         "Input": {
-          "EksClusterName.$": "$.EKS.ClusterName",
-          "Namespace.$": "$.EKS.Namespace",
-          "Services.$": "$.EKS.Services",
+          "EKS.$": "$.EKS",
           "Replicas": 0,
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
@@ -1323,8 +1321,7 @@
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
         "Input": {
-          "EksClusterName.$": "$.EKS.ClusterName",
-          "Namespace.$": "$.EKS.Namespace",
+          "EKS.$": "$.EKS",
           "FileSystemName.$": "$.EFS.Name",
           "Action": "Delete",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
@@ -1683,8 +1680,7 @@
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.EKS.ManageStorage",
         "Input": {
-          "EksClusterName.$": "$.EKS.ClusterName",
-          "Namespace.$": "$.EKS.Namespace",
+          "EKS.$": "$.EKS",
           "FileSystemName.$": "$.EFS.Name",
           "Action": "Create",
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
@@ -1712,9 +1708,7 @@
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
         "Input": {
-          "EksClusterName.$": "$.EKS.ClusterName",
-          "Namespace.$": "$.EKS.Namespace",
-          "Services.$": "$.EKS.Services",
+          "EKS.$": "$.EKS",
           "Replicas": 1,
           "CleanupSecret": true,
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
@@ -1741,9 +1735,7 @@
       "Parameters": {
         "StateMachineArn.$": "$.StepFunctions.EKS.VerifyAndRestartServices",
         "Input": {
-          "EksClusterName.$": "$.EKS.ClusterName",
-          "Namespace.$": "$.EKS.Namespace",
-          "Services.$": "$.EKS.Services",
+          "EKS.$": "$.EKS",
           "SSMParameters": {
             "EfsSubPath.$": "$.EFS.SSMParameters.EfsSubPath"
           },
