@@ -32,36 +32,79 @@ def get_asl_files() -> list[Path]:
     return sorted(asl_files)
 
 
-def strip_credentials(definition: dict) -> dict:
-    """Remove all Credentials blocks from an ASL definition.
+def strip_unsupported_fields(definition: dict) -> dict:
+    """Remove fields not supported by Step Functions Local.
 
-    Step Functions Local does not support cross-account Credentials blocks.
-    This function deep-cleans the definition so it can be loaded locally.
-    Handles nested states in Parallel branches and Map iterators/processors.
+    SFN Local does not support:
+    - Credentials (cross-account role assumption)
+    - QueryLanguage/Arguments/Output/Assign/Condition (JSONata)
+
+    This deep-cleans the definition so it can be loaded locally for structural
+    validation (transitions, state names, error handling, branches).
     """
     cleaned = copy.deepcopy(definition)
-    _strip_credentials_from_states(cleaned.get("States", {}))
+    # Strip top-level QueryLanguage if present
+    cleaned.pop("QueryLanguage", None)
+    _strip_unsupported_from_states(cleaned.get("States", {}))
+    # Final pass: sanitize any remaining JSONata expressions in the entire tree
+    cleaned = _sanitize_jsonata_values(cleaned)
     return cleaned
 
 
-def _strip_credentials_from_states(states: dict) -> None:
-    """Recursively remove Credentials from all states."""
+# Keep old name as alias for backwards compatibility
+strip_credentials = strip_unsupported_fields
+
+
+def _sanitize_jsonata_values(obj):
+    """Replace JSONata expression values ({% ... %}) with static placeholders."""
+    if isinstance(obj, dict):
+        return {k: _sanitize_jsonata_values(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_jsonata_values(item) for item in obj]
+    elif isinstance(obj, str) and "{%" in obj:
+        return "placeholder"
+    return obj
+
+
+def _strip_unsupported_from_states(states: dict) -> None:
+    """Recursively remove unsupported fields from all states."""
     for state_def in states.values():
         state_def.pop("Credentials", None)
+        state_def.pop("QueryLanguage", None)
+        state_def.pop("Output", None)
+        state_def.pop("Assign", None)
+
+        # Convert JSONata Arguments → Parameters
+        if "Arguments" in state_def:
+            state_def["Parameters"] = state_def.pop("Arguments")
+
+        # Convert JSONata Choice conditions to JSONPath-compatible form
+        if state_def.get("Type") == "Choice" and "Choices" in state_def:
+            for choice in state_def["Choices"]:
+                if "Condition" in choice:
+                    # JSONata Condition → dummy JSONPath condition
+                    next_state = choice.get("Next", "")
+                    choice.clear()
+                    choice["Variable"] = "$.placeholder"
+                    choice["IsPresent"] = True
+                    choice["Next"] = next_state
 
         # Handle Parallel branches
         for branch in state_def.get("Branches", []):
-            _strip_credentials_from_states(branch.get("States", {}))
+            branch.pop("QueryLanguage", None)
+            _strip_unsupported_from_states(branch.get("States", {}))
 
         # Handle Map Iterator (legacy)
         iterator = state_def.get("Iterator")
         if iterator:
-            _strip_credentials_from_states(iterator.get("States", {}))
+            iterator.pop("QueryLanguage", None)
+            _strip_unsupported_from_states(iterator.get("States", {}))
 
         # Handle Map ItemProcessor (new)
         item_processor = state_def.get("ItemProcessor")
         if item_processor:
-            _strip_credentials_from_states(item_processor.get("States", {}))
+            item_processor.pop("QueryLanguage", None)
+            _strip_unsupported_from_states(item_processor.get("States", {}))
 
 
 @pytest.fixture(scope="session")
