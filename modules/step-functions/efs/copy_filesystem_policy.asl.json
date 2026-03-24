@@ -27,7 +27,7 @@
         "RoleArn.$": "$.Account.RoleArn"
       },
       "ResultPath": "$.SourcePolicy",
-      "Next": "ExtractPodAccessStatements",
+      "Next": "ExtractAndRewriteStatements",
       "Catch": [
         {
           "ErrorEquals": ["Efs.PolicyNotFound", "Efs.PolicyNotFoundException", "Efs.FileSystemNotFound", "Efs.FileSystemNotFoundException"],
