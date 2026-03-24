@@ -557,7 +557,7 @@
         "IncludeShared": true
       },
       "Output": "{% $merge([$states.input, {'Verification': {'Visible': true, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn}}]) %}",
-      "Next": "PrepareOutputCrossAccount",
+      "Next": "GenerateCopySnapshotId",
       "Retry": [
         {
           "ErrorEquals": ["Rds.DBClusterSnapshotNotFoundFault"],
