@@ -55,14 +55,33 @@ def strip_unsupported_fields(definition: dict) -> dict:
 strip_credentials = strip_unsupported_fields
 
 
-def _sanitize_jsonata_values(obj):
-    """Replace JSONata expression values ({% ... %}) with static placeholders."""
+# Intrinsic functions not supported by SFN Local (deprecated Docker image)
+_UNSUPPORTED_INTRINSICS = (
+    "States.Array(", "States.ArrayConcat", "States.ArrayGetItem",
+    "States.ArrayLength", "States.ArrayContains", "States.ArrayRange",
+    "States.ArrayPartition", "States.ArrayUnique",
+    "States.MathAdd", "States.MathRandom",
+    "States.StringSplit", "States.Base64Encode", "States.Base64Decode",
+    "States.UUID", "States.Hash",
+)
+
+
+def _sanitize_jsonata_values(obj, parent_key=""):
+    """Replace JSONata and unsupported intrinsic function values with placeholders.
+
+    - JSONata expressions ({% ... %}) → replaced with static values
+    - Unsupported intrinsic functions → replaced with $.placeholder
+    - For keys ending in '.$', use '$.placeholder' (valid JSONPath)
+    """
     if isinstance(obj, dict):
-        return {k: _sanitize_jsonata_values(v) for k, v in obj.items()}
+        return {k: _sanitize_jsonata_values(v, parent_key=k) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [_sanitize_jsonata_values(item) for item in obj]
-    elif isinstance(obj, str) and "{%" in obj:
-        return "placeholder"
+    elif isinstance(obj, str):
+        if "{%" in obj:
+            return "$.placeholder" if parent_key.endswith(".$") else "placeholder"
+        if parent_key.endswith(".$") and any(obj.startswith(fn) for fn in _UNSUPPORTED_INTRINSICS):
+            return "$.placeholder"
     return obj
 
 
@@ -78,11 +97,14 @@ def _strip_unsupported_from_states(states: dict) -> None:
         if "Arguments" in state_def:
             state_def["Parameters"] = state_def.pop("Arguments")
 
+        # Strip Output from Catch entries (JSONata uses Output instead of ResultPath)
+        for catch_entry in state_def.get("Catch", []):
+            catch_entry.pop("Output", None)
+
         # Convert JSONata Choice conditions to JSONPath-compatible form
         if state_def.get("Type") == "Choice" and "Choices" in state_def:
             for choice in state_def["Choices"]:
                 if "Condition" in choice:
-                    # JSONata Condition → dummy JSONPath condition
                     next_state = choice.get("Next", "")
                     choice.clear()
                     choice["Variable"] = "$.placeholder"
