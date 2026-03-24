@@ -1,7 +1,34 @@
 {
   "Comment": "Cross-account version: Associates an IAM Role for S3 access to a cluster and updates the parameter group.",
-  "StartAt": "AddRoleToCluster",
+  "StartAt": "CheckRoleArnProvided",
   "States": {
+    "CheckRoleArnProvided": {
+      "Type": "Choice",
+      "Comment": "Skip if RoleArn is NONE or empty",
+      "Choices": [
+        {
+          "Variable": "$.RoleArn",
+          "StringEquals": "NONE",
+          "Next": "SkipS3Integration"
+        },
+        {
+          "Variable": "$.RoleArn",
+          "StringEquals": "",
+          "Next": "SkipS3Integration"
+        }
+      ],
+      "Default": "AddRoleToCluster"
+    },
+    "SkipS3Integration": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Skipped",
+        "ModuleName": "configure_s3_integration",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier",
+        "Reason": "RoleArn is NONE - S3 integration not configured"
+      },
+      "Next": "ConfigSucceeded"
+    },
     "AddRoleToCluster": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:rds:addRoleToDBCluster",
