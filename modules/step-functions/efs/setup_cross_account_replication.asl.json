@@ -1,5 +1,5 @@
 {
-  "Comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in). Supports cross-region via Lambda proxy (ProxyLambdaArn + SourceAccount.Region).",
+  "Comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Copies pod-access policy from ExistingFileSystemId (or applies defaults with CsiDriverRoleArn) before adding replication policies. Skips replication policy adds if already present. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in). Supports cross-region via Lambda proxy (ProxyLambdaArn + SourceAccount.Region).",
   "StartAt": "CheckProxyForGetSource",
   "States": {
     "CheckProxyForGetSource": {
@@ -407,10 +407,50 @@
             {"Variable": "$.UpdateSourcePolicy", "IsPresent": true},
             {"Variable": "$.UpdateSourcePolicy", "BooleanEquals": true}
           ],
-          "Next": "CallUpdateSourcePolicy"
+          "Next": "CallPreserveClientAccessPolicy"
         }
       ],
       "Default": "ShouldCreateDestinationEFS"
+    },
+    "CallPreserveClientAccessPolicy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Preserve normal client access when creating a file system policy on an EFS that had none. Without this, adding replication-only statements replaces the default full-access policy and breaks NFS mounts for pods.",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId": "{% $states.input.SourceFileSystemId %}",
+          "Account": "{% $states.input.SourceAccount %}",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowClientAccessViaMountTarget",
+            "Effect": "Allow",
+            "Principal": {"AWS": "*"},
+            "Action": [
+              "elasticfilesystem:ClientMount",
+              "elasticfilesystem:ClientWrite",
+              "elasticfilesystem:ClientRootAccess"
+            ],
+            "Resource": "{% $states.input.SourceEFS.FileSystemArn %}",
+            "Condition": {
+              "Bool": {
+                "elasticfilesystem:AccessedViaMountTarget": "true"
+              }
+            }
+          }
+        },
+        "Name": "{% $states.context.Execution.Name & '-SrcClientAccess' %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "CallUpdateSourcePolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'PolicyError': $states.errorOutput}]) %}",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
     },
     "CallUpdateSourcePolicy": {
       "Type": "Task",
@@ -649,11 +689,85 @@
             {"Variable": "$.UpdateDestinationPolicy", "IsPresent": true},
             {"Variable": "$.UpdateDestinationPolicy", "BooleanEquals": true}
           ],
-          "Next": "CallAddDestCrossAccountPolicy"
+          "Next": "ResolveExistingFileSystem"
         },
         {
           "Variable": "$.CreateDestinationEFS",
           "BooleanEquals": false,
+          "Next": "WaitPolicyPropagation"
+        }
+      ],
+      "Default": "ResolveExistingFileSystem"
+    },
+    "ResolveExistingFileSystem": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "If ExistingFileSystemName is provided, resolve it to an ID. If ExistingFileSystemId is already set, skip resolution.",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.ExistingFileSystemId) and $states.input.ExistingFileSystemId != '' %}",
+          "Next": "CallCopyPodAccessPolicy"
+        },
+        {
+          "Condition": "{% $exists($states.input.ExistingFileSystemName) and $states.input.ExistingFileSystemName != '' %}",
+          "Next": "LookupExistingFileSystemByName"
+        }
+      ],
+      "Default": "CallCopyPodAccessPolicy"
+    },
+    "LookupExistingFileSystemByName": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "List all EFS in destination account and find the one matching ExistingFileSystemName by Name tag",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Arguments": {},
+      "Credentials": {
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+      },
+      "Output": "{% ($match := $filter($states.result.FileSystems, function($fs) { $fs.Name = $states.input.ExistingFileSystemName and $fs.FileSystemId != $states.input.DestinationEFS.FileSystemId }); $oldest := $sort($match, function($a, $b) { $a.CreationTime < $b.CreationTime }); $count($oldest) > 0 ? $merge([$states.input, {'ExistingFileSystemId': $oldest[0].FileSystemId}]) : $states.input) %}",
+      "Next": "CallCopyPodAccessPolicy",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $states.input %}",
+          "Comment": "If lookup fails, continue without ExistingFileSystemId — defaults will be applied",
+          "Next": "CallCopyPodAccessPolicy"
+        }
+      ]
+    },
+    "CallCopyPodAccessPolicy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Copy policy from existing EFS (ExistingFileSystemId, resolved from Name if needed) to destination EFS, or apply defaults. Must run BEFORE replication policies so pods can mount the EFS. Returns list of Sids applied.",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${copy_filesystem_policy_arn}",
+        "Input": {
+          "SourceFileSystemId": "{% $exists($states.input.ExistingFileSystemId) ? $states.input.ExistingFileSystemId : '' %}",
+          "DestinationFileSystemId": "{% $states.input.DestinationEFS.FileSystemId %}",
+          "DestinationFileSystemArn": "{% $states.input.DestinationEFS.FileSystemArn %}",
+          "Account": "{% $states.input.DestinationAccount %}",
+          "CsiDriverRoleArn": "{% $states.input.CsiDriverRoleArn %}"
+        },
+        "Name": "{% $states.context.Execution.Name & '-CopyPolicy' %}"
+      },
+      "Output": "{% $merge([$states.input, {'CopiedPolicyResult': $states.result.Output}]) %}",
+      "Next": "CheckReplicationPoliciesAlreadyPresent",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'PolicyError': $states.errorOutput}]) %}",
+          "Next": "DestinationPolicyFailed"
+        }
+      ]
+    },
+    "CheckReplicationPoliciesAlreadyPresent": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Skip replication policy adds if the copied policy already contains AllowCrossAccountReplication (indicates all replication statements were already present on the source EFS)",
+      "Choices": [
+        {
+          "Condition": "{% 'AllowCrossAccountReplication' in $states.input.CopiedPolicyResult.Statements %}",
           "Next": "WaitPolicyPropagation"
         }
       ],

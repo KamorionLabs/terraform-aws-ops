@@ -1,5 +1,5 @@
 {
-  "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode.",
+  "Comment": "Creates or Deletes EKS storage resources (StorageClass, PersistentVolume, PersistentVolumeClaim) in destination account. Supports both public (eks:call) and private (k8s-proxy Lambda) access modes via CheckAccessMode routing on $.EKS.AccessMode. Optional input: MountOptions (array, e.g. ['iam']) added to PV spec. VolumeHandle automatically appended with ':/' if missing.",
   "StartAt": "InitStorageNames",
   "States": {
     "InitStorageNames": {
@@ -501,6 +501,24 @@
         {
           "Variable": "$.EKS.AccessMode",
           "StringEquals": "public",
+          "Next": "BuildPvManifest"
+        }
+      ],
+      "Default": "BuildPvManifest"
+    },
+    "BuildPvManifest": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build PV manifest dynamically. Appends ':/' to volumeHandle if missing. Includes mountOptions from input if provided (e.g. ['iam']).",
+      "Output": "{% ($handle := $contains($states.input.EfsInfo.Id, ':/') ? $states.input.EfsInfo.Id : $states.input.EfsInfo.Id & ':/'; $base := {'apiVersion': 'v1', 'kind': 'PersistentVolume', 'metadata': {'name': $states.input.ResolvedNames.Pv}, 'spec': {'capacity': {'storage': '20Gi'}, 'volumeMode': 'Filesystem', 'accessModes': ['ReadWriteMany'], 'persistentVolumeReclaimPolicy': 'Retain', 'storageClassName': $states.input.ResolvedNames.StorageClass, 'csi': {'driver': 'efs.csi.aws.com', 'volumeHandle': $handle}}}; $exists($states.input.MountOptions) and $count($states.input.MountOptions) > 0 ? $merge([$states.input, {'PvManifest': $merge([$base, {'spec': $merge([$base.spec, {'mountOptions': $states.input.MountOptions}])}])}]) : $merge([$states.input, {'PvManifest': $base}])) %}",
+      "Next": "CheckAccessModeForCreatePvRoute"
+    },
+    "CheckAccessModeForCreatePvRoute": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
           "Next": "CreatePv"
         }
       ],
@@ -515,26 +533,7 @@
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "POST",
         "Path": "/api/v1/persistentvolumes",
-        "RequestBody": {
-          "apiVersion": "v1",
-          "kind": "PersistentVolume",
-          "metadata": {
-            "name.$": "$.ResolvedNames.Pv"
-          },
-          "spec": {
-            "capacity": {
-              "storage": "20Gi"
-            },
-            "volumeMode": "Filesystem",
-            "accessModes": ["ReadWriteMany"],
-            "persistentVolumeReclaimPolicy": "Retain",
-            "storageClassName.$": "$.ResolvedNames.StorageClass",
-            "csi": {
-              "driver": "efs.csi.aws.com",
-              "volumeHandle.$": "$.EfsInfo.Id"
-            }
-          }
-        }
+        "RequestBody.$": "$.PvManifest"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -567,26 +566,7 @@
           "ClusterName.$": "$.EKS.ClusterName",
           "Method": "POST",
           "Path": "/api/v1/persistentvolumes",
-          "RequestBody": {
-            "apiVersion": "v1",
-            "kind": "PersistentVolume",
-            "metadata": {
-              "name.$": "$.ResolvedNames.Pv"
-            },
-            "spec": {
-              "capacity": {
-                "storage": "20Gi"
-              },
-              "volumeMode": "Filesystem",
-              "accessModes": ["ReadWriteMany"],
-              "persistentVolumeReclaimPolicy": "Retain",
-              "storageClassName.$": "$.ResolvedNames.StorageClass",
-              "csi": {
-                "driver": "efs.csi.aws.com",
-                "volumeHandle.$": "$.EfsInfo.Id"
-              }
-            }
-          }
+          "RequestBody.$": "$.PvManifest"
         }
       },
       "Credentials": {

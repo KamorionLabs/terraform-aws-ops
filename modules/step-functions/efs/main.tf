@@ -19,6 +19,7 @@ locals {
 
     # Sub-SFNs — Phase 1 Extraction (reusable building blocks, no ARN injection)
     manage_filesystem_policy = "manage_filesystem_policy.asl.json"
+    copy_filesystem_policy   = "copy_filesystem_policy.asl.json"
     manage_access_point      = "manage_access_point.asl.json"
     manage_lambda_lifecycle  = "manage_lambda_lifecycle.asl.json"
   }
@@ -118,6 +119,7 @@ resource "aws_sfn_state_machine" "efs_templated" {
     manage_lambda_lifecycle_arn  = aws_sfn_state_machine.efs["manage_lambda_lifecycle"].arn
     manage_access_point_arn      = aws_sfn_state_machine.efs["manage_access_point"].arn
     manage_filesystem_policy_arn = aws_sfn_state_machine.efs["manage_filesystem_policy"].arn
+    copy_filesystem_policy_arn   = aws_sfn_state_machine.efs["copy_filesystem_policy"].arn
     check_flag_file_sync_arn     = aws_sfn_state_machine.efs_sub_templated["check_flag_file_sync"].arn
   })
 

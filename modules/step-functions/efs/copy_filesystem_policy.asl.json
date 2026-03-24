@@ -1,0 +1,139 @@
+{
+  "Comment": "CopyFileSystemPolicy | Copies all policy statements from an existing (source) EFS to a destination EFS, rewriting Resource ARNs. If source EFS has no policy or does not exist, applies a default policy granting CSI driver access and mount target access with ClientRootAccess. Input: {SourceFileSystemId?, DestinationFileSystemId, DestinationFileSystemArn, Account: {RoleArn}, CsiDriverRoleArn} | Output: {DestinationFileSystemId, PolicyApplied, Source, Statements (Sids copied), Status}",
+  "StartAt": "CheckSourceExists",
+  "States": {
+    "CheckSourceExists": {
+      "Type": "Choice",
+      "Comment": "If no SourceFileSystemId provided, skip to default policy",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.SourceFileSystemId", "IsPresent": true},
+            {"Not": {"Variable": "$.SourceFileSystemId", "StringEquals": ""}}
+          ],
+          "Next": "GetSourcePolicy"
+        }
+      ],
+      "Default": "ApplyDefaultPolicy"
+    },
+    "GetSourcePolicy": {
+      "Type": "Task",
+      "Comment": "Read existing EFS policy from source file system",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystemPolicy",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": "$.SourcePolicy",
+      "Next": "ExtractPodAccessStatements",
+      "Catch": [
+        {
+          "ErrorEquals": ["Efs.PolicyNotFound", "Efs.PolicyNotFoundException", "Efs.FileSystemNotFound", "Efs.FileSystemNotFoundException"],
+          "ResultPath": "$.PolicyNotFound",
+          "Comment": "Source has no policy or does not exist - use defaults",
+          "Next": "ApplyDefaultPolicy"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Comment": "Unexpected error reading source policy - fall back to defaults",
+          "Next": "ApplyDefaultPolicy"
+        }
+      ]
+    },
+    "ExtractAndRewriteStatements": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Parse source policy and rewrite all statements' Resource ARN to point to destination EFS. Preserves all statements (pod-access AND replication) so downstream can skip adding policies already present.",
+      "Output": "{% ($policy := $parse($states.input.SourcePolicy.Policy); $stmts := $type($policy.Statement) = 'array' ? $policy.Statement : [$policy.Statement]; $rewritten := $map($stmts, function($s) { $merge([$s, {'Resource': $states.input.DestinationFileSystemArn}]) }); $count($rewritten) > 0 ? $merge([$states.input, {'ExtractedStatements': $rewritten, 'ExtractedSids': $map($rewritten, function($s) { $s.Sid }), 'PolicySource': 'copied'}]) : $merge([$states.input, {'PolicySource': 'default'}])) %}",
+      "Next": "CheckExtractedStatements"
+    },
+    "CheckExtractedStatements": {
+      "Type": "Choice",
+      "Comment": "If no statements were found in source, use defaults",
+      "Choices": [
+        {
+          "Variable": "$.PolicySource",
+          "StringEquals": "copied",
+          "Next": "ApplyCopiedStatements"
+        }
+      ],
+      "Default": "ApplyDefaultPolicy"
+    },
+    "ApplyCopiedStatements": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Apply the copied pod-access statements to the destination EFS",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Arguments": {
+        "FileSystemId": "{% $states.input.DestinationFileSystemId %}",
+        "Policy": "{% $string({'Version': '2012-10-17', 'Statement': $states.input.ExtractedStatements}) %}"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareCopiedOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
+          "Next": "CopyPolicyFailed"
+        }
+      ]
+    },
+    "PrepareCopiedOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "PolicyApplied": true,
+        "Source": "copied",
+        "Statements.$": "$.ExtractedSids",
+        "Status": "Completed"
+      },
+      "End": true
+    },
+
+    "ApplyDefaultPolicy": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Apply default pod-access policy: AllowPods (CSI driver IAM role with Client*) and AllowMountTargetAccess (mount target access with ClientMount/Write/Read/RootAccess)",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putFileSystemPolicy",
+      "Arguments": {
+        "FileSystemId": "{% $states.input.DestinationFileSystemId %}",
+        "Policy": "{% $string({'Version': '2012-10-17', 'Statement': [{'Sid': 'AllowPods', 'Effect': 'Allow', 'Principal': {'AWS': $states.input.CsiDriverRoleArn}, 'Action': 'elasticfilesystem:Client*', 'Resource': $states.input.DestinationFileSystemArn}, {'Sid': 'AllowMountTargetAccess', 'Effect': 'Allow', 'Principal': {'AWS': '*'}, 'Action': ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite', 'elasticfilesystem:ClientRead', 'elasticfilesystem:ClientRootAccess'], 'Resource': $states.input.DestinationFileSystemArn, 'Condition': {'Bool': {'elasticfilesystem:AccessedViaMountTarget': 'true'}}}]}) %}"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.Account.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareDefaultOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
+          "Next": "CopyPolicyFailed"
+        }
+      ]
+    },
+    "PrepareDefaultOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "PolicyApplied": true,
+        "Source": "default",
+        "Statements": ["AllowPods", "AllowMountTargetAccess"],
+        "Status": "Completed"
+      },
+      "End": true
+    },
+
+    "CopyPolicyFailed": {
+      "Type": "Fail",
+      "Error": "CopyFileSystemPolicyFailed",
+      "Cause": "Failed to apply pod-access policy to destination EFS"
+    }
+  }
+}
