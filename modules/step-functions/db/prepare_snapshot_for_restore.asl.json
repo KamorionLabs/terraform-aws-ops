@@ -574,22 +574,6 @@
       }]
     },
 
-    "PrepareOutputCrossAccount": {
-      "Type": "Pass",
-      "Comment": "Output for cross-account scenario",
-      "Output": {
-        "Status": "Completed",
-        "ModuleName": "prepare_snapshot_for_restore",
-        "Mode": "{% $states.input.PreparedSnapshot.Mode %}",
-        "SnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotIdentifier %}",
-        "SnapshotArn": "{% $states.input.PreparedSnapshot.SnapshotArn %}",
-        "EngineVersion": "{% $states.input.PreparedSnapshot.EngineVersion %}",
-        "Shared": true,
-        "SharedWith": "{% $states.input.DestinationAccount.AccountId %}"
-      },
-      "Next": "PrepareSucceeded"
-    },
-
     "PrepareOutputCrossAccountWithWarning": {
       "Type": "Pass",
       "Comment": "Output when verification failed but sharing succeeded",
