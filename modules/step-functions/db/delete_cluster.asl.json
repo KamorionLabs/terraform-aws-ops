@@ -91,6 +91,10 @@
     "DeleteInstances": {
       "Type": "Map",
       "ItemsPath": "$.ClusterInfo.Instances",
+      "ItemSelector": {
+        "DbInstanceIdentifier.$": "$$.Map.Item.Value.DbInstanceIdentifier",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
       "ItemProcessor": {
         "ProcessorConfig": { "Mode": "INLINE" },
         "StartAt": "DeleteInstance",
