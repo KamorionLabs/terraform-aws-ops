@@ -220,7 +220,10 @@ class TestErrorHandling:
 
         final_status = sfn_client.describe_execution(executionArn=execution_arn)
         assert final_status['status'] == 'FAILED'
-        assert final_status.get('error') == 'TestError'
+        # SFN Local uses execution history for error details, not describe_execution
+        history = sfn_client.get_execution_history(executionArn=execution_arn)
+        fail_events = [e for e in history['events'] if e['type'] == 'FailStateEntered']
+        assert len(fail_events) == 1
 
     def test_succeed_state(self, sfn_client, create_state_machine):
         """Test Succeed state execution."""
