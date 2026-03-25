@@ -82,6 +82,9 @@ def _sanitize_jsonata_values(obj, parent_key=""):
             return "$.placeholder" if parent_key.endswith(".$") else "placeholder"
         if parent_key.endswith(".$") and any(obj.startswith(fn) for fn in _UNSUPPORTED_INTRINSICS):
             return "$.placeholder"
+        # Replace Terraform template variables with dummy ARN
+        if "${" in obj and parent_key == "Resource":
+            return "arn:aws:lambda:us-east-1:123456789012:function:placeholder"
     return obj
 
 
@@ -110,6 +113,11 @@ def _strip_unsupported_from_states(states: dict) -> None:
                     choice["Variable"] = "$.placeholder"
                     choice["IsPresent"] = True
                     choice["Next"] = next_state
+                # Fix JSONata variable references in Variable field
+                # JSONata vars use $varName (no dot), JSONPath uses $.path
+                var = choice.get("Variable", "")
+                if var.startswith("$") and not var.startswith("$.") and not var.startswith("$$"):
+                    choice["Variable"] = "$.placeholder"
 
         # Handle Parallel branches
         for branch in state_def.get("Branches", []):
