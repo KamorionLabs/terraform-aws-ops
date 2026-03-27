@@ -134,23 +134,27 @@ def _build_ssl_context(ca_data: bytes) -> ssl.SSLContext:
     return ctx
 
 
-def _get_content_type(method: str) -> str:
+def _get_content_type(method: str, content_type: str = None) -> str:
     """
     Return the appropriate Content-Type header for the HTTP method.
 
     Args:
         method: HTTP method (GET, POST, PATCH, PUT, DELETE)
+        content_type: Optional override (e.g. "application/merge-patch+json" for CRDs)
 
     Returns:
         Content-Type string
     """
+    if content_type:
+        return content_type
     if method == "PATCH":
         return "application/strategic-merge-patch+json"
     return "application/json"
 
 
 def k8s_api_call(cluster_name: str, region: str, method: str, path: str,
-                 body: dict = None, query_params: dict = None) -> dict:
+                 body: dict = None, query_params: dict = None,
+                 content_type: str = None) -> dict:
     """
     Make an authenticated call to the Kubernetes API.
 
@@ -184,7 +188,7 @@ def k8s_api_call(cluster_name: str, region: str, method: str, path: str,
 
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Content-Type", _get_content_type(method))
+    req.add_header("Content-Type", _get_content_type(method, content_type))
     req.add_header("Accept", "application/json")
 
     logger.info(f"K8s API call: {method} {path}")
@@ -238,8 +242,9 @@ def handle_call(event: dict, region: str) -> dict:
     path = event["Path"]
     body = event.get("RequestBody")
     query_params = event.get("QueryParameters")
+    content_type = event.get("ContentType")
 
-    result = k8s_api_call(cluster_name, region, method, path, body, query_params)
+    result = k8s_api_call(cluster_name, region, method, path, body, query_params, content_type)
     logger.info(f"Call succeeded: {result['StatusCode']}")
     return result
 
