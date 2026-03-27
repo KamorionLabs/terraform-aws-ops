@@ -203,30 +203,14 @@
     },
     "RestoreStandardClusterFromSnapshot": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Restore cluster from shared snapshot in destination account",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterFromSnapshot",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Parameters": {
-        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
-        "SnapshotIdentifier.$": "$.SnapshotInfo.SnapshotArn",
-        "Engine": "aurora-mysql",
-        "EngineVersion.$": "$.SnapshotInfo.EngineVersion",
-        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
-        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
-        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "CopyTagsToSnapshot": true,
-        "EnableIAMDatabaseAuthentication": "False",
-        "EnableCloudwatchLogsExports": [
-          "audit",
-          "error",
-          "general",
-          "slowquery"
-        ],
-        "DeletionProtection": false
-      },
+      "Arguments": "{% $merge([{'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'SnapshotIdentifier': $states.input.SnapshotInfo.SnapshotArn, 'Engine': 'aurora-mysql', 'EngineVersion': $states.input.SnapshotInfo.EngineVersion, 'DbSubnetGroupName': $states.input.DbSubnetGroupName, 'VpcSecurityGroupIds': $states.input.VpcSecurityGroupIds, 'DbClusterParameterGroupName': $states.input.DbClusterParameterGroupName, 'CopyTagsToSnapshot': true, 'EnableIAMDatabaseAuthentication': 'False', 'EnableCloudwatchLogsExports': ['audit','error','general','slowquery'], 'DeletionProtection': false}, $exists($states.input.KmsKeyId) and $states.input.KmsKeyId != '' and $states.input.KmsKeyId != null ? {'KmsKeyId': $states.input.KmsKeyId} : {}]) %}",
+      "Output": "{% $states.input %}",
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
@@ -249,34 +233,14 @@
     },
     "RestoreServerlessClusterFromSnapshot": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Restore serverless cluster from shared snapshot in destination account",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterFromSnapshot",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Parameters": {
-        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
-        "SnapshotIdentifier.$": "$.SnapshotInfo.SnapshotArn",
-        "Engine": "aurora-mysql",
-        "EngineVersion.$": "$.SnapshotInfo.EngineVersion",
-        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
-        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
-        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "ServerlessV2ScalingConfiguration": {
-          "MinCapacity.$": "$.AuroraServerlessMinCapacity",
-          "MaxCapacity.$": "$.AuroraServerlessMaxCapacity"
-        },
-        "CopyTagsToSnapshot": true,
-        "EnableIAMDatabaseAuthentication": false,
-        "EnableCloudwatchLogsExports": [
-          "audit",
-          "error",
-          "general",
-          "slowquery"
-        ],
-        "DeletionProtection": false
-      },
+      "Arguments": "{% $merge([{'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'SnapshotIdentifier': $states.input.SnapshotInfo.SnapshotArn, 'Engine': 'aurora-mysql', 'EngineVersion': $states.input.SnapshotInfo.EngineVersion, 'DbSubnetGroupName': $states.input.DbSubnetGroupName, 'VpcSecurityGroupIds': $states.input.VpcSecurityGroupIds, 'DbClusterParameterGroupName': $states.input.DbClusterParameterGroupName, 'ServerlessV2ScalingConfiguration': {'MinCapacity': $states.input.AuroraServerlessMinCapacity, 'MaxCapacity': $states.input.AuroraServerlessMaxCapacity}, 'CopyTagsToSnapshot': true, 'EnableIAMDatabaseAuthentication': false, 'EnableCloudwatchLogsExports': ['audit','error','general','slowquery'], 'DeletionProtection': false}, $exists($states.input.KmsKeyId) and $states.input.KmsKeyId != '' and $states.input.KmsKeyId != null ? {'KmsKeyId': $states.input.KmsKeyId} : {}]) %}",
+      "Output": "{% $states.input %}",
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
@@ -299,35 +263,17 @@
     },
     "RestoreClusterToPointInTime": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Point-in-time restore within destination account (not cross-account)",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Parameters": {
-        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
-        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
-        "RestoreType": "full-copy",
-        "UseLatestRestorableTime": true,
-        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
-        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
-        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
-        "Port.$": "$.Port",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "CopyTagsToSnapshot": true,
-        "EnableIAMDatabaseAuthentication": "False",
-        "EnableCloudwatchLogsExports": [
-          "audit",
-          "error",
-          "general",
-          "slowquery"
-        ],
-        "DeletionProtection": false
-      },
+      "Arguments": "{% $merge([{'SourceDBClusterIdentifier': $states.input.SourceDBClusterIdentifier, 'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'RestoreType': 'full-copy', 'UseLatestRestorableTime': true, 'DbSubnetGroupName': $states.input.DbSubnetGroupName, 'VpcSecurityGroupIds': $states.input.VpcSecurityGroupIds, 'DbClusterParameterGroupName': $states.input.DbClusterParameterGroupName, 'Port': $states.input.Port, 'CopyTagsToSnapshot': true, 'EnableIAMDatabaseAuthentication': false, 'EnableCloudwatchLogsExports': ['audit','error','general','slowquery'], 'DeletionProtection': false}, $exists($states.input.KmsKeyId) and $states.input.KmsKeyId != '' and $states.input.KmsKeyId != null ? {'KmsKeyId': $states.input.KmsKeyId} : {}]) %}",
+      "Output": "{% $states.input %}",
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
-      "ResultPath": null,
       "Retry": [
         {
           "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
@@ -346,35 +292,17 @@
     },
     "RestoreClusterToSpecificTime": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Point-in-time restore to specific time within destination account",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Parameters": {
-        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
-        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
-        "RestoreType": "full-copy",
-        "RestoreToTime.$": "$.RestoreToTime",
-        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
-        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
-        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
-        "Port.$": "$.Port",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "CopyTagsToSnapshot": true,
-        "EnableIAMDatabaseAuthentication": false,
-        "EnableCloudwatchLogsExports": [
-          "audit",
-          "error",
-          "general",
-          "slowquery"
-        ],
-        "DeletionProtection": false
-      },
+      "Arguments": "{% $merge([{'SourceDBClusterIdentifier': $states.input.SourceDBClusterIdentifier, 'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'RestoreType': 'full-copy', 'RestoreToTime': $states.input.RestoreToTime, 'DbSubnetGroupName': $states.input.DbSubnetGroupName, 'VpcSecurityGroupIds': $states.input.VpcSecurityGroupIds, 'DbClusterParameterGroupName': $states.input.DbClusterParameterGroupName, 'Port': $states.input.Port, 'CopyTagsToSnapshot': true, 'EnableIAMDatabaseAuthentication': false, 'EnableCloudwatchLogsExports': ['audit','error','general','slowquery'], 'DeletionProtection': false}, $exists($states.input.KmsKeyId) and $states.input.KmsKeyId != '' and $states.input.KmsKeyId != null ? {'KmsKeyId': $states.input.KmsKeyId} : {}]) %}",
+      "Output": "{% $states.input %}",
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
-      "ResultPath": null,
       "Retry": [
         {
           "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
@@ -393,35 +321,17 @@
     },
     "RestoreClusterFastClone": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
       "Comment": "Fast clone within destination account",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Parameters": {
-        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
-        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
-        "RestoreType": "copy-on-write",
-        "UseLatestRestorableTime": true,
-        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
-        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
-        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
-        "Port.$": "$.Port",
-        "KmsKeyId.$": "$.KmsKeyId",
-        "CopyTagsToSnapshot": true,
-        "EnableIAMDatabaseAuthentication": false,
-        "EnableCloudwatchLogsExports": [
-          "audit",
-          "error",
-          "general",
-          "slowquery"
-        ],
-        "DeletionProtection": false
-      },
+      "Arguments": "{% $merge([{'SourceDBClusterIdentifier': $states.input.SourceDBClusterIdentifier, 'DbClusterIdentifier': $states.input.TmpDbClusterIdentifier, 'RestoreType': 'copy-on-write', 'UseLatestRestorableTime': true, 'DbSubnetGroupName': $states.input.DbSubnetGroupName, 'VpcSecurityGroupIds': $states.input.VpcSecurityGroupIds, 'DbClusterParameterGroupName': $states.input.DbClusterParameterGroupName, 'Port': $states.input.Port, 'CopyTagsToSnapshot': true, 'EnableIAMDatabaseAuthentication': false, 'EnableCloudwatchLogsExports': ['audit','error','general','slowquery'], 'DeletionProtection': false}, $exists($states.input.KmsKeyId) and $states.input.KmsKeyId != '' and $states.input.KmsKeyId != null ? {'KmsKeyId': $states.input.KmsKeyId} : {}]) %}",
+      "Output": "{% $states.input %}",
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
-      "ResultPath": null,
       "Retry": [
         {
           "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
