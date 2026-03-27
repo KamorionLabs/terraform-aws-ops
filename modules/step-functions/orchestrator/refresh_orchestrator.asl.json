@@ -1575,15 +1575,18 @@
               "RoleArn.$": "$.DestinationAccountRoleArn"
             },
             "ResultPath": null,
-            "End": true,
+            "Next": "AnnotateComplete",
             "Catch": [
               {
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": null,
                 "Comment": "Non-blocking: continue even if ExternalSecret refresh fails",
-                "End": true
+                "Next": "AnnotateComplete"
               }
             ]
+          },
+          "AnnotateComplete": {
+            "Type": "Succeed"
           }
         }
       },
