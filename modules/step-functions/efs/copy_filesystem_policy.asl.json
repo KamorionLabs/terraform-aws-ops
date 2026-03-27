@@ -72,9 +72,9 @@
         "Policy": "{% $string({'Version': '2012-10-17', 'Statement': $states.input.ExtractedStatements}) %}"
       },
       "Credentials": {
-        "RoleArn.$": "$.Account.RoleArn"
+        "RoleArn": "{% $states.input.Account.RoleArn %}"
       },
-      "ResultPath": null,
+      "Output": "{% $states.input %}",
       "Next": "PrepareCopiedOutput",
       "Catch": [
         {
@@ -86,11 +86,13 @@
     },
     "PrepareCopiedOutput": {
       "Type": "Pass",
-      "Parameters": {
-        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build final output for copied policy",
+      "Output": {
+        "DestinationFileSystemId": "{% $states.input.DestinationFileSystemId %}",
         "PolicyApplied": true,
         "Source": "copied",
-        "Statements.$": "$.ExtractedSids",
+        "Statements": "{% $states.input.ExtractedSids %}",
         "Status": "Completed"
       },
       "End": true
@@ -106,9 +108,9 @@
         "Policy": "{% $string({'Version': '2012-10-17', 'Statement': [{'Sid': 'AllowPods', 'Effect': 'Allow', 'Principal': {'AWS': $states.input.CsiDriverRoleArn}, 'Action': 'elasticfilesystem:Client*', 'Resource': $states.input.DestinationFileSystemArn}, {'Sid': 'AllowMountTargetAccess', 'Effect': 'Allow', 'Principal': {'AWS': '*'}, 'Action': ['elasticfilesystem:ClientMount', 'elasticfilesystem:ClientWrite', 'elasticfilesystem:ClientRead', 'elasticfilesystem:ClientRootAccess'], 'Resource': $states.input.DestinationFileSystemArn, 'Condition': {'Bool': {'elasticfilesystem:AccessedViaMountTarget': 'true'}}}]}) %}"
       },
       "Credentials": {
-        "RoleArn.$": "$.Account.RoleArn"
+        "RoleArn": "{% $states.input.Account.RoleArn %}"
       },
-      "ResultPath": null,
+      "Output": "{% $states.input %}",
       "Next": "PrepareDefaultOutput",
       "Catch": [
         {
@@ -120,8 +122,10 @@
     },
     "PrepareDefaultOutput": {
       "Type": "Pass",
-      "Parameters": {
-        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build final output for default policy",
+      "Output": {
+        "DestinationFileSystemId": "{% $states.input.DestinationFileSystemId %}",
         "PolicyApplied": true,
         "Source": "default",
         "Statements": ["AllowPods", "AllowMountTargetAccess"],
