@@ -1484,38 +1484,41 @@
     },
     "CheckRotateSecretsOption": {
       "Type": "Choice",
+      "Comment": "Check for unified Database.Secrets.Sync (new) or legacy Database.Options.RotateSecrets",
       "Choices": [
+        {
+          "And": [
+            { "Variable": "$.Database.Secrets.Sync.Enabled", "IsPresent": true },
+            { "Variable": "$.Database.Secrets.Sync.Enabled", "BooleanEquals": true }
+          ],
+          "Next": "SyncDatabaseSecrets"
+        },
         {
           "Variable": "$.Database.Options.RotateSecrets",
           "BooleanEquals": true,
-          "Next": "RotateDatabaseSecrets"
+          "Next": "SyncDatabaseSecrets"
         }
       ],
       "Default": "CheckConfigSyncOption"
     },
-    "RotateDatabaseSecrets": {
+    "SyncDatabaseSecrets": {
       "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Sync DB user secrets from source to destination (password + endpoints). Optionally rotate via Lambda.",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
-      "Parameters": {
-        "StateMachineArn.$": "$.StepFunctions.Database.RotateSecrets",
-        "Input": {
-          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
-          "DatabaseUsersSecrets.$": "$.Database.Secrets.UserSecrets",
-          "RotationLambdaName.$": "$.Database.Secrets.RotationLambdaName",
-          "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
-          "Region.$": "$.Region",
-          "DestinationAccount.$": "$.DestinationAccount"
-        },
-        "Name.$": "States.Format('{}-RotateSecrets', $$.Execution.Name)"
+      "Arguments": {
+        "StateMachineArn": "{% $states.input.StepFunctions.Database.RotateSecrets %}",
+        "Input": "{% $merge([{'DbClusterIdentifier': $states.input.Database.Target.ClusterIdentifier, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Secrets.Sync.Items) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.Sync.Items} : $exists($states.input.Database.Secrets.UserSecrets) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.UserSecrets} : {}, $exists($states.input.Database.Secrets.Sync.Rotate) ? {'Rotate': $states.input.Database.Secrets.Sync.Rotate} : {}, $exists($states.input.Database.Secrets.Sync.RotationLambdaName) and $states.input.Database.Secrets.Sync.RotationLambdaName != '' ? {'RotationLambdaName': $states.input.Database.Secrets.Sync.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : $exists($states.input.Database.Secrets.RotationLambdaName) ? {'RotationLambdaName': $states.input.Database.Secrets.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : {}, $exists($states.input.Database.Secrets.KmsKeyId) and $states.input.Database.Secrets.KmsKeyId != '' ? {'KmsKeyId': $states.input.Database.Secrets.KmsKeyId} : {}]) %}",
+        "Name": "{% $states.context.Execution.Name & '-SyncSecrets' %}"
       },
-      "ResultPath": "$.RotateSecretsResult",
+      "Output": "{% $merge([$states.input, {'SyncSecretsResult': $states.result}]) %}",
       "Next": "CheckConfigSyncOption",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "ResultPath": "$.RotateSecretsError",
+          "Output": "{% $merge([$states.input, {'SyncSecretsError': $states.errorOutput}]) %}",
           "Next": "CheckConfigSyncOption"
         }
       ]
