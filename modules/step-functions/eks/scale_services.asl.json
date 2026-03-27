@@ -257,9 +257,9 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "GET",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
         }
       },
       "Credentials": {
@@ -309,9 +309,9 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "call",
-          "ClusterName.$": "$.EksClusterName",
+          "ClusterName.$": "$.EKS.ClusterName",
           "Method": "DELETE",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
         }
       },
       "Credentials": {
