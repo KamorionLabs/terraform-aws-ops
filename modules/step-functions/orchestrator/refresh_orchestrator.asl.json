@@ -1508,94 +1508,17 @@
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Arguments": {
         "StateMachineArn": "{% $states.input.StepFunctions.Database.RotateSecrets %}",
-        "Input": "{% $merge([{'DbClusterIdentifier': $states.input.Database.Target.ClusterIdentifier, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Secrets.Sync.Items) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.Sync.Items} : $exists($states.input.Database.Secrets.UserSecrets) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.UserSecrets} : {}, $exists($states.input.Database.Secrets.Sync.Rotate) ? {'Rotate': $states.input.Database.Secrets.Sync.Rotate} : {}, $exists($states.input.Database.Secrets.Sync.RotationLambdaName) and $states.input.Database.Secrets.Sync.RotationLambdaName != '' ? {'RotationLambdaName': $states.input.Database.Secrets.Sync.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : $exists($states.input.Database.Secrets.RotationLambdaName) ? {'RotationLambdaName': $states.input.Database.Secrets.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : {}, $exists($states.input.Database.Secrets.KmsKeyId) and $states.input.Database.Secrets.KmsKeyId != '' ? {'KmsKeyId': $states.input.Database.Secrets.KmsKeyId} : {}]) %}",
+        "Input": "{% $merge([{'DbClusterIdentifier': $states.input.Database.Target.ClusterIdentifier, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.Database.Secrets.Sync.Items) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.Sync.Items} : $exists($states.input.Database.Secrets.UserSecrets) ? {'DatabaseUsersSecrets': $states.input.Database.Secrets.UserSecrets} : {}, $exists($states.input.Database.Secrets.Sync.Rotate) ? {'Rotate': $states.input.Database.Secrets.Sync.Rotate} : {}, $exists($states.input.Database.Secrets.Sync.RefreshExternalSecrets) ? {'RefreshExternalSecrets': $states.input.Database.Secrets.Sync.RefreshExternalSecrets} : {}, $exists($states.input.K8sProxyLambdaArn) ? {'K8sProxyLambdaArn': $states.input.K8sProxyLambdaArn} : {}, $exists($states.input.EKS) ? {'EKS': {'ClusterName': $states.input.EKS.ClusterName, 'Namespace': $states.input.EKS.Namespace}} : {}, $exists($states.input.Database.Secrets.Sync.RotationLambdaName) and $states.input.Database.Secrets.Sync.RotationLambdaName != '' ? {'RotationLambdaName': $states.input.Database.Secrets.Sync.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : $exists($states.input.Database.Secrets.RotationLambdaName) ? {'RotationLambdaName': $states.input.Database.Secrets.RotationLambdaName, 'Region': $states.input.DestinationAccount.Region} : {}, $exists($states.input.Database.Secrets.KmsKeyId) and $states.input.Database.Secrets.KmsKeyId != '' ? {'KmsKeyId': $states.input.Database.Secrets.KmsKeyId} : {}]) %}",
         "Name": "{% $states.context.Execution.Name & '-SyncSecrets' %}"
       },
       "Output": "{% $merge([$states.input, {'SyncSecretsResult': $states.result}]) %}",
-      "Next": "CheckRefreshExternalSecrets",
+      "Next": "CheckConfigSyncOption",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "Output": "{% $merge([$states.input, {'SyncSecretsError': $states.errorOutput}]) %}",
-          "Next": "CheckConfigSyncOption"
-        }
-      ]
-    },
-    "CheckRefreshExternalSecrets": {
-      "Type": "Choice",
-      "Comment": "Refresh ExternalSecrets in K8s to pick up updated Secrets Manager values immediately",
-      "Choices": [
-        {
-          "And": [
-            { "Variable": "$.Database.Secrets.Sync.RefreshExternalSecrets", "IsPresent": true },
-            { "Variable": "$.Database.Secrets.Sync.RefreshExternalSecrets", "BooleanEquals": true },
-            { "Variable": "$.EKS.Options.ScaleServices", "IsPresent": true },
-            { "Variable": "$.EKS.Options.ScaleServices", "BooleanEquals": true }
-          ],
-          "Next": "RefreshExternalSecrets"
-        }
-      ],
-      "Default": "CheckConfigSyncOption"
-    },
-    "RefreshExternalSecrets": {
-      "Type": "Map",
-      "QueryLanguage": "JSONata",
-      "Comment": "Annotate ExternalSecrets to force immediate resync from Secrets Manager",
-      "Items": "{% $filter($states.input.Database.Secrets.Sync.Items, function($item) { $exists($item.ExternalSecretName) and $item.ExternalSecretName != '' }) %}",
-      "MaxConcurrency": 1,
-      "ItemSelector": "{% {'ExternalSecretName': $states.context.Map.Item.Value.ExternalSecretName, 'Namespace': $states.input.EKS.Namespace, 'ClusterName': $states.input.EKS.ClusterName, 'K8sProxyLambdaArn': $states.input.K8sProxyLambdaArn, 'DestinationAccountRoleArn': $states.input.DestinationAccount.RoleArn, 'Timestamp': $states.context.State.EnteredTime} %}",
-      "ItemProcessor": {
-        "ProcessorConfig": { "Mode": "INLINE" },
-        "StartAt": "AnnotateExternalSecret",
-        "States": {
-          "AnnotateExternalSecret": {
-            "Type": "Task",
-            "Comment": "PATCH ExternalSecret to add force-sync annotation, triggering immediate reconciliation",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "Parameters": {
-              "FunctionName.$": "$.K8sProxyLambdaArn",
-              "Payload": {
-                "Action": "call",
-                "ClusterName.$": "$.ClusterName",
-                "Method": "PATCH",
-                "Path.$": "States.Format('/apis/external-secrets.io/v1beta1/namespaces/{}/externalsecrets/{}', $.Namespace, $.ExternalSecretName)",
-                "RequestBody": {
-                  "metadata": {
-                    "annotations": {
-                      "force-sync.$": "$.Timestamp"
-                    }
-                  }
-                },
-                "ContentType": "application/merge-patch+json"
-              }
-            },
-            "Credentials": {
-              "RoleArn.$": "$.DestinationAccountRoleArn"
-            },
-            "ResultPath": null,
-            "Next": "AnnotateComplete",
-            "Catch": [
-              {
-                "ErrorEquals": ["States.ALL"],
-                "ResultPath": null,
-                "Comment": "Non-blocking: continue even if ExternalSecret refresh fails",
-                "Next": "AnnotateComplete"
-              }
-            ]
-          },
-          "AnnotateComplete": {
-            "Type": "Succeed"
-          }
-        }
-      },
-      "Output": "{% $states.input %}",
-      "Next": "CheckConfigSyncOption",
-      "Catch": [
-        {
-          "ErrorEquals": ["States.ALL"],
-          "Output": "{% $states.input %}",
           "Next": "CheckConfigSyncOption"
         }
       ]
