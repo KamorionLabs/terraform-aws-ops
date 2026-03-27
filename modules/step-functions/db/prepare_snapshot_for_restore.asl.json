@@ -557,7 +557,7 @@
         "IncludeShared": true
       },
       "Output": "{% $merge([$states.input, {'Verification': {'Visible': true, 'SnapshotArn': $states.result.DbClusterSnapshots[0].DbClusterSnapshotArn}}]) %}",
-      "Next": "GenerateCopySnapshotId",
+      "Next": "CheckCopyToDestination",
       "Retry": [
         {
           "ErrorEquals": ["Rds.DBClusterSnapshotNotFoundFault"],
@@ -572,6 +572,41 @@
         "Output": "{% $states.input %}",
         "Next": "PrepareOutputCrossAccountWithWarning"
       }]
+    },
+
+    "CheckCopyToDestination": {
+      "Type": "Choice",
+      "Comment": "Copy snapshot to destination account only if explicitly requested (CopyToDestination: true). Default: restore from shared snapshot directly.",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.CopyToDestination) and $states.input.CopyToDestination = true %}",
+          "Next": "PrepareSourceSnapshotForCopy"
+        }
+      ],
+      "Default": "PrepareOutputCrossAccount"
+    },
+
+    "PrepareSourceSnapshotForCopy": {
+      "Type": "Pass",
+      "Comment": "Map PreparedSnapshot to SourceSnapshot format required by CopySnapshot",
+      "Output": "{% $merge([$states.input, {'SourceSnapshot': {'SourceSnapshotId': $states.input.PreparedSnapshot.SnapshotIdentifier, 'SourceSnapshotArn': $states.input.PreparedSnapshot.SnapshotArn, 'EngineVersion': $states.input.PreparedSnapshot.EngineVersion, 'StorageEncrypted': $states.input.PreparedSnapshot.StorageEncrypted, 'KmsKeyId': $states.input.PreparedSnapshot.KmsKeyId}}]) %}",
+      "Next": "GenerateCopySnapshotId"
+    },
+
+    "PrepareOutputCrossAccount": {
+      "Type": "Pass",
+      "Comment": "Output for cross-account shared snapshot (no copy)",
+      "Output": {
+        "Status": "Completed",
+        "ModuleName": "prepare_snapshot_for_restore",
+        "Mode": "{% $states.input.PreparedSnapshot.Mode %}",
+        "SnapshotIdentifier": "{% $states.input.PreparedSnapshot.SnapshotIdentifier %}",
+        "SnapshotArn": "{% $states.input.PreparedSnapshot.SnapshotArn %}",
+        "EngineVersion": "{% $states.input.PreparedSnapshot.EngineVersion %}",
+        "Shared": true,
+        "SharedWith": "{% $states.input.DestinationAccount.AccountId %}"
+      },
+      "Next": "PrepareSucceeded"
     },
 
     "PrepareOutputCrossAccountWithWarning": {
