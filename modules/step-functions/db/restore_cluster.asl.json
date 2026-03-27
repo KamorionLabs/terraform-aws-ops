@@ -16,7 +16,10 @@
       "Next": "DeleteExistingRestoreInstances",
       "Catch": [
         {
-          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ErrorEquals": [
+            "Rds.DBClusterNotFoundFault",
+            "Rds.DbClusterNotFoundException"
+          ],
           "ResultPath": null,
           "Next": "ChooseRestoreType"
         }
@@ -31,7 +34,9 @@
         "DestinationAccount.$": "$.DestinationAccount"
       },
       "ItemProcessor": {
-        "ProcessorConfig": { "Mode": "INLINE" },
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
         "StartAt": "DeleteRestoreInstance",
         "States": {
           "DeleteRestoreInstance": {
@@ -47,7 +52,15 @@
             },
             "ResultPath": null,
             "Next": "WaitRestoreInstanceDeletion",
-            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "WaitRestoreInstanceDeletion" }]
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "States.ALL"
+                ],
+                "ResultPath": "$.error",
+                "Next": "WaitRestoreInstanceDeletion"
+              }
+            ]
           },
           "WaitRestoreInstanceDeletion": {
             "Type": "Wait",
@@ -67,7 +80,10 @@
             "Next": "WaitRestoreInstanceDeletion",
             "Catch": [
               {
-                "ErrorEquals": ["Rds.DBInstanceNotFoundFault", "Rds.DbInstanceNotFoundException"],
+                "ErrorEquals": [
+                  "Rds.DBInstanceNotFoundFault",
+                  "Rds.DbInstanceNotFoundException"
+                ],
                 "Next": "RestoreInstanceDeleted"
               }
             ]
@@ -81,7 +97,9 @@
       "Next": "DeleteExistingRestoreCluster",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error.DeleteRestoreInstances",
           "Next": "DeleteExistingRestoreCluster"
         }
@@ -102,7 +120,9 @@
       "Next": "WaitRestoreClusterDeleted",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error.DeleteRestoreCluster",
           "Next": "ChooseRestoreType"
         }
@@ -126,7 +146,10 @@
       "Next": "WaitRestoreClusterDeleted",
       "Catch": [
         {
-          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ErrorEquals": [
+            "Rds.DBClusterNotFoundFault",
+            "Rds.DbClusterNotFoundException"
+          ],
           "ResultPath": null,
           "Next": "ChooseRestoreType"
         }
@@ -184,11 +207,15 @@
       },
       "Output": "{% $merge([$states.input, {'SnapshotInfo': {'SnapshotIdentifier': $states.result.Output.SnapshotIdentifier, 'SnapshotArn': $states.result.Output.SnapshotArn, 'EngineVersion': $states.result.Output.EngineVersion, 'Shared': $states.result.Output.Shared}}]) %}",
       "Next": "IsServerless",
-      "Catch": [{
-        "ErrorEquals": ["States.ALL"],
-        "Output": "{% $merge([$states.input, {'Error': {'PrepareSnapshot': $states.errorOutput}}]) %}",
-        "Next": "RestoreFailed"
-      }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Output": "{% $merge([$states.input, {'Error': {'PrepareSnapshot': $states.errorOutput}}]) %}",
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "IsServerless": {
       "Type": "Choice",
@@ -214,22 +241,32 @@
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
-      "ResultPath": null,
       "Retry": [
         {
-          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "ErrorEquals": [
+            "Rds.SnapshotNotFoundFault"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 5,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["States.TaskFailed"],
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "RestoreServerlessClusterFromSnapshot": {
       "Type": "Task",
@@ -244,22 +281,32 @@
       "TimeoutSeconds": 300,
       "HeartbeatSeconds": 60,
       "Next": "WaitClusterRestore",
-      "ResultPath": null,
       "Retry": [
         {
-          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "ErrorEquals": [
+            "Rds.SnapshotNotFoundFault"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 5,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["States.TaskFailed"],
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "RestoreClusterToPointInTime": {
       "Type": "Task",
@@ -276,19 +323,30 @@
       "Next": "WaitClusterRestore",
       "Retry": [
         {
-          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "ErrorEquals": [
+            "Rds.SnapshotNotFoundFault"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 5,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["States.TaskFailed"],
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "RestoreClusterToSpecificTime": {
       "Type": "Task",
@@ -305,19 +363,30 @@
       "Next": "WaitClusterRestore",
       "Retry": [
         {
-          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "ErrorEquals": [
+            "Rds.SnapshotNotFoundFault"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 5,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["States.TaskFailed"],
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "RestoreClusterFastClone": {
       "Type": "Task",
@@ -334,19 +403,30 @@
       "Next": "WaitClusterRestore",
       "Retry": [
         {
-          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "ErrorEquals": [
+            "Rds.SnapshotNotFoundFault"
+          ],
           "IntervalSeconds": 30,
           "MaxAttempts": 5,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["States.TaskFailed"],
+          "ErrorEquals": [
+            "States.TaskFailed"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "RestoreFailed"
+        }
+      ]
     },
     "WaitClusterRestore": {
       "Type": "Wait",
@@ -359,7 +439,9 @@
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
-      "Parameters": { "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier" },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier"
+      },
       "ResultPath": "$.ClusterStatus",
       "Next": "IsClusterAvailable"
     },
@@ -399,7 +481,9 @@
       "Next": "WaitModifyComplete",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Output": "{% $merge([$states.input, {'ModifyError': $states.errorOutput}]) %}",
           "Comment": "Don't fail the restore for modify errors - settings can be applied later via IaC",
           "Next": "PrepareOutput"
@@ -417,10 +501,20 @@
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
-      "Parameters": { "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier" },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier"
+      },
       "ResultPath": "$.ModifyCheckResult",
       "Next": "IsModifyComplete",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.ModifyCheckError", "Next": "PrepareOutput" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.ModifyCheckError",
+          "Next": "PrepareOutput"
+        }
+      ]
     },
     "IsModifyComplete": {
       "Type": "Choice",
