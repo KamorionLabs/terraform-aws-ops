@@ -529,12 +529,19 @@
             },
             "CheckEFSFields2": {
               "Type": "Choice",
-              "Comment": "Verify EFS replication fields (always required)",
+              "Comment": "Verify EFS replication fields (only for cross-account, skip for backup restore)",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationRegion", "IsPresent": true},
                     {"Variable": "$.EFS.Replication.RoleArn", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSContextFields"
+                },
+                {
+                  "Comment": "Backup restore mode: no Replication section, check Backup fields instead",
+                  "And": [
+                    {"Variable": "$.EFS.Backup.RoleArn", "IsPresent": true}
                   ],
                   "Next": "CheckEFSContextFields"
                 }
@@ -543,15 +550,13 @@
             },
             "CheckEFSContextFields": {
               "Type": "Choice",
-              "Comment": "Verify EFS.Context and EFS.LambdaConfig are present (required for CheckReplicationSync)",
+              "Comment": "Verify EFS.Context and EFS.LambdaConfig (SourceEfsSubPath optional for backup restore)",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Context", "IsPresent": true},
                     {"Variable": "$.EFS.LambdaConfig", "IsPresent": true},
-                    {"Variable": "$.EFS.LambdaConfig.EnableFlagFileCheck", "IsPresent": true},
-                    {"Variable": "$.EFS.SSMParameters.EfsSubPath", "IsPresent": true},
-                    {"Variable": "$.EFS.SSMParameters.SourceEfsSubPath", "IsPresent": true}
+                    {"Variable": "$.EFS.LambdaConfig.EnableFlagFileCheck", "IsPresent": true}
                   ],
                   "Next": "CheckEFSFlagFileConditional"
                 }
@@ -1453,7 +1458,7 @@
             },
             "CheckDestinationEFSMode": {
               "Type": "Choice",
-              "Comment": "Route validation based on CreateDestinationEFS: false → check existing EFS, default → check KMS key for new EFS",
+              "Comment": "Route: CreateDestinationEFS=false → check existing EFS, Replication present → check replication KMS, else (backup restore) → skip to EFSPassed",
               "Choices": [{
                 "And": [
                   {"Variable": "$.EFS.Replication.CreateDestinationEFS", "IsPresent": true},
@@ -1461,7 +1466,21 @@
                 ],
                 "Next": "CheckDestinationEFS"
               }],
-              "Default": "CheckDestKmsEfsKey"
+              "Default": "CheckEfsKmsKeyPresent"
+            },
+            "CheckEfsKmsKeyPresent": {
+              "Type": "Choice",
+              "Comment": "Only check KMS if Replication.DestinationKmsKeyId exists (cross-account). For backup restore (mono-account), skip KMS check.",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
+                    {"Not": {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "StringEquals": ""}}
+                  ],
+                  "Next": "CheckDestKmsEfsKey"
+                }
+              ],
+              "Default": "EFSPassed"
             },
             "CheckDestinationEFS": {
               "Type": "Task",
