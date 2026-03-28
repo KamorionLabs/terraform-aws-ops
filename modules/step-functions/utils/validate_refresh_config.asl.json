@@ -121,13 +121,12 @@
 
             "CheckDatabaseNetworkFields": {
               "Type": "Choice",
-              "Comment": "Verify Database.Network and Secrets fields",
+              "Comment": "Verify Database.Network and Parameters fields (KmsKeyId is optional for unencrypted clusters)",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.Database.Network.SubnetGroupName", "IsPresent": true},
                     {"Variable": "$.Database.Network.SecurityGroupIds", "IsPresent": true},
-                    {"Variable": "$.Database.Secrets.KmsKeyId", "IsPresent": true},
                     {"Variable": "$.Database.Parameters.ClusterParameterGroupName", "IsPresent": true},
                     {"Variable": "$.Database.Parameters.InstanceParameterGroupName", "IsPresent": true}
                   ],
@@ -138,7 +137,7 @@
             },
             "ConfigMissing_DBNetwork": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "Database.Network/Secrets/Parameters", "Required": ["Database.Network.SubnetGroupName", "Database.Network.SecurityGroupIds", "Database.Secrets.KmsKeyId", "Database.Parameters.ClusterParameterGroupName", "Database.Parameters.InstanceParameterGroupName"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Network/Parameters", "Required": ["Database.Network.SubnetGroupName", "Database.Network.SecurityGroupIds", "Database.Parameters.ClusterParameterGroupName", "Database.Parameters.InstanceParameterGroupName"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
@@ -295,7 +294,7 @@
                   "Next": "CheckSqlScriptsFields"
                 }
               ],
-              "Default": "CheckRotateSecretsConditional"
+              "Default": "CheckSecretsSyncConditional"
             },
             "CheckSqlScriptsFields": {
               "Type": "Choice",
@@ -307,7 +306,7 @@
                     {"Variable": "$.Database.SqlScripts.Bucket", "IsPresent": true},
                     {"Variable": "$.Database.SqlScripts.Prefix", "IsPresent": true}
                   ],
-                  "Next": "CheckRotateSecretsConditional"
+                  "Next": "CheckSecretsSyncConditional"
                 }
               ],
               "Default": "ConfigMissing_SqlScripts"
@@ -319,23 +318,48 @@
               "Next": "ConfigFailed"
             },
 
-            "CheckRotateSecretsConditional": {
+            "CheckSecretsSyncConditional": {
               "Type": "Choice",
-              "Comment": "If RotateSecrets enabled, check secrets rotation fields",
+              "Comment": "Check for new Secrets.Sync format or legacy RotateSecrets",
               "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Secrets.Sync.Enabled", "IsPresent": true},
+                    {"Variable": "$.Database.Secrets.Sync.Enabled", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckSecretsSyncFields"
+                },
                 {
                   "And": [
                     {"Variable": "$.Database.Options.RotateSecrets", "IsPresent": true},
                     {"Variable": "$.Database.Options.RotateSecrets", "BooleanEquals": true}
                   ],
-                  "Next": "CheckRotateSecretsFields"
+                  "Next": "CheckLegacyRotateSecretsFields"
                 }
               ],
               "Default": "CheckSFNUtilsFields"
             },
-            "CheckRotateSecretsFields": {
+            "CheckSecretsSyncFields": {
               "Type": "Choice",
-              "Comment": "Verify RotateSecrets fields",
+              "Comment": "Verify Secrets.Sync.Items is present with at least the array field",
+              "Choices": [
+                {
+                  "Variable": "$.Database.Secrets.Sync.Items",
+                  "IsPresent": true,
+                  "Next": "CheckSFNUtilsFields"
+                }
+              ],
+              "Default": "ConfigMissing_SecretsSync"
+            },
+            "ConfigMissing_SecretsSync": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "Database.Secrets.Sync", "Required": ["Sync.Items (array of {SecretId, SourceSecretId, Username, DatabaseName})"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckLegacyRotateSecretsFields": {
+              "Type": "Choice",
+              "Comment": "Verify legacy RotateSecrets fields (backward compat)",
               "Choices": [
                 {
                   "And": [
@@ -1184,12 +1208,32 @@
                 "Status": "PASSED"
               },
               "ResultPath": "$.V.DestSecurityGroups",
-              "Next": "CheckDestKmsAuroraKey",
+              "Next": "CheckKmsKeyPresent",
               "Catch": [{
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": "$.V.DestSecurityGroups",
                 "Next": "DBFailed"
               }]
+            },
+            "CheckKmsKeyPresent": {
+              "Type": "Choice",
+              "Comment": "Skip KMS check if Database.Secrets.KmsKeyId is not set (unencrypted clusters)",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Secrets.KmsKeyId", "IsPresent": true},
+                    {"Not": {"Variable": "$.Database.Secrets.KmsKeyId", "StringEquals": ""}}
+                  ],
+                  "Next": "CheckDestKmsAuroraKey"
+                }
+              ],
+              "Default": "SkipKmsCheck"
+            },
+            "SkipKmsCheck": {
+              "Type": "Pass",
+              "Result": {"Status": "NOT_RUN"},
+              "ResultPath": "$.V.DestKmsKey",
+              "Next": "DBPassed"
             },
             "CheckDestKmsAuroraKey": {
               "Type": "Task",
