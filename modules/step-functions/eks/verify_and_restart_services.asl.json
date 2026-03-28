@@ -132,7 +132,7 @@
               "FunctionName.$": "$.K8sProxyLambdaArn",
               "Payload": {
                 "Action": "call",
-                "ClusterName.$": "$.EKS.ClusterName",
+                "ClusterName.$": "$.EksClusterName",
                 "Method": "GET",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)"
               }
@@ -228,7 +228,7 @@
               "FunctionName.$": "$.K8sProxyLambdaArn",
               "Payload": {
                 "Action": "call",
-                "ClusterName.$": "$.EKS.ClusterName",
+                "ClusterName.$": "$.EksClusterName",
                 "Method": "PATCH",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)",
                 "RequestBody": {
