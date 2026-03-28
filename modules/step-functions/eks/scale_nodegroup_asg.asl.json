@@ -300,39 +300,37 @@
       "Type": "Wait",
       "Comment": "Wait for ASG instances to launch",
       "Seconds": 30,
-      "Next": "CheckAsgInstances"
+      "Next": "CheckNodegroupHealth"
     },
-    "CheckAsgInstances": {
+    "CheckNodegroupHealth": {
       "Type": "Task",
-      "Comment": "Check how many instances are InService in the ASG",
-      "Resource": "arn:aws:states:::aws-sdk:autoscaling:describeAutoScalingGroups",
-      "Parameters": {
-        "AutoScalingGroupNames.$": "States.Array($.ScalingConfig.AsgName)"
+      "QueryLanguage": "JSONata",
+      "Comment": "Check EKS nodegroup status to verify nodes are ready",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeNodegroup",
+      "Arguments": {
+        "ClusterName": "{% $states.input.ClusterName %}",
+        "NodegroupName": "{% $states.input.ScalingConfig.NodeGroupName %}"
       },
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "ResultSelector": {
-        "DesiredCapacity.$": "$.AutoScalingGroups[0].DesiredCapacity",
-        "InServiceCount.$": "States.ArrayLength($.AutoScalingGroups[0].Instances[?(@.LifecycleState=='InService')])"
-      },
-      "ResultPath": "$.AsgStatus",
-      "Next": "IsAsgReady",
+      "Output": "{% $merge([$states.input, {'NodegroupHealth': {'DesiredSize': $states.result.Nodegroup.ScalingConfig.DesiredSize, 'CurrentSize': $count($states.result.Nodegroup.Health.Issues) = 0 ? $states.result.Nodegroup.ScalingConfig.DesiredSize : 0, 'Status': $states.result.Nodegroup.Status}}]) %}",
+      "Next": "IsNodegroupReady",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.AsgCheckError",
+          "Output": "{% $states.input %}",
           "Next": "PrepareOutput"
         }
       ]
     },
-    "IsAsgReady": {
+    "IsNodegroupReady": {
       "Type": "Choice",
-      "Comment": "Check if enough instances are InService (matches desired capacity)",
+      "Comment": "Check if nodegroup is ACTIVE with desired capacity",
       "Choices": [
         {
-          "Variable": "$.AsgStatus.InServiceCount",
-          "NumericGreaterThanOrEqualsPath": "$.AsgStatus.DesiredCapacity",
+          "Variable": "$.NodegroupHealth.Status",
+          "StringEquals": "ACTIVE",
           "Next": "WaitPodsReady"
         }
       ],
