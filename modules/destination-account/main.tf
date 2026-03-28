@@ -236,7 +236,8 @@ resource "aws_iam_role_policy" "eks_access" {
           "eks:DescribeCluster",
           "eks:ListClusters",
           "eks:DescribeNodegroup",
-          "eks:ListNodegroups"
+          "eks:ListNodegroups",
+          "eks:UpdateNodegroupConfig"
         ]
         Resource = "*"
       },
