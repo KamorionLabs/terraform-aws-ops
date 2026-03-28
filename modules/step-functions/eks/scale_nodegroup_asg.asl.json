@@ -52,7 +52,7 @@
       "Type": "Pass",
       "QueryLanguage": "JSONata",
       "Comment": "Build scaling config from directly-named nodegroup",
-      "Output": "{% $merge([$states.input, {'ScalingConfig': {'NodeGroupName': $states.input.DirectMatch.NodeGroupName, 'AsgName': $states.input.DirectMatch.AsgName, 'DesiredCapacity': $states.input.TargetCapacity, 'MinSize': $exists($states.input.MinSize) ? $states.input.MinSize : $states.input.MinimumCapacity, 'MaxSize': $exists($states.input.MaxSize) ? $states.input.MaxSize : $states.input.TargetCapacity}}]) %}",
+      "Output": "{% $merge([$states.input, {'ScalingConfig': {'NodeGroupName': $states.input.DirectMatch.NodeGroupName, 'AsgName': $states.input.DirectMatch.AsgName, 'DesiredCapacity': $exists($states.input.DesiredCapacity) ? $states.input.DesiredCapacity : $exists($states.input.TargetCapacity) ? $states.input.TargetCapacity : $states.input.MinimumCapacity, 'MinSize': $exists($states.input.MinSize) ? $states.input.MinSize : $states.input.MinimumCapacity, 'MaxSize': $exists($states.input.MaxSize) ? $states.input.MaxSize : ($exists($states.input.DesiredCapacity) ? $states.input.DesiredCapacity : $states.input.MinimumCapacity)}}]) %}",
       "Next": "CheckMinMaxProvided"
     },
     "ListNodeGroups": {
