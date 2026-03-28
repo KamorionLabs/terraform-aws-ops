@@ -53,7 +53,34 @@
       "QueryLanguage": "JSONata",
       "Comment": "Build scaling config from directly-named nodegroup",
       "Output": "{% $merge([$states.input, {'ScalingConfig': {'NodeGroupName': $states.input.DirectMatch.NodeGroupName, 'AsgName': $states.input.DirectMatch.AsgName, 'DesiredCapacity': $exists($states.input.DesiredCapacity) ? $states.input.DesiredCapacity : $exists($states.input.TargetCapacity) ? $states.input.TargetCapacity : $states.input.MinimumCapacity, 'MinSize': $exists($states.input.MinSize) ? $states.input.MinSize : $states.input.MinimumCapacity, 'MaxSize': $exists($states.input.MaxSize) ? $states.input.MaxSize : ($exists($states.input.DesiredCapacity) ? $states.input.DesiredCapacity : $states.input.MinimumCapacity)}}]) %}",
-      "Next": "CheckMinMaxProvided"
+      "Next": "UpdateNodegroupConfig"
+    },
+    "UpdateNodegroupConfig": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Use EKS API to update nodegroup scaling (required for EKS managed nodegroups, ASG API gets overridden)",
+      "Resource": "arn:aws:states:::aws-sdk:eks:updateNodegroupConfig",
+      "Arguments": {
+        "ClusterName": "{% $states.input.ClusterName %}",
+        "NodegroupName": "{% $states.input.ScalingConfig.NodeGroupName %}",
+        "ScalingConfig": {
+          "MinSize": "{% $states.input.ScalingConfig.MinSize %}",
+          "MaxSize": "{% $states.input.ScalingConfig.MaxSize %}",
+          "DesiredSize": "{% $states.input.ScalingConfig.DesiredCapacity %}"
+        }
+      },
+      "Credentials": {
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "WaitForScaling",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'UpdateNodegroupError': $states.errorOutput}]) %}",
+          "Next": "ScaleFailed"
+        }
+      ]
     },
     "ListNodeGroups": {
       "Type": "Task",
