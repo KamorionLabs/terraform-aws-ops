@@ -637,11 +637,19 @@
             },
             "CheckEFSNewDestFields": {
               "Type": "Choice",
-              "Comment": "When creating new EFS, KMS key and tags are required (Name already checked in CheckEFSFields)",
+              "Comment": "When creating new EFS: check KMS+Tags for replication, or Backup.RoleArn+Security.KmsKeyId for backup restore",
               "Choices": [
                 {
                   "And": [
                     {"Variable": "$.EFS.Replication.DestinationKmsKeyId", "IsPresent": true},
+                    {"Variable": "$.EFS.Tags", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSSSMConditional"
+                },
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Backup.RoleArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Security.KmsKeyId", "IsPresent": true},
                     {"Variable": "$.EFS.Tags", "IsPresent": true}
                   ],
                   "Next": "CheckEFSSSMConditional"
