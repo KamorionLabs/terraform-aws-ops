@@ -7,7 +7,53 @@
       "Comment": "Initialize NodeSelector and Tolerations with default values if not present",
       "QueryLanguage": "JSONata",
       "Output": "{% $merge([$states.input, { \"NodeSelector\": $exists($states.input.NodeSelector) ? $states.input.NodeSelector : {}, \"Tolerations\": $exists($states.input.Tolerations) ? $states.input.Tolerations : [] }]) %}",
-      "Next": "ListNodeGroups"
+      "Next": "CheckDirectNodegroupName"
+    },
+    "CheckDirectNodegroupName": {
+      "Type": "Choice",
+      "Comment": "If NodegroupName is provided directly, skip label/taint matching and use it",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.NodegroupName", "IsPresent": true },
+            { "Not": { "Variable": "$.NodegroupName", "StringEquals": "" } }
+          ],
+          "Next": "UseDirectNodegroup"
+        }
+      ],
+      "Default": "ListNodeGroups"
+    },
+    "UseDirectNodegroup": {
+      "Type": "Task",
+      "Comment": "Describe the directly-named nodegroup to get its ASG",
+      "Resource": "arn:aws:states:::aws-sdk:eks:describeNodegroup",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterName",
+        "NodegroupName.$": "$.NodegroupName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "NodeGroupName.$": "$.Nodegroup.NodegroupName",
+        "AsgName.$": "$.Nodegroup.Resources.AutoScalingGroups[0].Name"
+      },
+      "ResultPath": "$.DirectMatch",
+      "Next": "PrepareScalingConfigDirect",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DirectMatchError",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "PrepareScalingConfigDirect": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build scaling config from directly-named nodegroup",
+      "Output": "{% $merge([$states.input, {'ScalingConfig': {'NodeGroupName': $states.input.DirectMatch.NodeGroupName, 'AsgName': $states.input.DirectMatch.AsgName, 'DesiredCapacity': $states.input.TargetCapacity, 'MinSize': $exists($states.input.MinSize) ? $states.input.MinSize : $states.input.MinimumCapacity, 'MaxSize': $exists($states.input.MaxSize) ? $states.input.MaxSize : $states.input.TargetCapacity}}]) %}",
+      "Next": "CheckMinMaxProvided"
     },
     "ListNodeGroups": {
       "Type": "Task",
