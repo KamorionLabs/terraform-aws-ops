@@ -100,6 +100,14 @@ def _strip_unsupported_from_states(states: dict) -> None:
         if "Arguments" in state_def:
             state_def["Parameters"] = state_def.pop("Arguments")
 
+        # Convert JSONata Map fields → JSONPath equivalents
+        if state_def.get("Type") == "Map":
+            if "Items" in state_def:
+                state_def.pop("Items")
+                state_def.setdefault("ItemsPath", "$.placeholder")
+            if isinstance(state_def.get("ItemSelector"), str):
+                state_def["ItemSelector"] = {"placeholder.$": "$.placeholder"}
+
         # Strip Output from Catch entries (JSONata uses Output instead of ResultPath)
         for catch_entry in state_def.get("Catch", []):
             catch_entry.pop("Output", None)
