@@ -247,6 +247,13 @@
       },
       "Retry": [
         {
+          "ErrorEquals": ["RuntimeError"],
+          "Comment": "Retry K8s API errors (webhook timeout, node not ready, etc.)",
+          "IntervalSeconds": 30,
+          "MaxAttempts": 6,
+          "BackoffRate": 1.5
+        },
+        {
           "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,

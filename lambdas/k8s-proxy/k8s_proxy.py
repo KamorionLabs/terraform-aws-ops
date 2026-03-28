@@ -252,6 +252,7 @@ def handle_call(event: dict, region: str) -> dict:
 def handle_create_job(event: dict, region: str) -> dict:
     """
     Handle the 'createJob' action - create a K8s Job.
+    If job already exists (409), treat as success (idempotent for retries).
 
     Args:
         event: Lambda event with ClusterName, Namespace, Job
@@ -263,20 +264,30 @@ def handle_create_job(event: dict, region: str) -> dict:
     cluster_name = event["ClusterName"]
     namespace = event["Namespace"]
     job_spec = event["Job"]
+    job_name = job_spec.get("metadata", {}).get("name", "unknown")
 
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs"
 
-    result = k8s_api_call(cluster_name, region, "POST", path, body=job_spec)
-    job_name = result["ResponseBody"]["metadata"]["name"]
-
-    logger.info(f"Job created: {job_name} in {namespace}")
-
-    return {
-        "JobName": job_name,
-        "Namespace": namespace,
-        "ClusterName": cluster_name,
-        "Status": "Created",
-    }
+    try:
+        result = k8s_api_call(cluster_name, region, "POST", path, body=job_spec)
+        job_name = result["ResponseBody"]["metadata"]["name"]
+        logger.info(f"Job created: {job_name} in {namespace}")
+        return {
+            "JobName": job_name,
+            "Namespace": namespace,
+            "ClusterName": cluster_name,
+            "Status": "Created",
+        }
+    except K8sApiError as e:
+        if e.status_code == 409:
+            logger.info(f"Job already exists: {job_name} in {namespace} (idempotent)")
+            return {
+                "JobName": job_name,
+                "Namespace": namespace,
+                "ClusterName": cluster_name,
+                "Status": "AlreadyExists",
+            }
+        raise
 
 
 def handle_get_job_status(event: dict, region: str) -> dict:

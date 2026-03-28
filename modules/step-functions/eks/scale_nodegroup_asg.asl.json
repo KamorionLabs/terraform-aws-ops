@@ -298,8 +298,50 @@
     },
     "WaitForScaling": {
       "Type": "Wait",
-      "Comment": "Wait for ASG to start scaling",
-      "Seconds": 10,
+      "Comment": "Wait for ASG instances to launch",
+      "Seconds": 30,
+      "Next": "CheckAsgInstances"
+    },
+    "CheckAsgInstances": {
+      "Type": "Task",
+      "Comment": "Check how many instances are InService in the ASG",
+      "Resource": "arn:aws:states:::aws-sdk:autoscaling:describeAutoScalingGroups",
+      "Parameters": {
+        "AutoScalingGroupNames.$": "States.Array($.ScalingConfig.AsgName)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "DesiredCapacity.$": "$.AutoScalingGroups[0].DesiredCapacity",
+        "InServiceCount.$": "States.ArrayLength($.AutoScalingGroups[0].Instances[?(@.LifecycleState=='InService')])"
+      },
+      "ResultPath": "$.AsgStatus",
+      "Next": "IsAsgReady",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AsgCheckError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "IsAsgReady": {
+      "Type": "Choice",
+      "Comment": "Check if enough instances are InService (matches desired capacity)",
+      "Choices": [
+        {
+          "Variable": "$.AsgStatus.InServiceCount",
+          "NumericGreaterThanOrEqualsPath": "$.AsgStatus.DesiredCapacity",
+          "Next": "WaitPodsReady"
+        }
+      ],
+      "Default": "WaitForScaling"
+    },
+    "WaitPodsReady": {
+      "Type": "Wait",
+      "Comment": "Wait additional time for system pods (Kyverno, Karpenter, CoreDNS) to become ready after node joins",
+      "Seconds": 60,
       "Next": "PrepareOutput"
     },
     "PrepareOutput": {
