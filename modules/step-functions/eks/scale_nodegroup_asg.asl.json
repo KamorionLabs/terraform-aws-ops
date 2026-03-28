@@ -372,19 +372,11 @@
     },
     "IsNodegroupReady": {
       "Type": "Choice",
+      "QueryLanguage": "JSONata",
       "Comment": "Check if nodegroup is ACTIVE and actual desired >= requested desired",
       "Choices": [
         {
-          "And": [
-            {
-              "Variable": "$.NodegroupHealth.Status",
-              "StringEquals": "ACTIVE"
-            },
-            {
-              "Variable": "$.NodegroupHealth.ActualDesired",
-              "NumericGreaterThanOrEqualsPath": "$.NodegroupHealth.RequestedDesired"
-            }
-          ],
+          "Condition": "{% $states.input.NodegroupHealth.Status = 'ACTIVE' and $states.input.NodegroupHealth.ActualDesired >= $states.input.NodegroupHealth.RequestedDesired %}",
           "Next": "WaitPodsReady"
         }
       ],
