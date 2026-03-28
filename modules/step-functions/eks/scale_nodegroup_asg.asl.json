@@ -360,7 +360,7 @@
       "Credentials": {
         "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
       },
-      "Output": "{% $merge([$states.input, {'NodegroupHealth': {'DesiredSize': $states.result.Nodegroup.ScalingConfig.DesiredSize, 'CurrentSize': $count($states.result.Nodegroup.Health.Issues) = 0 ? $states.result.Nodegroup.ScalingConfig.DesiredSize : 0, 'Status': $states.result.Nodegroup.Status}}]) %}",
+      "Output": "{% $merge([$states.input, {'NodegroupHealth': {'RequestedDesired': $states.input.ScalingConfig.DesiredCapacity, 'ActualDesired': $states.result.Nodegroup.ScalingConfig.DesiredSize, 'Status': $states.result.Nodegroup.Status}}]) %}",
       "Next": "IsNodegroupReady",
       "Catch": [
         {
@@ -372,11 +372,19 @@
     },
     "IsNodegroupReady": {
       "Type": "Choice",
-      "Comment": "Check if nodegroup is ACTIVE with desired capacity",
+      "Comment": "Check if nodegroup is ACTIVE and actual desired >= requested desired",
       "Choices": [
         {
-          "Variable": "$.NodegroupHealth.Status",
-          "StringEquals": "ACTIVE",
+          "And": [
+            {
+              "Variable": "$.NodegroupHealth.Status",
+              "StringEquals": "ACTIVE"
+            },
+            {
+              "Variable": "$.NodegroupHealth.ActualDesired",
+              "NumericGreaterThanOrEqualsPath": "$.NodegroupHealth.RequestedDesired"
+            }
+          ],
           "Next": "WaitPodsReady"
         }
       ],

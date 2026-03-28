@@ -57,7 +57,7 @@
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
       "Arguments": {
         "StateMachineArn": "{% $states.input.StepFunctions.EKS.ScaleNodegroupAsg %}",
-        "Input": "{% $merge([{'ClusterName': $states.input.EKS.ClusterName, 'NodeSelector': $states.input.EKS.NodeSelector, 'Tolerations': $states.input.EKS.Tolerations, 'MinimumCapacity': $states.input.EKS.Scaling.MinimumCapacity, 'DesiredCapacity': $states.input.EKS.Scaling.TargetCapacity, 'OrchestratorExecutionName': $states.input.OrchestratorExecutionName, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.EKS.Scaling.MinSize) ? {'MinSize': $states.input.EKS.Scaling.MinSize} : {}, $exists($states.input.EKS.Scaling.MaxSize) ? {'MaxSize': $states.input.EKS.Scaling.MaxSize} : {}]) %}",
+        "Input": "{% $merge([{'ClusterName': $states.input.EKS.ClusterName, 'NodeSelector': $states.input.EKS.NodeSelector, 'Tolerations': $states.input.EKS.Tolerations, 'MinimumCapacity': $states.input.EKS.Scaling.MinimumCapacity, 'DesiredCapacity': $states.input.EKS.Scaling.TargetCapacity, 'OrchestratorExecutionName': $states.input.OrchestratorExecutionName, 'DestinationAccount': $states.input.DestinationAccount}, $exists($states.input.EKS.Scaling.NodegroupName) ? {'NodegroupName': $states.input.EKS.Scaling.NodegroupName} : {}, $exists($states.input.EKS.Scaling.MinSize) ? {'MinSize': $states.input.EKS.Scaling.MinSize} : {}, $exists($states.input.EKS.Scaling.MaxSize) ? {'MaxSize': $states.input.EKS.Scaling.MaxSize} : {}]) %}",
         "Name": "{% $states.input.OrchestratorExecutionName & '-EnsureNodegroupCapacity-Import' %}"
       },
       "Output": "{% $states.input %}",
