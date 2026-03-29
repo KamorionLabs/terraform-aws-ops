@@ -86,7 +86,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn.$": "$.EKS.Account.RoleArn"
       },
       "Parameters": {
         "Name.$": "$.EKS.ClusterName"
@@ -138,7 +138,7 @@
         "EksCluster.$": "$.EksCluster",
         "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
         "ClusterName.$": "$.EKS.ClusterName",
-        "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn",
+        "DestinationAccountRoleArn.$": "$.EKS.Account.RoleArn",
         "Namespace.$": "$.EKS.Namespace",
         "EksNodeSelector.$": "$.EKS.NodeSelector",
         "EksTolerations.$": "$.EKS.Tolerations",

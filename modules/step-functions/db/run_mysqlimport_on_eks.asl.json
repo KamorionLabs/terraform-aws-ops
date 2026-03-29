@@ -26,7 +26,9 @@
       "Next": "GetClusterInfo",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.EnsureClusterError",
           "Next": "ImportFailed"
         }
@@ -48,7 +50,14 @@
       },
       "ResultPath": "$.ClusterInfo",
       "Next": "EnsureNodegroupCapacity",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ImportFailed"
+        }
+      ]
     },
     "EnsureNodegroupCapacity": {
       "Type": "Task",
@@ -64,7 +73,9 @@
       "Next": "CheckAccessMode",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "Output": "{% $merge([$states.input, {'EnsureNodegroupError': $states.errorOutput}]) %}",
           "Next": "CheckAccessMode"
         }
@@ -86,14 +97,21 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn.$": "$.EKS.Account.RoleArn"
       },
       "Parameters": {
         "Name.$": "$.EKS.ClusterName"
       },
       "ResultPath": "$.EksCluster",
       "Next": "GetDbSecretValue",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ImportFailed"
+        }
+      ]
     },
     "GetDbSecretValue": {
       "Type": "Task",
@@ -106,7 +124,14 @@
       },
       "ResultPath": "$.DbSecret",
       "Next": "FormatSecretString",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ImportFailed"
+        }
+      ]
     },
     "FormatSecretString": {
       "Type": "Pass",
@@ -152,32 +177,69 @@
                 "serviceAccountName": "refresh",
                 "nodeSelector.$": "$.EKS.NodeSelector",
                 "tolerations.$": "$.EKS.Tolerations",
-                "volumes": [{
-                  "name": "shared-data",
-                  "persistentVolumeClaim": { "claimName.$": "$.EfsPvcName" }
-                }],
-                "containers": [{
-                  "name": "mysqlimport",
-                  "image": "kamorion/mysql-s3:mysql8",
-                  "imagePullPolicy": "Always",
-                  "command": ["/import.sh"],
-                  "volumeMounts": [{
+                "volumes": [
+                  {
                     "name": "shared-data",
-                    "mountPath": "/refresh",
-                    "subPath.$": "$.DumpSubPath"
-                  }],
-                  "env": [
-                    { "name": "TZ", "value": "Europe/Paris" },
-                    { "name": "MYSQL_HOST", "value.$": "$.ClusterInfo.Endpoint" },
-                    { "name": "MYSQL_USER", "value.$": "$.DbSecret.SecretString.username" },
-                    { "name": "MYSQL_PASSWORD", "value.$": "$.DbSecret.SecretString.password" },
-                    { "name": "MYSQL_DATABASE", "value.$": "$.DatabaseName" },
-                    { "name": "LOCAL_DIR", "value": "/refresh" },
-                    { "name": "S3_SYNC", "value": "true" },
-                    { "name": "S3_BUCKET", "value.$": "$.RefreshBucket" },
-                    { "name": "S3_PREFIX", "value.$": "$.RefreshBucketPrefix" }
-                  ]
-                }],
+                    "persistentVolumeClaim": {
+                      "claimName.$": "$.EfsPvcName"
+                    }
+                  }
+                ],
+                "containers": [
+                  {
+                    "name": "mysqlimport",
+                    "image": "kamorion/mysql-s3:mysql8",
+                    "imagePullPolicy": "Always",
+                    "command": [
+                      "/import.sh"
+                    ],
+                    "volumeMounts": [
+                      {
+                        "name": "shared-data",
+                        "mountPath": "/refresh",
+                        "subPath.$": "$.DumpSubPath"
+                      }
+                    ],
+                    "env": [
+                      {
+                        "name": "TZ",
+                        "value": "Europe/Paris"
+                      },
+                      {
+                        "name": "MYSQL_HOST",
+                        "value.$": "$.ClusterInfo.Endpoint"
+                      },
+                      {
+                        "name": "MYSQL_USER",
+                        "value.$": "$.DbSecret.SecretString.username"
+                      },
+                      {
+                        "name": "MYSQL_PASSWORD",
+                        "value.$": "$.DbSecret.SecretString.password"
+                      },
+                      {
+                        "name": "MYSQL_DATABASE",
+                        "value.$": "$.DatabaseName"
+                      },
+                      {
+                        "name": "LOCAL_DIR",
+                        "value": "/refresh"
+                      },
+                      {
+                        "name": "S3_SYNC",
+                        "value": "true"
+                      },
+                      {
+                        "name": "S3_BUCKET",
+                        "value.$": "$.RefreshBucket"
+                      },
+                      {
+                        "name": "S3_PREFIX",
+                        "value.$": "$.RefreshBucketPrefix"
+                      }
+                    ]
+                  }
+                ],
                 "restartPolicy": "Never"
               }
             }
@@ -186,7 +248,14 @@
       },
       "ResultPath": null,
       "Next": "PrepareOutput",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ImportFailed" }]
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "ImportFailed"
+        }
+      ]
     },
     "CreateImportJob": {
       "Type": "Task",
@@ -209,32 +278,69 @@
                   "serviceAccountName": "refresh",
                   "nodeSelector.$": "$.EKS.NodeSelector",
                   "tolerations.$": "$.EKS.Tolerations",
-                  "volumes": [{
-                    "name": "shared-data",
-                    "persistentVolumeClaim": { "claimName.$": "$.EfsPvcName" }
-                  }],
-                  "containers": [{
-                    "name": "mysqlimport",
-                    "image": "kamorion/mysql-s3:mysql8",
-                    "imagePullPolicy": "Always",
-                    "command": ["/import.sh"],
-                    "volumeMounts": [{
+                  "volumes": [
+                    {
                       "name": "shared-data",
-                      "mountPath": "/refresh",
-                      "subPath.$": "$.DumpSubPath"
-                    }],
-                    "env": [
-                      { "name": "TZ", "value": "Europe/Paris" },
-                      { "name": "MYSQL_HOST", "value.$": "$.ClusterInfo.Endpoint" },
-                      { "name": "MYSQL_USER", "value.$": "$.DbSecret.SecretString.username" },
-                      { "name": "MYSQL_PASSWORD", "value.$": "$.DbSecret.SecretString.password" },
-                      { "name": "MYSQL_DATABASE", "value.$": "$.DatabaseName" },
-                      { "name": "LOCAL_DIR", "value": "/refresh" },
-                      { "name": "S3_SYNC", "value": "true" },
-                      { "name": "S3_BUCKET", "value.$": "$.RefreshBucket" },
-                      { "name": "S3_PREFIX", "value.$": "$.RefreshBucketPrefix" }
-                    ]
-                  }],
+                      "persistentVolumeClaim": {
+                        "claimName.$": "$.EfsPvcName"
+                      }
+                    }
+                  ],
+                  "containers": [
+                    {
+                      "name": "mysqlimport",
+                      "image": "kamorion/mysql-s3:mysql8",
+                      "imagePullPolicy": "Always",
+                      "command": [
+                        "/import.sh"
+                      ],
+                      "volumeMounts": [
+                        {
+                          "name": "shared-data",
+                          "mountPath": "/refresh",
+                          "subPath.$": "$.DumpSubPath"
+                        }
+                      ],
+                      "env": [
+                        {
+                          "name": "TZ",
+                          "value": "Europe/Paris"
+                        },
+                        {
+                          "name": "MYSQL_HOST",
+                          "value.$": "$.ClusterInfo.Endpoint"
+                        },
+                        {
+                          "name": "MYSQL_USER",
+                          "value.$": "$.DbSecret.SecretString.username"
+                        },
+                        {
+                          "name": "MYSQL_PASSWORD",
+                          "value.$": "$.DbSecret.SecretString.password"
+                        },
+                        {
+                          "name": "MYSQL_DATABASE",
+                          "value.$": "$.DatabaseName"
+                        },
+                        {
+                          "name": "LOCAL_DIR",
+                          "value": "/refresh"
+                        },
+                        {
+                          "name": "S3_SYNC",
+                          "value": "true"
+                        },
+                        {
+                          "name": "S3_BUCKET",
+                          "value.$": "$.RefreshBucket"
+                        },
+                        {
+                          "name": "S3_PREFIX",
+                          "value.$": "$.RefreshBucketPrefix"
+                        }
+                      ]
+                    }
+                  ],
                   "restartPolicy": "Never"
                 }
               }
@@ -243,18 +349,24 @@
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn.$": "$.EKS.Account.RoleArn"
       },
       "Retry": [
         {
-          "ErrorEquals": ["RuntimeError"],
+          "ErrorEquals": [
+            "RuntimeError"
+          ],
           "Comment": "Retry K8s API errors (webhook timeout, node not ready, etc.)",
           "IntervalSeconds": 30,
           "MaxAttempts": 6,
           "BackoffRate": 1.5
         },
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
@@ -269,7 +381,9 @@
       "Next": "WaitForImportJob",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.CreateJobError",
           "Next": "ImportFailed"
         }
@@ -293,11 +407,15 @@
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn.$": "$.EKS.Account.RoleArn"
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
@@ -312,7 +430,9 @@
       "Next": "ImportJobStatusChoice",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.CheckStatusError",
           "Next": "DeleteImportJobOnError"
         }
@@ -359,11 +479,15 @@
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
+        "RoleArn.$": "$.EKS.Account.RoleArn"
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
