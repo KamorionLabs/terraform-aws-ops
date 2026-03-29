@@ -16,15 +16,9 @@
     },
     "InitPrivateDefaults": {
       "Type": "Pass",
-      "Comment": "Inject stub EksCluster so ItemSelector paths resolve. Values are unused in private mode.",
-      "Result": {
-        "Cluster": {
-          "Name": "unused",
-          "CertificateAuthority": { "Data": "unused" },
-          "Endpoint": "unused"
-        }
-      },
-      "ResultPath": "$.EksCluster",
+      "QueryLanguage": "JSONata",
+      "Comment": "Inject stub EksCluster and optional EksRoleArn for private mode. EksRoleArn is set only when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
+      "Output": "{% $merge([$states.input, {'EksCluster': {'Cluster': {'Name': 'unused', 'CertificateAuthority': {'Data': 'unused'}, 'Endpoint': 'unused'}}, 'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
       "Next": "GetExpectedSubPath"
     },
     "GetEksClusterInfo": {
@@ -37,7 +31,7 @@
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.EksCluster",
-      "Next": "GetExpectedSubPath",
+      "Next": "SetPublicEksRoleArn",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -45,6 +39,13 @@
           "Next": "VerificationFailed"
         }
       ]
+    },
+    "SetPublicEksRoleArn": {
+      "Type": "Pass",
+      "Comment": "Set EksRoleArn to null for public mode (not needed with EKS Access Entries).",
+      "Result": null,
+      "ResultPath": "$.EksRoleArn",
+      "Next": "GetExpectedSubPath"
     },
     "GetExpectedSubPath": {
       "Type": "Task",
@@ -83,7 +84,8 @@
         "ServiceName.$": "$$.Map.Item.Value.Name",
         "ServiceType.$": "$$.Map.Item.Value.Kind",
         "ExpectedSubPath.$": "$.ExpectedSubPath.SubPath",
-        "DestinationAccount.$": "$.DestinationAccount"
+        "DestinationAccount.$": "$.DestinationAccount",
+        "EksRoleArn.$": "$.EksRoleArn"
       },
       "ItemProcessor": {
         "ProcessorConfig": {
@@ -133,6 +135,7 @@
               "Payload": {
                 "Action": "call",
                 "ClusterName.$": "$.EksClusterName",
+                "EksRoleArn.$": "$.EksRoleArn",
                 "Method": "GET",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)"
               }
@@ -157,7 +160,7 @@
           "ExtractCurrentSubPath": {
             "Type": "Pass",
             "QueryLanguage": "JSONata",
-            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"AccessMode\": $states.input.AccessMode, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EKS.ClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount} %}",
+            "Output": "{% {\"ServiceName\": $states.input.ServiceName, \"ServiceType\": $states.input.ServiceType, \"ExpectedSubPath\": $states.input.ExpectedSubPath, \"CurrentSubPath\": $states.input.ServiceDetails.ResponseBody.spec.template.spec.containers[0].env[name='SHARED_DATA_MEDIA_SUB_PATH'].value, \"AccessMode\": $states.input.AccessMode, \"ClusterName\": $states.input.ClusterName, \"CertificateAuthority\": $states.input.CertificateAuthority, \"Endpoint\": $states.input.Endpoint, \"K8sProxyLambdaArn\": $states.input.K8sProxyLambdaArn, \"EksClusterName\": $states.input.EksClusterName, \"Namespace\": $states.input.Namespace, \"DestinationAccount\": $states.input.DestinationAccount, \"EksRoleArn\": $states.input.EksRoleArn} %}",
             "Next": "DecideIfRestartNeeded"
           },
           "DecideIfRestartNeeded": {
@@ -229,6 +232,7 @@
               "Payload": {
                 "Action": "call",
                 "ClusterName.$": "$.EksClusterName",
+                "EksRoleArn.$": "$.EksRoleArn",
                 "Method": "PATCH",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}', $.Namespace, $.ServiceType, $.ServiceName)",
                 "RequestBody": {

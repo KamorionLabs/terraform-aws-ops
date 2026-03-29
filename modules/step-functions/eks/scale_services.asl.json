@@ -16,15 +16,9 @@
     },
     "InitPrivateDefaults": {
       "Type": "Pass",
-      "Comment": "Inject stub EksCluster so ItemSelector paths resolve. Values are unused in private mode.",
-      "Result": {
-        "Cluster": {
-          "Name": "unused",
-          "CertificateAuthority": { "Data": "unused" },
-          "Endpoint": "unused"
-        }
-      },
-      "ResultPath": "$.EksCluster",
+      "QueryLanguage": "JSONata",
+      "Comment": "Inject stub EksCluster and optional EksRoleArn for private mode. EksRoleArn is set only when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
+      "Output": "{% $merge([$states.input, {'EksCluster': {'Cluster': {'Name': 'unused', 'CertificateAuthority': {'Data': 'unused'}, 'Endpoint': 'unused'}}, 'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
       "Next": "ScaleServicesMap"
     },
     "GetEksClusterInfo": {
@@ -37,7 +31,7 @@
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.EksCluster",
-      "Next": "ScaleServicesMap",
+      "Next": "SetPublicEksRoleArn",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -45,6 +39,13 @@
           "Next": "ScaleFailed"
         }
       ]
+    },
+    "SetPublicEksRoleArn": {
+      "Type": "Pass",
+      "Comment": "Set EksRoleArn to null for public mode (not needed with EKS Access Entries).",
+      "Result": null,
+      "ResultPath": "$.EksRoleArn",
+      "Next": "ScaleServicesMap"
     },
     "ScaleServicesMap": {
       "Type": "Map",
@@ -60,7 +61,8 @@
         "Replicas.$": "$.Replicas",
         "ServiceName.$": "$$.Map.Item.Value.Name",
         "ServiceType.$": "$$.Map.Item.Value.Kind",
-        "DestinationAccount.$": "$.DestinationAccount"
+        "DestinationAccount.$": "$.DestinationAccount",
+        "EksRoleArn.$": "$.EksRoleArn"
       },
       "ItemProcessor": {
         "ProcessorConfig": {
@@ -123,6 +125,7 @@
               "Payload": {
                 "Action": "call",
                 "ClusterName.$": "$.EksClusterName",
+                "EksRoleArn.$": "$.EksRoleArn",
                 "Method": "PATCH",
                 "Path.$": "States.Format('/apis/apps/v1/namespaces/{}/{}/{}/scale', $.Namespace, $.ServiceType, $.ServiceName)",
                 "RequestBody": {
@@ -258,6 +261,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "GET",
           "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
         }
@@ -310,6 +314,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "DELETE",
           "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
         }

@@ -19,7 +19,7 @@
           "Next": "GetEksClusterInfo"
         }
       ],
-      "Default": "ChooseActionPrivate"
+      "Default": "PreparePrivateMode"
     },
     "GetEksClusterInfo": {
       "Type": "Task",
@@ -57,6 +57,13 @@
         }
       ],
       "Default": "ProcessFailed"
+    },
+    "PreparePrivateMode": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Set optional EksRoleArn for private mode. Only set when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
+      "Output": "{% $merge([$states.input, {'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
+      "Next": "ChooseActionPrivate"
     },
     "ChooseActionPrivate": {
       "Type": "Choice",
@@ -115,6 +122,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "DELETE",
           "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims/{}', $.EKS.Namespace, $.ResolvedNames.Pvc)"
         }
@@ -195,6 +203,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "DELETE",
           "Path.$": "States.Format('/api/v1/persistentvolumes/{}', $.ResolvedNames.Pv)"
         }
@@ -289,6 +298,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "DELETE",
           "Path.$": "States.Format('/apis/storage.k8s.io/v1/storageclasses/{}', $.ResolvedNames.StorageClass)"
         }
@@ -449,6 +459,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "POST",
           "Path": "/apis/storage.k8s.io/v1/storageclasses",
           "RequestBody": {
@@ -564,6 +575,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "POST",
           "Path": "/api/v1/persistentvolumes",
           "RequestBody.$": "$.PvManifest"
@@ -662,6 +674,7 @@
         "Payload": {
           "Action": "call",
           "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
           "Method": "POST",
           "Path.$": "States.Format('/api/v1/namespaces/{}/persistentvolumeclaims', $.EKS.Namespace)",
           "RequestBody": {
