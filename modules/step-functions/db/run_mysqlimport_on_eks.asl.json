@@ -91,7 +91,14 @@
           "Next": "GetEksClusterInfo"
         }
       ],
-      "Default": "GetDbSecretValue"
+      "Default": "InitPrivateDefaults"
+    },
+    "InitPrivateDefaults": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Set optional EksRoleArn for private mode. EksRoleArn is set only when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
+      "Output": "{% $merge([$states.input, {'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
+      "Next": "GetDbSecretValue"
     },
     "GetEksClusterInfo": {
       "Type": "Task",
@@ -103,7 +110,7 @@
         "Name.$": "$.EKS.ClusterName"
       },
       "ResultPath": "$.EksCluster",
-      "Next": "GetDbSecretValue",
+      "Next": "SetPublicEksRoleArn",
       "Catch": [
         {
           "ErrorEquals": [
@@ -112,6 +119,13 @@
           "Next": "ImportFailed"
         }
       ]
+    },
+    "SetPublicEksRoleArn": {
+      "Type": "Pass",
+      "Comment": "Set EksRoleArn to null for public mode (not needed with EKS Access Entries).",
+      "Result": null,
+      "ResultPath": "$.EksRoleArn",
+      "Next": "GetDbSecretValue"
     },
     "GetDbSecretValue": {
       "Type": "Task",
@@ -264,7 +278,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "createJob",
-                "EksRoleArn.$": "$.EKS.Account.RoleArn",
+                "EksRoleArn.$": "$.EksRoleArn",
           "ClusterName.$": "$.EKS.ClusterName",
           "Namespace.$": "$.EKS.Namespace",
           "Job": {
@@ -402,7 +416,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "getJobStatus",
-                "EksRoleArn.$": "$.EKS.Account.RoleArn",
+                "EksRoleArn.$": "$.EksRoleArn",
           "ClusterName.$": "$.JobInfo.ClusterName",
           "Namespace.$": "$.JobInfo.Namespace",
           "JobName.$": "$.JobInfo.JobName"
@@ -475,7 +489,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "deleteJob",
-                "EksRoleArn.$": "$.EKS.Account.RoleArn",
+                "EksRoleArn.$": "$.EksRoleArn",
           "ClusterName.$": "$.JobInfo.ClusterName",
           "Namespace.$": "$.JobInfo.Namespace",
           "JobName.$": "$.JobInfo.JobName"

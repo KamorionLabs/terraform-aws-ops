@@ -92,20 +92,21 @@
         "Name.$": "$.EKS.ClusterName"
       },
       "ResultPath": "$.EksCluster",
-      "Next": "GetDbSecretValue",
+      "Next": "SetPublicEksRoleArn",
       "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DumpFailed" }]
+    },
+    "SetPublicEksRoleArn": {
+      "Type": "Pass",
+      "Comment": "Set EksRoleArn to null for public mode (not needed with EKS Access Entries).",
+      "Result": null,
+      "ResultPath": "$.EksRoleArn",
+      "Next": "GetDbSecretValue"
     },
     "InitPrivateDefaults": {
       "Type": "Pass",
-      "Comment": "Inject stub EksCluster data so Map ItemSelector paths resolve in private mode (values never used)",
-      "Result": {
-        "Cluster": {
-          "Name": "unused",
-          "CertificateAuthority": { "Data": "unused" },
-          "Endpoint": "unused"
-        }
-      },
-      "ResultPath": "$.EksCluster",
+      "QueryLanguage": "JSONata",
+      "Comment": "Inject stub EksCluster and optional EksRoleArn for private mode. EksRoleArn is set only when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
+      "Output": "{% $merge([$states.input, {'EksCluster': {'Cluster': {'Name': 'unused', 'CertificateAuthority': {'Data': 'unused'}, 'Endpoint': 'unused'}}, 'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
       "Next": "GetDbSecretValue"
     },
     "GetDbSecretValue": {
@@ -139,7 +140,7 @@
         "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
         "ClusterName.$": "$.EKS.ClusterName",
         "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn",
-        "EksRoleArn.$": "$.EKS.Account.RoleArn",
+        "EksRoleArn.$": "$.EksRoleArn",
         "Namespace.$": "$.EKS.Namespace",
         "EksNodeSelector.$": "$.EKS.NodeSelector",
         "EksTolerations.$": "$.EKS.Tolerations",
