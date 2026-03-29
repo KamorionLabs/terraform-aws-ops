@@ -766,24 +766,70 @@
             },
             "CheckEKSScaleServicesFields": {
               "Type": "Choice",
-              "Comment": "Verify EKS fields required for ScaleServices (ClusterName, Namespace, Services, SFN ARNs)",
+              "Comment": "Verify EKS fields required for ScaleServices (AccessMode, ClusterName, Namespace, Services, SFN ARNs)",
               "Choices": [
                 {
                   "And": [
+                    {"Variable": "$.EKS.AccessMode", "IsPresent": true},
                     {"Variable": "$.EKS.ClusterName", "IsPresent": true},
                     {"Variable": "$.EKS.Namespace", "IsPresent": true},
                     {"Variable": "$.EKS.Services", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.ScaleServices", "IsPresent": true},
                     {"Variable": "$.StepFunctions.EKS.VerifyAndRestartServices", "IsPresent": true}
                   ],
-                  "Next": "CheckEKSManageStorageConditional"
+                  "Next": "CheckEKSSecretRefreshMode"
                 }
               ],
               "Default": "ConfigMissing_EKSScaleServices"
             },
             "ConfigMissing_EKSScaleServices": {
               "Type": "Pass",
-              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ScaleServices", "Required": ["ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.VerifyAndRestartServices"]},
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.ScaleServices", "Required": ["AccessMode", "ClusterName", "Namespace", "Services", "StepFunctions.EKS.ScaleServices", "StepFunctions.EKS.VerifyAndRestartServices"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
+            },
+            "CheckEKSSecretRefreshMode": {
+              "Type": "Choice",
+              "Comment": "If EKS.SecretRefresh.Mode is present, validate it is annotate, delete, or none",
+              "Choices": [
+                {
+                  "Variable": "$.EKS.SecretRefresh.Mode",
+                  "IsPresent": false,
+                  "Next": "CheckEKSManageStorageConditional"
+                },
+                {
+                  "Variable": "$.EKS.SecretRefresh.Mode",
+                  "StringEquals": "annotate",
+                  "Next": "CheckEKSSecretRefreshName"
+                },
+                {
+                  "Variable": "$.EKS.SecretRefresh.Mode",
+                  "StringEquals": "delete",
+                  "Next": "CheckEKSSecretRefreshName"
+                },
+                {
+                  "Variable": "$.EKS.SecretRefresh.Mode",
+                  "StringEquals": "none",
+                  "Next": "CheckEKSManageStorageConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EKSSecretRefresh"
+            },
+            "CheckEKSSecretRefreshName": {
+              "Type": "Choice",
+              "Comment": "If mode is annotate or delete, SecretName should be present",
+              "Choices": [
+                {
+                  "Variable": "$.EKS.SecretRefresh.SecretName",
+                  "IsPresent": true,
+                  "Next": "CheckEKSManageStorageConditional"
+                }
+              ],
+              "Default": "ConfigMissing_EKSSecretRefresh"
+            },
+            "ConfigMissing_EKSSecretRefresh": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EKS.SecretRefresh", "Required": ["Mode (annotate|delete|none)", "SecretName (if mode=annotate|delete)"]},
               "ResultPath": "$.V.FailedCheck",
               "Next": "ConfigFailed"
             },
