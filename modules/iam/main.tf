@@ -44,7 +44,7 @@ resource "aws_iam_role_policy" "orchestrator_assume_roles" {
       {
         Effect   = "Allow"
         Action   = "sts:AssumeRole"
-        Resource = concat(var.source_role_arns, var.destination_role_arns)
+        Resource = concat(var.source_role_arns, var.destination_role_arns, var.additional_assume_role_arns)
       }
     ]
   })
