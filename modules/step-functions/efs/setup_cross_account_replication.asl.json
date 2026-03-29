@@ -747,7 +747,7 @@
           "DestinationFileSystemId": "{% $states.input.DestinationEFS.FileSystemId %}",
           "DestinationFileSystemArn": "{% $states.input.DestinationEFS.FileSystemArn %}",
           "Account": "{% $states.input.DestinationAccount %}",
-          "CsiDriverRoleArn": "{% $states.input.CsiDriverRoleArn %}"
+          "CsiDriverRoleArn": "{% $exists($states.input.CsiDriverRoleArn) ? $states.input.CsiDriverRoleArn : '' %}"
         },
         "Name": "{% $states.context.Execution.Name & '-CopyPolicy' %}"
       },
