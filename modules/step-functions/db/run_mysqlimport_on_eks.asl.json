@@ -97,7 +97,7 @@
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:eks:describeCluster",
       "Credentials": {
-        "RoleArn.$": "$.EKS.Account.RoleArn"
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "Parameters": {
         "Name.$": "$.EKS.ClusterName"
@@ -264,6 +264,7 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "createJob",
+                "EksRoleArn.$": "$.EKS.Account.RoleArn",
           "ClusterName.$": "$.EKS.ClusterName",
           "Namespace.$": "$.EKS.Namespace",
           "Job": {
@@ -349,7 +350,7 @@
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.EKS.Account.RoleArn"
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "Retry": [
         {
@@ -401,13 +402,14 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "getJobStatus",
+                "EksRoleArn.$": "$.EKS.Account.RoleArn",
           "ClusterName.$": "$.JobInfo.ClusterName",
           "Namespace.$": "$.JobInfo.Namespace",
           "JobName.$": "$.JobInfo.JobName"
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.EKS.Account.RoleArn"
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "Retry": [
         {
@@ -473,13 +475,14 @@
         "FunctionName.$": "$.K8sProxyLambdaArn",
         "Payload": {
           "Action": "deleteJob",
+                "EksRoleArn.$": "$.EKS.Account.RoleArn",
           "ClusterName.$": "$.JobInfo.ClusterName",
           "Namespace.$": "$.JobInfo.Namespace",
           "JobName.$": "$.JobInfo.JobName"
         }
       },
       "Credentials": {
-        "RoleArn.$": "$.EKS.Account.RoleArn"
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "Retry": [
         {

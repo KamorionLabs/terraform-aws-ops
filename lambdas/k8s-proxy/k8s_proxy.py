@@ -71,18 +71,29 @@ def get_cluster_info(cluster_name: str, region: str) -> dict:
     return info
 
 
-def get_bearer_token(cluster_name: str, region: str) -> str:
+def get_bearer_token(cluster_name: str, region: str, eks_role_arn: str = None) -> str:
     """
     Generate a bearer token for EKS authentication using STS presigned URL.
 
     Args:
         cluster_name: EKS cluster name (used as x-k8s-aws-id header)
         region: AWS region
+        eks_role_arn: Optional IAM role to assume for K8s auth (for clusters
+                      where the Lambda execution role doesn't have K8s access)
 
     Returns:
         Bearer token string (k8s-aws-v1.<base64url-encoded-presigned-url>)
     """
     session = boto3.Session()
+    if eks_role_arn:
+        sts = session.client("sts", region_name=region)
+        creds = sts.assume_role(RoleArn=eks_role_arn, RoleSessionName="k8s-proxy")["Credentials"]
+        session = boto3.Session(
+            aws_access_key_id=creds["AccessKeyId"],
+            aws_secret_access_key=creds["SecretAccessKey"],
+            aws_session_token=creds["SessionToken"],
+        )
+        logger.info(f"Assumed EKS role: {eks_role_arn}")
     sts_client = session.client("sts", region_name=region)
     service_id = sts_client.meta.service_model.service_id
 
@@ -154,7 +165,7 @@ def _get_content_type(method: str, content_type: str = None) -> str:
 
 def k8s_api_call(cluster_name: str, region: str, method: str, path: str,
                  body: dict = None, query_params: dict = None,
-                 content_type: str = None) -> dict:
+                 content_type: str = None, eks_role_arn: str = None) -> dict:
     """
     Make an authenticated call to the Kubernetes API.
 
@@ -173,7 +184,7 @@ def k8s_api_call(cluster_name: str, region: str, method: str, path: str,
         K8sApiError: On HTTP errors (status >= 400)
     """
     cluster_info = get_cluster_info(cluster_name, region)
-    token = get_bearer_token(cluster_name, region)
+    token = get_bearer_token(cluster_name, region, eks_role_arn)
     ssl_ctx = _build_ssl_context(cluster_info["ca_data"])
 
     # Build URL
@@ -243,8 +254,9 @@ def handle_call(event: dict, region: str) -> dict:
     body = event.get("RequestBody")
     query_params = event.get("QueryParameters")
     content_type = event.get("ContentType")
+    eks_role_arn = event.get("EksRoleArn")
 
-    result = k8s_api_call(cluster_name, region, method, path, body, query_params, content_type)
+    result = k8s_api_call(cluster_name, region, method, path, body, query_params, content_type, eks_role_arn)
     logger.info(f"Call succeeded: {result['StatusCode']}")
     return result
 
@@ -265,11 +277,12 @@ def handle_create_job(event: dict, region: str) -> dict:
     namespace = event["Namespace"]
     job_spec = event["Job"]
     job_name = job_spec.get("metadata", {}).get("name", "unknown")
+    eks_role_arn = event.get("EksRoleArn")
 
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs"
 
     try:
-        result = k8s_api_call(cluster_name, region, "POST", path, body=job_spec)
+        result = k8s_api_call(cluster_name, region, "POST", path, body=job_spec, eks_role_arn=eks_role_arn)
         job_name = result["ResponseBody"]["metadata"]["name"]
         logger.info(f"Job created: {job_name} in {namespace}")
         return {
@@ -304,10 +317,11 @@ def handle_get_job_status(event: dict, region: str) -> dict:
     cluster_name = event["ClusterName"]
     namespace = event["Namespace"]
     job_name = event["JobName"]
+    eks_role_arn = event.get("EksRoleArn")
 
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs/{job_name}"
 
-    result = k8s_api_call(cluster_name, region, "GET", path)
+    result = k8s_api_call(cluster_name, region, "GET", path, eks_role_arn=eks_role_arn)
     job = result["ResponseBody"]
 
     status = "Running"
@@ -360,6 +374,7 @@ def handle_delete_job(event: dict, region: str) -> dict:
     cluster_name = event["ClusterName"]
     namespace = event["Namespace"]
     job_name = event["JobName"]
+    eks_role_arn = event.get("EksRoleArn")
 
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs/{job_name}"
 
@@ -367,7 +382,7 @@ def handle_delete_job(event: dict, region: str) -> dict:
     query_params = {"propagationPolicy": "Background"}
 
     try:
-        k8s_api_call(cluster_name, region, "DELETE", path, query_params=query_params)
+        k8s_api_call(cluster_name, region, "DELETE", path, query_params=query_params, eks_role_arn=eks_role_arn)
         logger.info(f"Job deleted: {job_name}")
     except K8sApiError as e:
         if e.status_code == 404:
