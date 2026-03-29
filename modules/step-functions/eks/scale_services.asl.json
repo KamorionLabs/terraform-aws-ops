@@ -189,32 +189,115 @@
     "WaitAfterScaling": {
       "Type": "Wait",
       "Seconds": 10,
-      "Next": "CheckCleanupSecret"
+      "Next": "ResolveSecretRefresh"
     },
-    "CheckCleanupSecret": {
+    "ResolveSecretRefresh": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Resolve secret refresh mode: 'annotate' (ESO ExternalSecret), 'delete' (Secret Provider Class), or 'none'. Falls back to CleanupSecret for backward compatibility.",
+      "Output": "{% $merge([$states.input, {'SecretRefreshResolved': {'Mode': $exists($states.input.EKS.SecretRefresh.Mode) ? $states.input.EKS.SecretRefresh.Mode : ($states.input.CleanupSecret = true and $states.input.Replicas > 0 ? 'delete' : 'none'), 'SecretName': $exists($states.input.EKS.SecretRefresh.SecretName) ? $states.input.EKS.SecretRefresh.SecretName : 'shared-data-media-sub-path'}}]) %}",
+      "Next": "CheckSecretRefreshMode"
+    },
+    "CheckSecretRefreshMode": {
       "Type": "Choice",
+      "Comment": "Route to annotate (ESO), delete (SPC/legacy), or skip secret refresh",
       "Choices": [
         {
-          "And": [
-            {
-              "Variable": "$.CleanupSecret",
-              "IsPresent": true
-            },
-            {
-              "Variable": "$.CleanupSecret",
-              "BooleanEquals": true
-            },
-            {
-              "Variable": "$.Replicas",
-              "NumericGreaterThan": 0
-            }
-          ],
-          "Next": "CheckAccessModeForSecret"
+          "Variable": "$.SecretRefreshResolved.Mode",
+          "StringEquals": "annotate",
+          "Next": "CheckAccessModeForAnnotate"
+        },
+        {
+          "Variable": "$.SecretRefreshResolved.Mode",
+          "StringEquals": "delete",
+          "Next": "CheckAccessModeForDelete"
         }
       ],
       "Default": "PrepareOutput"
     },
-    "CheckAccessModeForSecret": {
+
+    "CheckAccessModeForAnnotate": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.EKS.AccessMode",
+          "StringEquals": "public",
+          "Next": "AnnotateExternalSecret"
+        }
+      ],
+      "Default": "AnnotateExternalSecretPrivate"
+    },
+    "AnnotateExternalSecret": {
+      "Type": "Task",
+      "Comment": "Force ESO to resync ExternalSecret from SSM by updating annotation",
+      "Resource": "arn:aws:states:::eks:call",
+      "Parameters": {
+        "ClusterName.$": "$.EksCluster.Cluster.Name",
+        "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
+        "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
+        "Method": "PATCH",
+        "Path.$": "States.Format('/apis/external-secrets.io/v1beta1/namespaces/{}/externalsecrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
+        "RequestBody": {
+          "metadata": {
+            "annotations": {
+              "reconcile.eso.io/force-sync.$": "$$.State.EnteredTime"
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.AnnotateResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AnnotateError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "AnnotateExternalSecretPrivate": {
+      "Type": "Task",
+      "Comment": "Force ESO to resync ExternalSecret from SSM by updating annotation (private mode via k8s-proxy Lambda)",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.K8sProxyLambdaArn",
+        "Payload": {
+          "Action": "call",
+          "ClusterName.$": "$.EKS.ClusterName",
+          "EksRoleArn.$": "$.EksRoleArn",
+          "Method": "PATCH",
+          "Path.$": "States.Format('/apis/external-secrets.io/v1beta1/namespaces/{}/externalsecrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
+          "RequestBody": {
+            "metadata": {
+              "annotations": {
+                "reconcile.eso.io/force-sync.$": "$$.State.EnteredTime"
+              }
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "ResponseBody.$": "$.Payload.ResponseBody",
+        "StatusCode.$": "$.Payload.StatusCode"
+      },
+      "ResultPath": "$.AnnotateResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.AnnotateError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+
+    "CheckAccessModeForDelete": {
       "Type": "Choice",
       "Choices": [
         {
@@ -233,7 +316,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "GET",
-        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -263,7 +346,7 @@
           "ClusterName.$": "$.EKS.ClusterName",
           "EksRoleArn.$": "$.EksRoleArn",
           "Method": "GET",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)"
         }
       },
       "Credentials": {
@@ -291,7 +374,7 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "DELETE",
-        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.Namespace)"
+        "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)"
       },
       "Credentials": {
         "RoleArn.$": "$.DestinationAccount.RoleArn"
@@ -316,7 +399,7 @@
           "ClusterName.$": "$.EKS.ClusterName",
           "EksRoleArn.$": "$.EksRoleArn",
           "Method": "DELETE",
-          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/shared-data-media-sub-path', $.EKS.Namespace)"
+          "Path.$": "States.Format('/api/v1/namespaces/{}/secrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)"
         }
       },
       "Credentials": {
