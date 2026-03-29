@@ -348,6 +348,12 @@ variable "eks_pod_identity_s3_arns" {
 # For EKS clusters with private-only API endpoints
 # -----------------------------------------------------------------------------
 
+variable "eks_role_arns" {
+  description = "List of EKS-specific IAM role ARNs that the destination role (and k8s-proxy Lambda) can assume for K8s API access. Used for legacy clusters using aws-auth ConfigMap where a separate role is needed for K8s authentication."
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_k8s_proxy" {
   description = "Deploy k8s-proxy Lambda for EKS private endpoint access. Uses the destination role as Lambda execution role."
   type        = bool

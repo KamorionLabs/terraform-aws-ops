@@ -552,6 +552,31 @@ resource "aws_iam_role_policy" "k8s_proxy_lambda" {
 }
 
 # -----------------------------------------------------------------------------
+# IAM Policy - Assume EKS Roles (for legacy clusters using aws-auth ConfigMap)
+# Allows the destination role (used as k8s-proxy Lambda execution role) to
+# assume a separate EKS-specific role for K8s API authentication.
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "assume_eks_roles" {
+  count = local.should_attach_policies && length(var.eks_role_arns) > 0 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-assume-eks-roles"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AssumeEksRoles"
+        Effect = "Allow"
+        Action = "sts:AssumeRole"
+        Resource = var.eks_role_arns
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
 # EKS Access Entry - Grants Kubernetes API access to the destination role
 # -----------------------------------------------------------------------------
 
