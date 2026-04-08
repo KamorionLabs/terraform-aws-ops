@@ -466,7 +466,7 @@
           "Next": "ModifyClusterSettings"
         }
       ],
-      "Default": "PrepareOutput"
+      "Default": "CheckTagCluster"
     },
     "ModifyClusterSettings": {
       "Type": "Task",
@@ -486,7 +486,7 @@
           ],
           "Output": "{% $merge([$states.input, {'ModifyError': $states.errorOutput}]) %}",
           "Comment": "Don't fail the restore for modify errors - settings can be applied later via IaC",
-          "Next": "PrepareOutput"
+          "Next": "CheckTagCluster"
         }
       ]
     },
@@ -512,7 +512,7 @@
             "States.ALL"
           ],
           "ResultPath": "$.ModifyCheckError",
-          "Next": "PrepareOutput"
+          "Next": "CheckTagCluster"
         }
       ]
     },
@@ -522,10 +522,45 @@
         {
           "Variable": "$.ModifyCheckResult.DbClusters[0].Status",
           "StringEquals": "available",
-          "Next": "PrepareOutput"
+          "Next": "CheckTagCluster"
         }
       ],
       "Default": "WaitModifyComplete"
+    },
+    "CheckTagCluster": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Tag restored cluster with destination tags if provided. Overrides source (PRD) tags with destination (PPD/STG) values to prevent Terraform drift.",
+      "Choices": [
+        {
+          "Condition": "{% $exists($states.input.Tags) and $type($states.input.Tags) = 'object' and $count($keys($states.input.Tags)) > 0 %}",
+          "Next": "TagRestoredCluster"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "TagRestoredCluster": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Apply destination tags to restored cluster. Non-blocking: continues to PrepareOutput on error.",
+      "Resource": "arn:aws:states:::aws-sdk:rds:addTagsToResource",
+      "Credentials": {
+        "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
+      },
+      "Arguments": {
+        "ResourceName": "{% 'arn:aws:rds:' & $split($states.context.StateMachine.Id, ':')[3] & ':' & $states.input.DestinationAccount.AccountId & ':cluster:' & $states.input.TmpDbClusterIdentifier %}",
+        "Tags": "{% $each($states.input.Tags, function($v, $k) { {'Key': $k, 'Value': $v} }) %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'TagError': $states.errorOutput}]) %}",
+          "Comment": "Non-blocking: tag errors do not fail the restore",
+          "Next": "PrepareOutput"
+        }
+      ]
     },
     "PrepareOutput": {
       "Type": "Pass",
