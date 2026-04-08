@@ -525,6 +525,83 @@
         "Name": "{% $states.context.Execution.Name & '-SrcPolyCrossAcct' %}"
       },
       "Output": "{% $states.input %}",
+      "Next": "CallUpdateSourcePolicySourceRole",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'PolicyError': $states.errorOutput}]) %}",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
+    },
+    "CallUpdateSourcePolicySourceRole": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Add source role to source EFS policy with DescribeFileSystems + CreateReplicationConfiguration. When a file system policy exists with DescribeFileSystems for specific principals, the source role (same account) is blocked unless explicitly listed.",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId": "{% $states.input.SourceFileSystemId %}",
+          "Account": "{% $states.input.SourceAccount %}",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowSourceRoleReplication",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "{% $states.input.SourceAccount.RoleArn %}"
+            },
+            "Action": [
+              "elasticfilesystem:DescribeFileSystems",
+              "elasticfilesystem:DescribeReplicationConfigurations",
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration"
+            ],
+            "Resource": "{% $states.input.SourceEFS.FileSystemArn %}"
+          }
+        },
+        "Name": "{% $states.context.Execution.Name & '-SrcRolePolicy' %}"
+      },
+      "Output": "{% $states.input %}",
+      "Next": "CallUpdateSourcePolicyReplicationRole",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Output": "{% $merge([$states.input, {'PolicyError': $states.errorOutput}]) %}",
+          "Next": "SourcePolicyUpdateFailed"
+        }
+      ]
+    },
+    "CallUpdateSourcePolicyReplicationRole": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Add replication role to source EFS policy for EFS service to perform replication reads/writes.",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Arguments": {
+        "StateMachineArn": "${manage_filesystem_policy_arn}",
+        "Input": {
+          "FileSystemId": "{% $states.input.SourceFileSystemId %}",
+          "Account": "{% $states.input.SourceAccount %}",
+          "Action": "ADD",
+          "PolicyStatement": {
+            "Sid": "AllowReplicationRole",
+            "Effect": "Allow",
+            "Principal": {
+              "AWS": "{% $states.input.ReplicationRoleArn %}"
+            },
+            "Action": [
+              "elasticfilesystem:DescribeFileSystems",
+              "elasticfilesystem:DescribeReplicationConfigurations",
+              "elasticfilesystem:CreateReplicationConfiguration",
+              "elasticfilesystem:DeleteReplicationConfiguration",
+              "elasticfilesystem:ReplicationWrite"
+            ],
+            "Resource": "{% $states.input.SourceEFS.FileSystemArn %}"
+          }
+        },
+        "Name": "{% $states.context.Execution.Name & '-SrcReplRole' %}"
+      },
+      "Output": "{% $states.input %}",
       "Next": "ShouldCreateDestinationEFS",
       "Catch": [
         {
