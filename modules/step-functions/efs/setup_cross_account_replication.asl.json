@@ -762,16 +762,10 @@
       ]
     },
     "CheckReplicationPoliciesAlreadyPresent": {
-      "Type": "Choice",
+      "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Comment": "Skip replication policy adds if the copied policy already contains AllowCrossAccountReplication (indicates all replication statements were already present on the source EFS)",
-      "Choices": [
-        {
-          "Condition": "{% 'AllowCrossAccountReplication' in $states.input.CopiedPolicyResult.Statements %}",
-          "Next": "WaitPolicyPropagation"
-        }
-      ],
-      "Default": "CallAddDestCrossAccountPolicy"
+      "Comment": "Always add replication policies to destination EFS. Previously skipped if AllowCrossAccountReplication Sid was present, but copied policies may reference a different source account (e.g. NBS vs NH PRD). The manage-filesystem-policy sub-SFN is idempotent (replaces by Sid).",
+      "Next": "CallAddDestCrossAccountPolicy"
     },
     "CallAddDestCrossAccountPolicy": {
       "Type": "Task",
