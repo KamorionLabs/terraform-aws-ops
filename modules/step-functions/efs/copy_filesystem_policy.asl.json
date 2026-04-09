@@ -47,7 +47,7 @@
       "Type": "Pass",
       "QueryLanguage": "JSONata",
       "Comment": "Parse source policy and rewrite all statements' Resource ARN to point to destination EFS. Preserves all statements (pod-access AND replication) so downstream can skip adding policies already present.",
-      "Output": "{% ($policy := $parse($states.input.SourcePolicy.Policy); $stmts := $type($policy.Statement) = 'array' ? $policy.Statement : [$policy.Statement]; $rewritten := $map($stmts, function($s) { $merge([$s, {'Resource': $states.input.DestinationFileSystemArn}]) }); $count($rewritten) > 0 ? $merge([$states.input, {'ExtractedStatements': $rewritten, 'ExtractedSids': $map($rewritten, function($s) { $s.Sid }), 'PolicySource': 'copied'}]) : $merge([$states.input, {'PolicySource': 'default'}])) %}",
+      "Output": "{% ($policy := $parse($states.input.SourcePolicy.Policy); $stmts := $type($policy.Statement) = 'array' ? $policy.Statement : [$policy.Statement]; $rewritten := $map($stmts, function($s) { ($base := $merge([$s, {'Resource': $states.input.DestinationFileSystemArn}]); $s.Sid = 'AllowMountTargetAccess' and $type($s.Action) = 'array' and $not('elasticfilesystem:ClientRootAccess' in $s.Action) ? $merge([$base, {'Action': $append($s.Action, 'elasticfilesystem:ClientRootAccess')}]) : $base) }); $count($rewritten) > 0 ? $merge([$states.input, {'ExtractedStatements': $rewritten, 'ExtractedSids': $map($rewritten, function($s) { $s.Sid }), 'PolicySource': 'copied'}]) : $merge([$states.input, {'PolicySource': 'default'}])) %}",
       "Next": "CheckExtractedStatements"
     },
     "CheckExtractedStatements": {
