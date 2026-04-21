@@ -75,13 +75,37 @@
         "Name.$": "States.Format('{}-EnsureNoOldClstr', $$.Execution.Name)"
       },
       "ResultPath": "$.EnsureOldNotExistsResult",
-      "Next": "RenameOldCluster",
+      "Next": "EnsureCurrentTargetAvailable",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.EnsureOldError",
+          "Next": "EnsureTargetClusterAvailable"
+        }
+      ]
+    },
+    "EnsureCurrentTargetAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure the current target cluster is available (start if stopped) before renaming it to -old. RDS refuses to rename clusters with stopped/unhealthy instances.",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterAvailable",
+        "Input": {
+          "DbClusterIdentifier.$": "$.TargetClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-EnsureCurrTgtAvail', $$.Execution.Name)"
+      },
+      "ResultPath": "$.EnsureCurrentTargetAvailableResult",
+      "Next": "RenameOldCluster",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.EnsureCurrentTargetAvailableError",
           "Next": "EnsureTargetClusterAvailable"
         }
       ]
