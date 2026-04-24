@@ -1315,6 +1315,7 @@
           "PvcName.$": "$.EKS.Storage.PvcName",
           "PvName.$": "$.EKS.Storage.PvName",
           "StorageClassName.$": "$.EKS.Storage.StorageClassName",
+          "MountOptions.$": "$.EKS.Storage.MountOptions",
           "Action": "Delete",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
@@ -1680,6 +1681,7 @@
           "PvcName.$": "$.EKS.Storage.PvcName",
           "PvName.$": "$.EKS.Storage.PvName",
           "StorageClassName.$": "$.EKS.Storage.StorageClassName",
+          "MountOptions.$": "$.EKS.Storage.MountOptions",
           "Action": "Create",
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
