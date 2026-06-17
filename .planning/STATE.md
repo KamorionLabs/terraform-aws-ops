@@ -1,40 +1,38 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Secrets & Parameters Sync
-status: completed
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-03-17T13:58:06.830Z"
-last_activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
+milestone: v1.2
+milestone_name: S3 Cross-Account Replication
+status: planning
+last_updated: "2026-06-17T11:32:05.530Z"
+last_activity: 2026-06-17
 progress:
   total_phases: 3
-  completed_phases: 3
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-16)
+See: .planning/PROJECT.md (updated 2026-06-17)
 
-**Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 6 Orchestrator Integration COMPLETE (1/1 plan done)
+**Core value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
+**Current focus:** Milestone v1.2 — roadmap cree (3 phases), pret pour Phase 7
 
 ## Current Position
 
-Phase: 6 of 6 (Orchestrator Integration)
-Plan: 1 of 1 complete
-Status: Milestone v1.1 complete
-Last activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
-
-Progress (v1.1): [██████████] 100%
-Progress (overall): [██████████] 100%
+Phase: 7 of 9 (S3 Replication Module) — not started
+Plan: —
+Status: Roadmap ready, awaiting phase planning
+Last activity: 2026-06-17 — Milestone v1.2 started, roadmap created (phases 7-9)
 
 ## Performance Metrics
 
 **Velocity (from v1.0):**
+
 - Total plans completed: 9
 - Average duration: 5min
 - Total execution time: 45min
@@ -56,8 +54,10 @@ Progress (overall): [██████████] 100%
 | 6. Orchestrator Integration | 1/1 | 3min | 3min |
 
 **Recent Trend:**
+
 - Last 5 plans: 04-01 (4min), 04-02 (2min), 05-01 (4min), 05-02 (3min), 06-01 (3min)
 - Trend: Stable
+
 | Phase 05 P01 | 4min | 2 tasks | 2 files |
 | Phase 05 P02 | 3min | 2 tasks | 1 file |
 | Phase 06 P01 | 3min | 2 tasks | 4 files |
@@ -89,17 +89,27 @@ Decisions v1.1 :
 - [06-01]: lookup() with empty default for sync_config_items_arn to avoid errors when sync module not deployed
 - [06-01]: ConfigSync preserved in MergePrepareResults to survive PrepareRefresh phase
 
+Decisions v1.2 (verrouillees a l'ouverture du milestone) :
+
+- [Roadmap]: setup_cross_account_replication DOIT etre imperatif (assume-role runtime Credentials.RoleArn.$) — bucket source owned par stack externe, du Terraform declaratif entrerait en conflit
+- [Roadmap]: Privilegier integrations SDK aws-sdk:s3:* / aws-sdk:s3control:* ; Lambda uniquement pour compare sync-status (analogue process-efs-replication)
+- [Roadmap]: S3 live replication ne cascade pas les replicas — backfill objets existants = S3 Batch job ; module supporte les deux
+- [Roadmap]: Same-region (eu-central-1), hub-and-spoke 1 source -> N destinations
+- [Roadmap]: Grants cote destination (bucket policy + KMS key policy) = stack client NewHorizon-IaC-Webshop, HORS SCOPE
+- [Roadmap]: Wiring client (NewHorizon-IaC-AWS-Refresh + role sharedservices/refresh + inputs) HORS SCOPE
+- [Roadmap]: Rubix target topology (wiring client ulterieur) : s3-dig-prd-pim-media (366483377530) -> s3-dig-ppd-pim-media (287223952330) + s3-dig-stg-pim-media (281127105461)
+
 ### Pending Todos
 
 None yet.
 
 ### Blockers/Concerns
 
-- [Pre-Phase 4]: Confirmer le pattern IAM pour cross-account SM/SSM access (quelles permissions sur le role assume)
-- [Pre-Phase 4]: Definir le schema input ConfigSync avant implementation (contrat d'interface)
+- [Pre-Phase 7]: Definir le schema input du bloc S3 optionnel (contrat d'interface, mirroir du bloc EFS) avant implementation
+- [Note]: v1.1 complet (audit passed 13/13) mais PAS archive via /gsd-complete-milestone — artifacts phases 04/05/06 preserves, MILESTONES.md non mis a jour pour v1.1
 
 ## Session Continuity
 
-Last session: 2026-03-17T11:59:58.887Z
-Stopped at: Completed 06-01-PLAN.md
+Last session: 2026-06-17
+Stopped at: v1.2 milestone initialized (roadmap created)
 Resume file: None
