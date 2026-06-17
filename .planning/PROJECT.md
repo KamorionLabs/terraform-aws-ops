@@ -48,7 +48,7 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - [ ] Fan-out hub-and-spoke 1 source -> N destinations (same-region)
 - [ ] Role de replication S3 optionnel + perms source dans modules/source-account/
 - [ ] Integration orchestrateur via bloc input S3 optionnel (analogue EFS)
-- [ ] Spec repl-s3-sync.md + validation ASL + tests unitaires
+- [ ] Spec repl-s3-sync.md + validation ASL (module S3 sans Lambda — pas de tests unitaires Lambda)
 
 ### Out of Scope
 
@@ -70,7 +70,7 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - Fan-out hub-and-spoke 1 source -> N destinations, same-region (eu-central-1)
 - Role de replication S3 optionnel + perms source (analogue EFS) dans modules/source-account/
 - Bloc input S3 optionnel pilotant une phase optionnelle dans refresh_orchestrator
-- specs/repl-s3-sync.md + validation ASL + tests unitaires Lambda compare sync-status
+- specs/repl-s3-sync.md + validation ASL (aucun Lambda dans le module S3 — sync-status via SDK natif)
 
 ## Context
 
@@ -104,6 +104,8 @@ Shipped v1.0 (Modularization) + v1.1 (Secrets & Parameters Sync — audit passed
 | Three-tier Terraform pour EFS (avoid circular ARN refs) | efs → efs_sub_templated → efs_templated evite les references circulaires | ✓ Good — pattern propre |
 | $$.Execution.Input materialise via States.ArrayGetItem | Elimine SSM intermediary states, data inline dans InitializeState | ✓ Good — 3 refs resolues proprement |
 | Tests interface snapshots dans tests/snapshots/ | Non-regression automatisee des contrats Input/Output (REF-05) | ✓ Good — empeche les regressions silencieuses |
+| Module S3 sans Lambda — sync-status via SDK natif (Phase 7) | DescribeJob + GetBucketReplication couvrent le suivi sans compute ; le compare objet (le seul besoin de Lambda) est hors scope v1.2. Un Lambda violerait "privilegier SDK natif" | Decide — annulation du Lambda compare (cf. REPL-06, 07-CONTEXT.md) |
+| Fan-out S3 par merge de rules (Phase 7) | S3 = une seule ReplicationConfiguration a N Rules (vs EFS une config par paire) ; Map + Get/merge/Put permet de gerer un spoke independamment | Decide — idempotent, esprit check-existant EFS |
 
 ## Evolution
 

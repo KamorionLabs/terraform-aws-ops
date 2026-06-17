@@ -93,7 +93,9 @@ Decisions v1.1 :
 Decisions v1.2 (verrouillees a l'ouverture du milestone) :
 
 - [Roadmap]: setup_cross_account_replication DOIT etre imperatif (assume-role runtime Credentials.RoleArn.$) — bucket source owned par stack externe, du Terraform declaratif entrerait en conflit
-- [Roadmap]: Privilegier integrations SDK aws-sdk:s3:* / aws-sdk:s3control:* ; Lambda uniquement pour compare sync-status (analogue process-efs-replication)
+- [Roadmap]: Privilegier integrations SDK aws-sdk:s3:* / aws-sdk:s3control:*
+- [Phase 7]: ANNULE — pas de Lambda dans le module S3. Sync-status via SDK natif (GetBucketReplication + DescribeJob). Compare objet hors scope v1.2 (revirement de la decision d'ouverture ; cf. 07-CONTEXT.md)
+- [Phase 7]: Fan-out S3 par merge de rules (Map + Get/merge/Put), versioning validate-only, delete symetrique, repl options configurables (RTC/Metrics/StorageClass), backfill = S3 Batch Replication S3ReplicateObject + GeneratedManifest
 - [Roadmap]: S3 live replication ne cascade pas les replicas — backfill objets existants = S3 Batch job ; module supporte les deux
 - [Roadmap]: Same-region (eu-central-1), hub-and-spoke 1 source -> N destinations
 - [Roadmap]: Grants cote destination (bucket policy + KMS key policy) = stack client NewHorizon-IaC-Webshop, HORS SCOPE

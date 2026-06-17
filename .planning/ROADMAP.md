@@ -34,9 +34,9 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 
 **Milestone Goal:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch), en miroir du pattern EFS — module s3/, IAM source-account, integration orchestrateur optionnelle, spec + tests. Perimetre generique uniquement (wiring client hors scope).
 
-- [ ] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN) + Lambda compare sync-status + rôle/perms S3 optionnels dans `modules/source-account/`
+- [ ] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/`
 - [ ] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS)
-- [ ] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL + tests unitaires
+- [ ] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda)
 
 ## Phase Details
 
@@ -48,7 +48,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
   1. La SFN `setup_cross_account_replication` appelle `aws-sdk:s3:putBucketReplication` sur le bucket source via assume-role imperatif (`Credentials.RoleArn.$`) — aucune ressource Terraform declarative ne gere la config de replication du bucket source
   2. Les SFN `run_batch_replication` (`s3control:createJob`) et `check_batch_replication` (`s3control:describeJob` en polling) backfillent les objets existants et suivent l'etat du job jusqu'a completion
   3. La SFN `delete_replication` retire la configuration de replication du bucket source
-  4. Le fan-out hub-and-spoke (1 source -> N destinations, same-region) est supporte via la structure d'input, et un Lambda generique assure le compare sync-status (analogue process-efs-replication)
+  4. Le fan-out hub-and-spoke (1 source -> N destinations, same-region) est supporte via la structure d'input (S3 = une ReplicationConfiguration a N Rules ; Map + GetBucketReplication/merge/PutBucketReplication par destination) ; le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:describeJob`), sans Lambda
   5. `modules/source-account/` deploie un rôle de replication S3 optionnel (garde par variable) + perms source (`s3:PutBucketReplication`, `s3control:CreateJob/DescribeJob`, `iam:PassRole`) ; `terraform plan` passe sans erreur
 **Plans**: 2-3 plans (estimation)
 
@@ -63,13 +63,12 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 **Plans**: 1 plan (estimation)
 
 ### Phase 9: Spec & Tests
-**Goal**: La documentation spec et la couverture de tests existent — `specs/repl-s3-sync.md` miroite `repl-efs-sync.md`, la validation ASL couvre les nouvelles SFN, et le Lambda compare sync-status a des tests unitaires
+**Goal**: La documentation spec et la couverture de tests existent — `specs/repl-s3-sync.md` miroite `repl-efs-sync.md`, et la validation ASL couvre les nouvelles SFN (pas de tests Lambda — le module S3 ne contient aucun Lambda)
 **Depends on**: Phase 8
 **Requirements**: INFRA-03, INFRA-04
 **Success Criteria** (what must be TRUE):
   1. `specs/repl-s3-sync.md` existe et miroite la structure de `repl-efs-sync.md` (objectif, architecture, inputs/outputs, appels AWS, logique metier, conditions succes/alerte/erreur, mapping comptes)
   2. La validation ASL passe pour les nouvelles SFN S3 (auto-decouverte via rglob existant)
-  3. Le Lambda compare sync-status a des tests unitaires qui passent
 **Plans**: 1 plan (estimation)
 
 ## Progress
