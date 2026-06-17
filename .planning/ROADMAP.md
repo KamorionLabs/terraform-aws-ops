@@ -50,7 +50,11 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
   3. La SFN `delete_replication` retire la configuration de replication du bucket source
   4. Le fan-out hub-and-spoke (1 source -> N destinations, same-region) est supporte via la structure d'input (S3 = une ReplicationConfiguration a N Rules ; Map + GetBucketReplication/merge/PutBucketReplication par destination) ; le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:describeJob`), sans Lambda
   5. `modules/source-account/` deploie un rôle de replication S3 optionnel (garde par variable) + perms source (`s3:PutBucketReplication`, `s3control:CreateJob/DescribeJob`, `iam:PassRole`) ; `terraform plan` passe sans erreur
-**Plans**: 2-3 plans (estimation)
+**Plans**: 4 plans
+  - [ ] 07-01-PLAN.md — ASL setup + delete (read-merge-write replication config, validate-only versioning, Map fan-out) [REPL-01, REPL-04, REPL-05]
+  - [ ] 07-02-PLAN.md — ASL run_batch + check_batch (s3control createJob/describeJob, GeneratedManifest, poll loop) [REPL-02, REPL-03, REPL-05, REPL-06]
+  - [ ] 07-03-PLAN.md — source-account IAM (enable_s3 toggle, combined replication role, scoped PassRole) [IAM-01, IAM-02]
+  - [ ] 07-04-PLAN.md — s3 module Terraform skeleton (file()-based 4-SFN module, no Lambda, terraform validate) [REPL-01..06]
 
 ### Phase 8: Orchestrator Integration
 **Goal**: `refresh_orchestrator` appelle la replication S3 de maniere optionnelle via un bloc input S3 (analogue EFS), avec activation configurable et no-op quand absent/desactive
@@ -81,6 +85,6 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 | 4. Foundation | v1.1 | 2/2 | Complete | 2026-03-17 |
 | 5. Sync Engine | v1.1 | 2/2 | Complete | 2026-03-17 |
 | 6. Orchestrator Integration | v1.1 | 1/1 | Complete | 2026-03-17 |
-| 7. S3 Replication Module | v1.2 | 0/? | Planning | - |
+| 7. S3 Replication Module | v1.2 | 0/4 | Planning | - |
 | 8. Orchestrator Integration | v1.2 | 0/? | Planning | - |
 | 9. Spec & Tests | v1.2 | 0/? | Planning | - |
