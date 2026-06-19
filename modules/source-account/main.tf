@@ -695,6 +695,11 @@ resource "aws_iam_role_policy" "s3_access" {
           "s3:CreateJob",
           "s3:DescribeJob"
         ]
+        # TODO(Phase 8 / WR-04): CreateJob is powerful (can target arbitrary
+        # batch operations). Resource "*" is acceptable for this generic
+        # module but MUST be tightened at client wiring -- scope to the
+        # concrete source-account job ARNs alongside the bucket-ARN
+        # tightening below.
         Resource = "*"
       },
       {
@@ -722,10 +727,26 @@ resource "aws_iam_role_policy" "s3_access" {
 # Combined trust: both s3.amazonaws.com and batchoperations.s3.amazonaws.com.
 # -----------------------------------------------------------------------------
 
+# NOTE (WR-06): when enable_s3 is true this role is ALWAYS created with the
+# fixed name "${local.prefixes.iam_role}-s3-replication-role", and the
+# PassRoleToS3Replication statement in aws_iam_role_policy.s3_access is
+# hard-bound to that exact name. A client bringing their own replication role
+# under a different name would NOT be covered by that PassRole statement; in
+# that case the PassRole Resource must be parameterized. The precondition
+# below guards the related role-name pitfall (existing_role_name required when
+# create_role=false and attach_policies=true) so policies are never silently
+# dropped.
 resource "aws_iam_role" "s3_replication" {
   count = var.enable_s3 ? 1 : 0
 
   name = "${local.prefixes.iam_role}-s3-replication-role"
+
+  lifecycle {
+    precondition {
+      condition     = !(var.attach_policies && !var.create_role && (var.existing_role_name == null || var.existing_role_name == ""))
+      error_message = "When enable_s3=true, create_role=false and attach_policies=true, existing_role_name must be set: the s3_access inline policy (and its PassRole grant) attaches by role name. Otherwise should_attach_policies becomes false and the S3 source permissions are silently not attached (WR-06)."
+    }
+  }
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -785,6 +806,12 @@ resource "aws_iam_role_policy" "s3_replication" {
           "s3:ReplicateTags",
           "s3:ObjectOwnerOverrideToBucketOwner"
         ]
+        # TODO(Phase 8 / WR-04): s3:ReplicateDelete + ObjectOwnerOverride on
+        # Resource "*" lets the replication role replicate-delete and override
+        # ownership on any reachable bucket. This is the standard live-
+        # replication service-role shape, but "*" is broader than necessary --
+        # tighten to the concrete destination bucket ARNs (and KMS key ARNs)
+        # at client wiring.
         Resource = "*"
       },
       {
