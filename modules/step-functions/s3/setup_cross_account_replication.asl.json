@@ -1,0 +1,168 @@
+{
+  "Comment": "Sets up S3 cross-account live replication on a source bucket owned by an external stack. Validates (never mutates) source versioning, then iterates Destinations[] in a MaxConcurrency:1 Map performing a read-merge-write on the single ReplicationConfiguration per bucket (PutBucketReplication replaces the whole config, so each spoke's Rule is keyed by a deterministic ID 'repl-<DestAccountId>-<DestBucketBasename>' and merged into the existing Rules array). Every S3 Task assumes the source role imperatively via Credentials.RoleArn.$.",
+  "StartAt": "GetSourceVersioning",
+  "States": {
+    "GetSourceVersioning": {
+      "Type": "Task",
+      "Comment": "Validate-only versioning check (D-03). Reads the source bucket versioning status; never calls PutBucketVersioning.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getBucketVersioning",
+      "Parameters": {
+        "Bucket.$": "$.SourceBucket"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.Versioning",
+      "Next": "IsVersioningEnabled",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "IsVersioningEnabled": {
+      "Type": "Choice",
+      "Comment": "Gate on source bucket versioning. S3 replication requires versioning Enabled on the source.",
+      "Choices": [
+        {
+          "Variable": "$.Versioning.Status",
+          "StringEquals": "Enabled",
+          "Next": "MergeDestinations"
+        }
+      ],
+      "Default": "VersioningNotEnabled"
+    },
+    "VersioningNotEnabled": {
+      "Type": "Fail",
+      "Error": "SourceVersioningNotEnabled",
+      "Cause": "Source bucket versioning must be Enabled before configuring replication. The client stack that owns the source bucket must enable versioning; this module is validate-only (D-03) and never mutates the source bucket."
+    },
+    "MergeDestinations": {
+      "Type": "Map",
+      "Comment": "Iterate destinations sequentially (MaxConcurrency:1, D-01/Pitfall 3) to avoid lost-update races on the single ReplicationConfiguration. Each iteration read-merge-writes this destination's Rule.",
+      "MaxConcurrency": 1,
+      "ItemsPath": "$.Destinations",
+      "ItemSelector": {
+        "Destination.$": "$$.Map.Item.Value",
+        "Index.$": "$$.Map.Item.Index",
+        "SourceBucket.$": "$.SourceBucket",
+        "SourceAccount.$": "$.SourceAccount",
+        "ReplicationRoleArn.$": "$.ReplicationRoleArn"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "ReadExistingConfig",
+        "States": {
+          "ReadExistingConfig": {
+            "Type": "Task",
+            "Comment": "Read the current ReplicationConfiguration. GetBucketReplication throws ReplicationConfigurationNotFoundError when no config exists (Pitfall 1); a broad fallback (A1) seeds an empty config.",
+            "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
+            "Parameters": {
+              "Bucket.$": "$.SourceBucket"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.SourceAccount.RoleArn"
+            },
+            "ResultPath": "$.Existing",
+            "Next": "MergeRule",
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "S3.ReplicationConfigurationNotFoundError",
+                  "S3.S3Exception",
+                  "States.ALL"
+                ],
+                "ResultPath": "$.ExistingError",
+                "Next": "SeedEmptyConfig"
+              }
+            ]
+          },
+          "SeedEmptyConfig": {
+            "Type": "Pass",
+            "Comment": "No existing replication config on the source bucket: seed an empty Rules array keyed by the replication role.",
+            "Parameters": {
+              "ReplicationConfiguration": {
+                "Role.$": "$.ReplicationRoleArn",
+                "Rules": []
+              }
+            },
+            "ResultPath": "$.Existing",
+            "Next": "MergeRule"
+          },
+          "MergeRule": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Comment": "Read-merge-write: filter out any pre-existing Rule whose ID matches this destination's deterministic ID 'repl-<DestAccountId>-<DestBucketBasename>' (truncated to 255 chars), then append this destination's freshly-built Rule. Priority is unique per destination (existing rule count + Map index). Filter requires ID+Status+Priority+DeleteMarkerReplication (Pitfall 3); RTC forces Metrics (Pitfall 4).",
+            "Assign": {
+              "mergedRules": "{% ($dest := $states.input.Destination; $bucketParts := $split($dest.Bucket, '/'); $bucketName := $bucketParts[$count($bucketParts) - 1]; $rawId := 'repl-' & $dest.AccountId & '-' & $bucketName; $ruleId := $length($rawId) > 255 ? $substring($rawId, 0, 255) : $rawId; $existingRules := $exists($states.input.Existing.ReplicationConfiguration.Rules) ? $states.input.Existing.ReplicationConfiguration.Rules : []; $kept := $filter($existingRules, function($r) { $r.ID != $ruleId }); $priority := $count($kept) + $states.input.Index; $rtcEnabled := $exists($dest.RTC) and $dest.RTC.Status = 'Enabled'; $destination := $merge([ {'Bucket': $dest.Bucket, 'Account': $dest.AccountId}, $exists($dest.StorageClass) ? {'StorageClass': $dest.StorageClass} : {}, $rtcEnabled ? {'Metrics': {'Status': 'Enabled', 'EventThreshold': {'Minutes': 15}}, 'ReplicationTime': {'Status': 'Enabled', 'Time': {'Minutes': 15}}} : ($exists($dest.Metrics) and $dest.Metrics.Status = 'Enabled' ? {'Metrics': {'Status': 'Enabled', 'EventThreshold': {'Minutes': 15}}} : {}) ]); $newRule := {'ID': $ruleId, 'Status': 'Enabled', 'Priority': $priority, 'Filter': {'Prefix': $exists($dest.Prefix) ? $dest.Prefix : ''}, 'DeleteMarkerReplication': {'Status': $exists($dest.DeleteMarkerReplication) ? $dest.DeleteMarkerReplication.Status : 'Disabled'}, 'Destination': $destination}; $append($kept, [$newRule])) %}",
+              "replicationRole": "{% $exists($states.input.Existing.ReplicationConfiguration.Role) ? $states.input.Existing.ReplicationConfiguration.Role : $states.input.ReplicationRoleArn %}"
+            },
+            "Next": "WriteConfig"
+          },
+          "WriteConfig": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Comment": "Write the full merged Rules array back. PutBucketReplication replaces the entire ReplicationConfiguration (Pitfall 2), so the complete merged set is always written.",
+            "Resource": "arn:aws:states:::aws-sdk:s3:putBucketReplication",
+            "Arguments": {
+              "Bucket": "{% $states.input.SourceBucket %}",
+              "ReplicationConfiguration": {
+                "Role": "{% $replicationRole %}",
+                "Rules": "{% $mergedRules %}"
+              }
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+            },
+            "Next": "DestinationDone",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "WriteConfigFailed"
+              }
+            ]
+          },
+          "WriteConfigFailed": {
+            "Type": "Fail",
+            "Error": "PutBucketReplicationFailed",
+            "Cause": "Failed to write the merged ReplicationConfiguration back to the source bucket for this destination."
+          },
+          "DestinationDone": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "ResultPath": "$.MergeResults",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "setup_cross_account_replication",
+        "SourceBucket.$": "$.SourceBucket",
+        "Message": "Cross-account replication configuration merged for all destinations on the source bucket."
+      },
+      "Next": "SetupSucceeded"
+    },
+    "SetupFailed": {
+      "Type": "Fail",
+      "Error": "SetupReplicationFailed",
+      "Cause": "Failed to set up S3 cross-account replication configuration."
+    },
+    "SetupSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}
