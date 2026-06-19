@@ -10,11 +10,11 @@ Requirements pour la replication S3 cross-account. Chaque requirement mappe a un
 ### Replication SFN
 
 - [x] **REPL-01**: SFN `setup_cross_account_replication` dans `modules/step-functions/s3/` configure la replication via `s3:PutBucketReplication` sur le bucket source — assume-role **imperatif** au runtime (`Credentials.RoleArn.$`, pattern EFS) car le bucket source appartient a un stack externe et du Terraform declaratif entrerait en conflit
-- [ ] **REPL-02**: SFN `run_batch_replication` declenche un backfill des objets existants via `s3control:CreateJob` (S3 Batch Operations) — la live replication ne forwarde que les nouvelles ecritures, le backfill couvre l'existant
-- [ ] **REPL-03**: SFN `check_batch_replication` poll l'etat du job via `s3control:DescribeJob` jusqu'a completion (Active/Complete/Failed)
+- [x] **REPL-02**: SFN `run_batch_replication` declenche un backfill des objets existants via `s3control:CreateJob` (S3 Batch Operations) — la live replication ne forwarde que les nouvelles ecritures, le backfill couvre l'existant
+- [x] **REPL-03**: SFN `check_batch_replication` poll l'etat du job via `s3control:DescribeJob` jusqu'a completion (Active/Complete/Failed)
 - [x] **REPL-04**: SFN `delete_replication` supprime la configuration de replication du bucket source (teardown)
 - [x] **REPL-05**: Fan-out hub-and-spoke — une source replique vers N destinations, same-region (eu-central-1) ; chaque destination configurable independamment
-- [ ] **REPL-06**: Privilegier les integrations SDK natives `aws-sdk:s3:*` / `aws-sdk:s3control:*` dans les ASL ; **aucun Lambda en v1.2** — le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:DescribeJob`). Le compare objet source/destination reste hors scope v1.2 (cf. S3REPL-DR-02). [decision Phase 7, voir `phases/07-s3-replication-module/07-CONTEXT.md`]
+- [x] **REPL-06**: Privilegier les integrations SDK natives `aws-sdk:s3:*` / `aws-sdk:s3control:*` dans les ASL ; **aucun Lambda en v1.2** — le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:DescribeJob`). Le compare objet source/destination reste hors scope v1.2 (cf. S3REPL-DR-02). [decision Phase 7, voir `phases/07-s3-replication-module/07-CONTEXT.md`]
 
 ### Source-Account IAM
 
