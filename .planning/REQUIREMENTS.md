@@ -18,8 +18,8 @@ Requirements pour la replication S3 cross-account. Chaque requirement mappe a un
 
 ### Source-Account IAM
 
-- [ ] **IAM-01**: Rôle de replication S3 optionnel dans `modules/source-account/` (analogue `efs-replication-role`, garde par une variable `enable_s3` ou equivalent), assumable par le service S3 / `batchoperations.s3.amazonaws.com`
-- [ ] **IAM-02**: Permissions sur le rôle source assume par l'orchestrateur — `s3:PutBucketReplication`, `s3control:CreateJob`, `s3control:DescribeJob`, et `iam:PassRole` vers le rôle de replication S3 (condition `iam:PassedToService`)
+- [x] **IAM-01**: Rôle de replication S3 optionnel dans `modules/source-account/` (analogue `efs-replication-role`, garde par une variable `enable_s3` ou equivalent), assumable par le service S3 / `batchoperations.s3.amazonaws.com`
+- [x] **IAM-02**: Permissions sur le rôle source assume par l'orchestrateur — `s3:PutBucketReplication`, `s3control:CreateJob`, `s3control:DescribeJob`, et `iam:PassRole` vers le rôle de replication S3 (condition `iam:PassedToService`)
 
 ### Integration Orchestrator
 

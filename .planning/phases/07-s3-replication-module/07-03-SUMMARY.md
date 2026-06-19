@@ -115,6 +115,14 @@ terraform -chdir=modules/source-account plan   # with enable_s3 both false (noop
 - Source-account IAM ready: Phase 8 orchestrator wiring can consume `s3_replication_role_arn` and pass it as `ReplicationRoleArn` to the S3 SFN, and assume the source role (now carrying replication + batch-control + scoped PassRole permissions).
 - **Blocker before merge:** run the deferred `terraform validate`/`fmt`/`plan` checks (Bash terraform was unavailable to the executor).
 
+## Self-Check: PASSED
+
+- FOUND: modules/source-account/variables.tf (`enable_s3` line 91)
+- FOUND: modules/source-account/main.tf (`var.enable_s3` x3 counts + `PassRoleToS3Replication` + both trust principals + `s3:InitiateReplication`)
+- FOUND: modules/source-account/outputs.tf (`s3_replication_role_arn` line 67, `s3_replication_role_name` line 72)
+- FOUND commit c511057 (Task 1), b5dfe5d (Task 2), 162afe9 (Task 3), 0093599 (SUMMARY)
+- NOT VERIFIED (out of agent control): `terraform validate`/`fmt`/`plan` — Bash denied terraform; see Issues Encountered.
+
 ---
 *Phase: 07-s3-replication-module*
 *Completed: 2026-06-19*

@@ -4,13 +4,13 @@ milestone: v1.2
 milestone_name: S3 Cross-Account Replication
 status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-06-19T09:37:27.755Z"
+last_updated: "2026-06-19T12:45:48.849Z"
 last_activity: 2026-06-19
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-17)
 ## Current Position
 
 Phase: 07 (s3-replication-module) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-19
 
@@ -63,6 +63,7 @@ Last activity: 2026-06-19
 | Phase 05 P02 | 3min | 2 tasks | 1 file |
 | Phase 06 P01 | 3min | 2 tasks | 4 files |
 | Phase 07 P02 | 5min | 2 tasks | 2 files |
+| Phase 07 P03 | 8min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -108,6 +109,7 @@ Decisions v1.2 (verrouillees a l'ouverture du milestone) :
 - [Phase ?]: [07-02]: run_batch ASL backfills all destinations in one s3control:createJob (S3ReplicateObject + S3JobManifestGenerator, no Inventory), fresh States.UUID() token
 - [Phase ?]: [07-02]: check_batch ASL polls s3control:describeJob in a 30s Wait+Choice loop; Complete->Succeed, Failed/Cancelled->Fail, non-terminal->loop
 - [Phase ?]: [07-02]: ShouldEnableReport Choice on ReportBucketArn IsPresent (O1) — two static createJob states rather than dynamic Report.Bucket injection
+- [Phase ?]: [07-03]: enable_s3 defaults false (S3 new, plan-noop for current consumers) vs enable_efs default true; s3control actions written under s3: IAM namespace; module Resources kept broad (Phase 8 wiring tightens ARNs)
 
 ### Pending Todos
 
@@ -120,6 +122,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-06-19T09:37:01.882Z
+Last session: 2026-06-19T12:45:44.123Z
 Stopped at: Phase 7 context gathered
 Resume file: None
