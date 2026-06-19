@@ -88,6 +88,12 @@ variable "enable_efs" {
   default     = true
 }
 
+variable "enable_s3" {
+  description = "Enable S3 cross-account replication IAM (source role permissions + replication role)"
+  type        = bool
+  default     = false
+}
+
 # -----------------------------------------------------------------------------
 # Resource ARNs
 # -----------------------------------------------------------------------------
