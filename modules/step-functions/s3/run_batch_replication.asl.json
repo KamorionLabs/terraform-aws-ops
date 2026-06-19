@@ -1,7 +1,49 @@
 {
-  "Comment": "Dispatches a single S3 Batch Operations job (S3ReplicateObject) to backfill existing objects on the source bucket, reusing the live ReplicationConfiguration posted by setup (replicates to ALL configured destinations in one job, REPL-05). Uses S3JobManifestGenerator (no S3 Inventory precondition) filtering objects with replication status NONE/FAILED. Native SDK only (no Lambda, REPL-06). The createJob Task assumes the source role imperatively via Credentials.RoleArn.$, passes AccountId explicitly, and supplies a fresh ClientRequestToken via States.UUID() with ConfirmationRequired:false (idempotency, T-07-04). A report is emitted only when a ReportBucketArn is provided (O1: this generic module owns no report bucket).",
-  "StartAt": "ShouldEnableReport",
+  "Comment": "Dispatches a single S3 Batch Operations job (S3ReplicateObject) to backfill existing objects on the source bucket, reusing the live ReplicationConfiguration posted by setup (replicates to ALL configured destinations in one job, REPL-05). S3ReplicateObject batch jobs REQUIRE an existing live ReplicationConfiguration on the source bucket, so a GetBucketReplication precondition runs first (WR-05) and fails fast with NoReplicationConfigForBatch if setup has not run (or ran partially). Uses S3JobManifestGenerator (no S3 Inventory precondition) filtering objects with replication status NONE/FAILED. Native SDK only (no Lambda, REPL-06). The createJob Task assumes the source role imperatively via Credentials.RoleArn.$, passes AccountId explicitly, and supplies a fresh ClientRequestToken via States.UUID() with ConfirmationRequired:false (idempotency, T-07-04). A report is emitted only when a ReportBucketArn is provided (O1: this generic module owns no report bucket). Ordering contract: setup_cross_account_replication MUST run before run_batch_replication (the orchestrator enforces this in Phase 8).",
+  "StartAt": "CheckReplicationExists",
   "States": {
+    "CheckReplicationExists": {
+      "Type": "Task",
+      "Comment": "Precondition (WR-05): a live ReplicationConfiguration must exist on the source bucket before a backfill batch job can reuse it. GetBucketReplication throws S3.ReplicationConfigurationNotFoundError when none exists -> NoReplicationConfigForBatch. Any other error -> BatchJobFailed.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
+      "Parameters": {
+        "Bucket.$": "$.SourceBucket"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ExistingReplication",
+      "Next": "HasReplicationRules",
+      "Catch": [
+        {
+          "ErrorEquals": ["S3.ReplicationConfigurationNotFoundError"],
+          "ResultPath": "$.Error",
+          "Next": "NoReplicationConfigForBatch"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "BatchJobFailed"
+        }
+      ]
+    },
+    "HasReplicationRules": {
+      "Type": "Choice",
+      "Comment": "GetBucketReplication may return an empty/absent Rules array on some edge cases; require at least one rule before creating the job.",
+      "Choices": [
+        {
+          "Variable": "$.ExistingReplication.ReplicationConfiguration.Rules[0]",
+          "IsPresent": true,
+          "Next": "ShouldEnableReport"
+        }
+      ],
+      "Default": "NoReplicationConfigForBatch"
+    },
+    "NoReplicationConfigForBatch": {
+      "Type": "Fail",
+      "Error": "NoReplicationConfigForBatch",
+      "Cause": "No live ReplicationConfiguration with rules exists on the source bucket. S3ReplicateObject batch jobs reuse the live replication config, so setup_cross_account_replication must run successfully before run_batch_replication (WR-05)."
+    },
     "ShouldEnableReport": {
       "Type": "Choice",
       "Comment": "O1: branch on optional report bucket. The generic module owns no bucket, so when ReportBucketArn is absent the job runs with Report.Enabled:false (the Report block is still required by the CreateJob API).",
