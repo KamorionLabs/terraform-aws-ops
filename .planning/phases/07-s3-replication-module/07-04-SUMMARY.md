@@ -117,3 +117,9 @@ reference the real `aws_sfn_state_machine.s3` resource.
   default routes execution data to the dedicated CloudWatch log group.
 
 No new security-relevant surface beyond the plan's threat model.
+
+## Self-Check: PASSED
+
+- 4 `.tf` files present: `modules/step-functions/s3/{versions,variables,main,outputs}.tf`
+- SUMMARY present: `.planning/phases/07-s3-replication-module/07-04-SUMMARY.md`
+- Commits exist: 716788b (Task 1), 7804d16 (Task 2)

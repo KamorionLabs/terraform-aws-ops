@@ -34,7 +34,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 
 **Milestone Goal:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch), en miroir du pattern EFS — module s3/, IAM source-account, integration orchestrateur optionnelle, spec + tests. Perimetre generique uniquement (wiring client hors scope).
 
-- [ ] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/`
+- [x] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/` (completed 2026-06-19)
 - [ ] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS)
 - [ ] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda)
 
@@ -54,7 +54,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
   - [x] 07-01-PLAN.md — ASL setup + delete (read-merge-write replication config, validate-only versioning, Map fan-out) [REPL-01, REPL-04, REPL-05]
   - [x] 07-02-PLAN.md — ASL run_batch + check_batch (s3control createJob/describeJob, GeneratedManifest, poll loop) [REPL-02, REPL-03, REPL-05, REPL-06]
   - [x] 07-03-PLAN.md — source-account IAM (enable_s3 toggle, combined replication role, scoped PassRole) [IAM-01, IAM-02]
-  - [ ] 07-04-PLAN.md — s3 module Terraform skeleton (file()-based 4-SFN module, no Lambda, terraform validate) [REPL-01..06]
+  - [x] 07-04-PLAN.md — s3 module Terraform skeleton (file()-based 4-SFN module, no Lambda, terraform validate) [REPL-01..06]
 
 ### Phase 8: Orchestrator Integration
 **Goal**: `refresh_orchestrator` appelle la replication S3 de maniere optionnelle via un bloc input S3 (analogue EFS), avec activation configurable et no-op quand absent/desactive
@@ -85,6 +85,6 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 | 4. Foundation | v1.1 | 2/2 | Complete | 2026-03-17 |
 | 5. Sync Engine | v1.1 | 2/2 | Complete | 2026-03-17 |
 | 6. Orchestrator Integration | v1.1 | 1/1 | Complete | 2026-03-17 |
-| 7. S3 Replication Module | v1.2 | 3/4 | In Progress|  |
+| 7. S3 Replication Module | v1.2 | 4/4 | Complete   | 2026-06-19 |
 | 8. Orchestrator Integration | v1.2 | 0/? | Planning | - |
 | 9. Spec & Tests | v1.2 | 0/? | Planning | - |
