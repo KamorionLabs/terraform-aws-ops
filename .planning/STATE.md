@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: S3 Cross-Account Replication
-status: planning
+status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-06-17T13:30:18.475Z"
-last_activity: 2026-06-17 — Milestone v1.2 started, roadmap created (phases 7-9)
+last_updated: "2026-06-19T09:33:03.323Z"
+last_activity: 2026-06-19
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-17)
 
 **Core value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
-**Current focus:** Milestone v1.2 — roadmap cree (3 phases), pret pour Phase 7
+**Current focus:** Phase 07 — s3-replication-module
 
 ## Current Position
 
-Phase: 7 of 9 (S3 Replication Module) — not started
-Plan: —
-Status: Roadmap ready, awaiting phase planning
-Last activity: 2026-06-17 — Milestone v1.2 started, roadmap created (phases 7-9)
+Phase: 07 (s3-replication-module) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-06-19
 
 ## Performance Metrics
 
@@ -101,6 +101,9 @@ Decisions v1.2 (verrouillees a l'ouverture du milestone) :
 - [Roadmap]: Grants cote destination (bucket policy + KMS key policy) = stack client NewHorizon-IaC-Webshop, HORS SCOPE
 - [Roadmap]: Wiring client (NewHorizon-IaC-AWS-Refresh + role sharedservices/refresh + inputs) HORS SCOPE
 - [Roadmap]: Rubix target topology (wiring client ulterieur) : s3-dig-prd-pim-media (366483377530) -> s3-dig-ppd-pim-media (287223952330) + s3-dig-stg-pim-media (281127105461)
+- [Phase ?]: [07-01]: Rule-ID convention repl-<DestAccountId>-<DestBucketBasename> (truncated 255) shared by setup and delete
+- [Phase ?]: [07-01]: setup uses MaxConcurrency:1 Map read-merge-write; RTC forces Metrics+ReplicationTime; Priority = kept-count + Map index
+- [Phase ?]: [07-01]: delete is symmetric read-filter-write; DeleteBucketReplication when none remain else PutBucketReplication; idempotent on not-found
 
 ### Pending Todos
 
@@ -113,6 +116,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-06-17T13:30:18.467Z
+Last session: 2026-06-19T09:32:44.069Z
 Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-s3-replication-module/07-CONTEXT.md
+Resume file: None
