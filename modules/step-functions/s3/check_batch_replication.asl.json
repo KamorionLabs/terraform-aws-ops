@@ -1,0 +1,74 @@
+{
+  "Comment": "Polls an S3 Batch Operations job to completion via s3control:describeJob in a Wait+Task+Choice loop, consuming the JobId produced by run_batch_replication ($.BatchJob.JobId). Native SDK only (no Lambda, REPL-06). The describeJob Task assumes the source role imperatively via Credentials.RoleArn.$ and passes AccountId explicitly. The Choice evaluates Job.Status: Complete -> Succeed, Failed/Cancelled -> Fail, any non-terminal state -> loop back to Wait (covers New/Preparing/Suspended/Ready/Active/Pausing/Paused/Cancelling/Failing).",
+  "StartAt": "WaitForJob",
+  "States": {
+    "WaitForJob": {
+      "Type": "Wait",
+      "Comment": "Polling interval (D-11 discretion). Waits before each describeJob poll.",
+      "Seconds": 30,
+      "Next": "DescribeBatchJob"
+    },
+    "DescribeBatchJob": {
+      "Type": "Task",
+      "Comment": "Describe the batch job in the source account. AccountId passed explicitly; source role assumed imperatively. JobId comes from run_batch_replication output ($.BatchJob.JobId).",
+      "Resource": "arn:aws:states:::aws-sdk:s3control:describeJob",
+      "Parameters": {
+        "AccountId.$": "$.SourceAccount.AccountId",
+        "JobId.$": "$.BatchJob.JobId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.JobStatus",
+      "Next": "EvaluateJobStatus",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "BatchJobFailed"
+        }
+      ]
+    },
+    "EvaluateJobStatus": {
+      "Type": "Choice",
+      "Comment": "Route on Job.Status enum. Terminal states: Complete (success), Failed/Cancelled (failure). All other states are non-terminal and loop back to WaitForJob.",
+      "Choices": [
+        {
+          "Variable": "$.JobStatus.Job.Status",
+          "StringEquals": "Complete",
+          "Next": "BatchSucceeded"
+        },
+        {
+          "Variable": "$.JobStatus.Job.Status",
+          "StringEquals": "Failed",
+          "Next": "BatchJobFailed"
+        },
+        {
+          "Variable": "$.JobStatus.Job.Status",
+          "StringEquals": "Cancelled",
+          "Next": "BatchJobFailed"
+        }
+      ],
+      "Default": "WaitForJob"
+    },
+    "BatchSucceeded": {
+      "Type": "Pass",
+      "Comment": "Normalize the success output, surfacing the job progress summary when present.",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "check_batch_replication",
+        "ProgressSummary.$": "$.JobStatus.Job.ProgressSummary"
+      },
+      "ResultPath": "$.Output",
+      "Next": "CheckSucceeded"
+    },
+    "CheckSucceeded": {
+      "Type": "Succeed"
+    },
+    "BatchJobFailed": {
+      "Type": "Fail",
+      "Error": "BatchReplicationJobNotComplete",
+      "Cause": "The S3 Batch Replication job reached a terminal failure state (Failed or Cancelled) or describeJob errored. See $.JobStatus.Job.Status / $.Error for details."
+    }
+  }
+}
