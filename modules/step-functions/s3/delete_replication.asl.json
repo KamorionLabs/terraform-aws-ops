@@ -4,7 +4,7 @@
   "States": {
     "GetReplicationConfig": {
       "Type": "Task",
-      "Comment": "Read the existing ReplicationConfiguration. GetBucketReplication throws ReplicationConfigurationNotFoundError when no config exists (Pitfall 1); that is an idempotent no-op for teardown -> NoReplicationExists. Any other error -> DeleteFailed.",
+      "Comment": "Read the existing ReplicationConfiguration. GetBucketReplication throws S3.ReplicationConfigurationNotFoundError ONLY when no config exists (Pitfall 1); that is an idempotent no-op for teardown -> NoReplicationExists. Any OTHER error (throttle/AccessDenied/transient) MUST route to DeleteFailed (CR-02) so a failed teardown is never reported as a no-op success.",
       "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
       "Parameters": {
         "Bucket.$": "$.SourceBucket"
@@ -16,10 +16,7 @@
       "Next": "FilterRules",
       "Catch": [
         {
-          "ErrorEquals": [
-            "S3.ReplicationConfigurationNotFoundError",
-            "S3.S3Exception"
-          ],
+          "ErrorEquals": ["S3.ReplicationConfigurationNotFoundError"],
           "ResultPath": "$.Error",
           "Next": "NoReplicationExists"
         },
