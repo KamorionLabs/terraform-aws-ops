@@ -659,3 +659,144 @@ resource "aws_iam_role_policy" "efs_replication" {
     ]
   })
 }
+
+# -----------------------------------------------------------------------------
+# IAM Policy - S3 Cross-Account Replication (orchestrator-assumed source role)
+# Gated by var.enable_s3 (default false) so existing deployments stay plan-noop.
+# Mirrors the EFS pattern: replication management + batch control + scoped PassRole.
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "s3_access" {
+  count = local.should_attach_policies && var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-s3-access"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ReplicationManage"
+        Effect = "Allow"
+        Action = [
+          "s3:PutBucketReplication",
+          "s3:GetBucketReplication",
+          "s3:GetBucketVersioning",
+          "s3:DeleteBucketReplication"
+        ]
+        # Generic module: kept broad here, tightened to client bucket ARNs at Phase 8 wiring.
+        Resource = "arn:aws:s3:::*"
+      },
+      {
+        Sid    = "S3BatchControl"
+        Effect = "Allow"
+        Action = [
+          # s3control:CreateJob / DescribeJob map to the s3: IAM namespace.
+          "s3:CreateJob",
+          "s3:DescribeJob"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "PassRoleToS3Replication"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-s3-replication-role"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = [
+              "s3.amazonaws.com",
+              "batchoperations.s3.amazonaws.com"
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# IAM Role - S3 Replication (assumed by S3 live replication + S3 Batch Operations)
+# Combined trust: both s3.amazonaws.com and batchoperations.s3.amazonaws.com.
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "s3_replication" {
+  count = var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-s3-replication-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAssumeByS3Service"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      },
+      {
+        Sid    = "AllowAssumeByS3BatchOperations"
+        Effect = "Allow"
+        Principal = {
+          Service = "batchoperations.s3.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "s3_replication" {
+  count = var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-s3-replication"
+  role = aws_iam_role.s3_replication[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3LiveReplicationRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket",
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging",
+          "s3:GetObjectRetention",
+          "s3:GetObjectLegalHold"
+        ]
+        # Generic module; concrete bucket/KMS ARNs are Phase 8 client wiring.
+        Resource = "*"
+      },
+      {
+        Sid    = "S3LiveReplicationWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags",
+          "s3:ObjectOwnerOverrideToBucketOwner"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "S3BatchInitiateReplication"
+        Effect = "Allow"
+        Action = [
+          "s3:InitiateReplication",
+          "s3:GetReplicationConfiguration",
+          "s3:PutInventoryConfiguration"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
