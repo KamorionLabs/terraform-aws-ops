@@ -61,6 +61,20 @@ output "efs_replication_role_name" {
 }
 
 # -----------------------------------------------------------------------------
+# S3 Replication Outputs
+# -----------------------------------------------------------------------------
+
+output "s3_replication_role_arn" {
+  description = "ARN of the S3 replication role (for cross-account replication)"
+  value       = var.enable_s3 ? aws_iam_role.s3_replication[0].arn : null
+}
+
+output "s3_replication_role_name" {
+  description = "Name of the S3 replication role"
+  value       = var.enable_s3 ? aws_iam_role.s3_replication[0].name : null
+}
+
+# -----------------------------------------------------------------------------
 # AWS Backup EFS Outputs
 # -----------------------------------------------------------------------------
 
