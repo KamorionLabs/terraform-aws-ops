@@ -35,7 +35,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 **Milestone Goal:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch), en miroir du pattern EFS — module s3/, IAM source-account, integration orchestrateur optionnelle, spec + tests. Perimetre generique uniquement (wiring client hors scope).
 
 - [x] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/` (completed 2026-06-19)
-- [ ] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS)
+- [x] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS) (completed 2026-06-22)
 - [ ] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda)
 
 ## Phase Details
@@ -65,7 +65,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
   2. Quand le bloc S3 est absent ou `S3.Enabled=false`, l'orchestrateur ignore completement la replication S3 et son comportement est strictement identique a avant (Choice state de garde)
   3. Quand active, l'orchestrateur invoque les SFN S3 (setup -> run_batch -> check_batch) via startExecution.sync:2 avec la configuration fournie
 **Plans**: 1 plan
-  - [ ] 08-01-PLAN.md — Tisser la branche S3 self-guarded (CheckS3Enabled) dans Phase1DataRefresh + reshape vers contrats figes + module step_functions_s3 racine + regeneration snapshot [ORCH-04, ORCH-05]
+  - [x] 08-01-PLAN.md — Tisser la branche S3 self-guarded (CheckS3Enabled) dans Phase1DataRefresh + reshape vers contrats figes + module step_functions_s3 racine + regeneration snapshot [ORCH-04, ORCH-05]
 
 ### Phase 9: Spec & Tests
 **Goal**: La documentation spec et la couverture de tests existent — `specs/repl-s3-sync.md` miroite `repl-efs-sync.md`, et la validation ASL couvre les nouvelles SFN (pas de tests Lambda — le module S3 ne contient aucun Lambda)
@@ -87,5 +87,5 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 | 5. Sync Engine | v1.1 | 2/2 | Complete | 2026-03-17 |
 | 6. Orchestrator Integration | v1.1 | 1/1 | Complete | 2026-03-17 |
 | 7. S3 Replication Module | v1.2 | 4/4 | Complete   | 2026-06-19 |
-| 8. Orchestrator Integration | v1.2 | 0/1 | Planning | - |
+| 8. Orchestrator Integration | v1.2 | 1/1 | Complete   | 2026-06-22 |
 | 9. Spec & Tests | v1.2 | 0/? | Planning | - |
