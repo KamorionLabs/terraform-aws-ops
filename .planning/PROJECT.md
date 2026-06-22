@@ -39,16 +39,17 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - ✓ Creation si inexistant + merge mode (preserve cles destination-only) + recursive SSM — v1.1
 - ✓ Lambda generique fetch/transform/write (pas de logique Rubix hardcodee) — v1.1
 - ✓ Integration orchestrateur via section ConfigSync optionnelle, phase configurable — v1.1
+- ✓ SFN generique setup_cross_account_replication (s3:PutBucketReplication, assume-role imperatif, read-merge-write priorite stable) — v1.2 (Phase 7)
+- ✓ SFN backfill objets existants via S3 Batch Operations (s3control:CreateJob/DescribeJob, GeneratedManifest) — v1.2 (Phase 7)
+- ✓ SFN delete_replication pour teardown (read-filter-write, coercition tableau) — v1.2 (Phase 7)
+- ✓ Fan-out hub-and-spoke 1 source -> N destinations (same-region) — v1.2 (Phase 7)
+- ✓ Role de replication S3 optionnel (var.enable_s3) + perms source + PassRole scope — v1.2 (Phase 7)
+- ✓ Validation ASL + gate JSONata reference-engine en CI (module S3 sans Lambda) — v1.2 (Phase 7)
 
 ### Active
 
-- [ ] SFN generique pour configurer la replication S3 cross-account (s3:PutBucketReplication, assume-role imperatif)
-- [ ] SFN pour backfill des objets existants via S3 Batch Operations (s3control:CreateJob/DescribeJob)
-- [ ] SFN delete_replication pour teardown de la config de replication
-- [ ] Fan-out hub-and-spoke 1 source -> N destinations (same-region)
-- [ ] Role de replication S3 optionnel + perms source dans modules/source-account/
-- [ ] Integration orchestrateur via bloc input S3 optionnel (analogue EFS)
-- [ ] Spec repl-s3-sync.md + validation ASL (module S3 sans Lambda — pas de tests unitaires Lambda)
+- [ ] Integration orchestrateur via bloc input S3 optionnel (analogue EFS) — Phase 8
+- [ ] Confirmation runtime AWS de la semantique JSONata S3 (stepfunctions-local) + spec repl-s3-sync.md — Phase 9
 
 ### Out of Scope
 
@@ -125,4 +126,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-17 after v1.2 milestone start*
+*Last updated: 2026-06-22 after Phase 7 completion*
