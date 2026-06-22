@@ -52,6 +52,26 @@ module "step_functions_efs" {
 }
 
 # -----------------------------------------------------------------------------
+# Step Functions - S3 Module
+# -----------------------------------------------------------------------------
+# Style A wiring (Phase 8): the module is instantiated so its 4 S3 SFN ARNs
+# exist; they reach the orchestrator at runtime via the execution-input
+# $.StepFunctions.S3.* (exactly like EFS/DB/EKS today), so no var is added to
+# the orchestrator module. The caller/stack that builds the execution input
+# (out of phase scope) consumes module.step_functions_s3.step_function_arns.
+module "step_functions_s3" {
+  source = "./modules/step-functions/s3"
+
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
+
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
+}
+
+# -----------------------------------------------------------------------------
 # Step Functions - EKS Module
 # -----------------------------------------------------------------------------
 module "step_functions_eks" {
