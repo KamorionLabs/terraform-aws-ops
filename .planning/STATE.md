@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: S3 Cross-Account Replication
-status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-06-22T22:54:58.458Z"
+status: ready_to_plan
+stopped_at: Phase 08 complete (1/1) — ready to discuss Phase 9
+last_updated: 2026-06-23T15:56:06.939Z
 last_activity: 2026-06-22 -- Phase 08 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 5
-  completed_plans: 4
+  completed_plans: 10
   percent: 33
 ---
 
@@ -21,20 +21,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-17)
 
 **Core value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
-**Current focus:** Phase 08 — orchestrator-integration
+**Current focus:** Phase 9 — spec & tests
 
 ## Current Position
 
-Phase: 08 (orchestrator-integration) — EXECUTING
-Plan: 1 of 1
-Status: Executing Phase 08
-Last activity: 2026-06-22 -- Phase 08 execution started
+Phase: 9
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-23
 
 ## Performance Metrics
 
 **Velocity (from v1.0):**
 
-- Total plans completed: 13
+- Total plans completed: 14
 - Average duration: 5min
 - Total execution time: 45min
 
@@ -46,6 +46,7 @@ Last activity: 2026-06-22 -- Phase 08 execution started
 | 2. Refactoring | 3/3 | 25min | 8min |
 | 3. Consolidation | 3/3 | 13min | 4min |
 | 07 | 4 | - | - |
+| 08 | 1 | - | - |
 
 **By Phase (v1.1):**
 
