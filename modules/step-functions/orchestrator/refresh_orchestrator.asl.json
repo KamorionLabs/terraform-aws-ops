@@ -132,7 +132,7 @@
         "OldEfsFileSystemId.$": "$.Output.OldEfsFileSystemId"
       },
       "ResultPath": "$.PrepareResult",
-      "Next": "MergePrepareResults",
+      "Next": "CheckS3Present",
       "Catch": [
         {
           "ErrorEquals": [
@@ -142,6 +142,26 @@
           "Next": "Phase1DataRefresh"
         }
       ]
+    },
+    "CheckS3Present": {
+      "Type": "Choice",
+      "Comment": "Normalise optional S3 block before MergePrepareResults forwards it. Legacy inputs carry no S3 key; injecting {Enabled:false} when absent lets MergePrepareResults use a hard $.S3 reference without a States.Runtime error, preserving strict ORCH-05 no-op behaviour.",
+      "Choices": [
+        {
+          "Variable": "$.S3",
+          "IsPresent": true,
+          "Next": "MergePrepareResults"
+        }
+      ],
+      "Default": "InjectS3Default"
+    },
+    "InjectS3Default": {
+      "Type": "Pass",
+      "Result": {
+        "Enabled": false
+      },
+      "ResultPath": "$.S3",
+      "Next": "MergePrepareResults"
     },
     "MergePrepareResults": {
       "Type": "Pass",
@@ -162,6 +182,7 @@
         "MergedDatabaseTags.$": "$.Tags",
         "MergedEfsTags.$": "$.Tags",
         "ConfigSync.$": "$.ConfigSync",
+        "S3.$": "$.S3",
         "ComputedDumpSubPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $$.Execution.Name)"
       },
       "Next": "CheckEFSReplicationMode"
