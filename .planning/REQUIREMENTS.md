@@ -23,8 +23,8 @@ Requirements pour la replication S3 cross-account. Chaque requirement mappe a un
 
 ### Integration Orchestrator
 
-- [ ] **ORCH-04**: Bloc input S3 optionnel dans `refresh_orchestrator` (analogue bloc EFS) pilotant une phase de replication S3 optionnelle ; structure d'input mirroir de `EFS` (Source/Destination/Replication)
-- [ ] **ORCH-05**: Quand le bloc S3 est absent ou desactive (`S3.Enabled=false`), l'orchestrateur ignore completement la replication S3 et son comportement est strictement identique a avant
+- [x] **ORCH-04**: Bloc input S3 optionnel dans `refresh_orchestrator` (analogue bloc EFS) pilotant une phase de replication S3 optionnelle ; structure d'input mirroir de `EFS` (Source/Destination/Replication)
+- [x] **ORCH-05**: Quand le bloc S3 est absent ou desactive (`S3.Enabled=false`), l'orchestrateur ignore completement la replication S3 et son comportement est strictement identique a avant
 
 ### Infrastructure & Spec
 
@@ -61,8 +61,8 @@ Deferred a un milestone futur.
 | REPL-06 | Phase 7 | Planning |
 | IAM-01 | Phase 7 | Planning |
 | IAM-02 | Phase 7 | Planning |
-| ORCH-04 | Phase 8 | Planning |
-| ORCH-05 | Phase 8 | Planning |
+| ORCH-04 | Phase 8 | Complete |
+| ORCH-05 | Phase 8 | Complete |
 | INFRA-03 | Phase 9 | Planning |
 | INFRA-04 | Phase 9 | Planning |
 
