@@ -1,41 +1,40 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: Secrets & Parameters Sync
-status: completed
-stopped_at: Completed 06-01-PLAN.md
-last_updated: "2026-03-17T13:58:06.830Z"
-last_activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
+milestone: v1.2
+milestone_name: S3 Cross-Account Replication
+status: milestone_complete
+stopped_at: Phase 09 complete — milestone v1.2 (S3 cross-account replication) complete
+last_updated: 2026-07-01T00:00:00.000Z
+last_activity: 2026-07-01 -- Phase 09 spec delivered (specs/repl-s3-sync.md); tofu validate + jsonata tests pass
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 5
-  completed_plans: 5
+  completed_plans: 10
+  percent: 100
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-16)
+See: .planning/PROJECT.md (updated 2026-06-17)
 
-**Core value:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS, avec transformations configurables.
-**Current focus:** Milestone v1.1 — Phase 6 Orchestrator Integration COMPLETE (1/1 plan done)
+**Core value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
+**Current focus:** Milestone v1.2 complete — ready for next milestone
 
 ## Current Position
 
-Phase: 6 of 6 (Orchestrator Integration)
-Plan: 1 of 1 complete
-Status: Milestone v1.1 complete
-Last activity: 2026-03-17 — Plan 06-01 executed (orchestrator integration with ConfigSync)
-
-Progress (v1.1): [██████████] 100%
-Progress (overall): [██████████] 100%
+Phase: 9
+Plan: Complete (spec delivered)
+Status: Milestone complete
+Last activity: 2026-07-01
 
 ## Performance Metrics
 
 **Velocity (from v1.0):**
-- Total plans completed: 9
+
+- Total plans completed: 14
 - Average duration: 5min
 - Total execution time: 45min
 
@@ -46,6 +45,8 @@ Progress (overall): [██████████] 100%
 | 1. Extraction | 3/3 | 7min | 2min |
 | 2. Refactoring | 3/3 | 25min | 8min |
 | 3. Consolidation | 3/3 | 13min | 4min |
+| 07 | 4 | - | - |
+| 08 | 1 | - | - |
 
 **By Phase (v1.1):**
 
@@ -56,11 +57,16 @@ Progress (overall): [██████████] 100%
 | 6. Orchestrator Integration | 1/1 | 3min | 3min |
 
 **Recent Trend:**
+
 - Last 5 plans: 04-01 (4min), 04-02 (2min), 05-01 (4min), 05-02 (3min), 06-01 (3min)
 - Trend: Stable
+
 | Phase 05 P01 | 4min | 2 tasks | 2 files |
 | Phase 05 P02 | 3min | 2 tasks | 1 file |
 | Phase 06 P01 | 3min | 2 tasks | 4 files |
+| Phase 07 P02 | 5min | 2 tasks | 2 files |
+| Phase 07 P03 | 8min | 3 tasks | 3 files |
+| Phase 07 P04 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -89,17 +95,37 @@ Decisions v1.1 :
 - [06-01]: lookup() with empty default for sync_config_items_arn to avoid errors when sync module not deployed
 - [06-01]: ConfigSync preserved in MergePrepareResults to survive PrepareRefresh phase
 
+Decisions v1.2 (verrouillees a l'ouverture du milestone) :
+
+- [Roadmap]: setup_cross_account_replication DOIT etre imperatif (assume-role runtime Credentials.RoleArn.$) — bucket source owned par stack externe, du Terraform declaratif entrerait en conflit
+- [Roadmap]: Privilegier integrations SDK aws-sdk:s3:* / aws-sdk:s3control:*
+- [Phase 7]: ANNULE — pas de Lambda dans le module S3. Sync-status via SDK natif (GetBucketReplication + DescribeJob). Compare objet hors scope v1.2 (revirement de la decision d'ouverture ; cf. 07-CONTEXT.md)
+- [Phase 7]: Fan-out S3 par merge de rules (Map + Get/merge/Put), versioning validate-only, delete symetrique, repl options configurables (RTC/Metrics/StorageClass), backfill = S3 Batch Replication S3ReplicateObject + GeneratedManifest
+- [Roadmap]: S3 live replication ne cascade pas les replicas — backfill objets existants = S3 Batch job ; module supporte les deux
+- [Roadmap]: Same-region (eu-central-1), hub-and-spoke 1 source -> N destinations
+- [Roadmap]: Grants cote destination (bucket policy + KMS key policy) = stack client NewHorizon-IaC-Webshop, HORS SCOPE
+- [Roadmap]: Wiring client (NewHorizon-IaC-AWS-Refresh + role sharedservices/refresh + inputs) HORS SCOPE
+- [Roadmap]: Rubix target topology (wiring client ulterieur) : s3-dig-prd-pim-media (366483377530) -> s3-dig-ppd-pim-media (287223952330) + s3-dig-stg-pim-media (281127105461)
+- [Phase ?]: [07-01]: Rule-ID convention repl-<DestAccountId>-<DestBucketBasename> (truncated 255) shared by setup and delete
+- [Phase ?]: [07-01]: setup uses MaxConcurrency:1 Map read-merge-write; RTC forces Metrics+ReplicationTime; Priority = kept-count + Map index
+- [Phase ?]: [07-01]: delete is symmetric read-filter-write; DeleteBucketReplication when none remain else PutBucketReplication; idempotent on not-found
+- [Phase ?]: [07-02]: run_batch ASL backfills all destinations in one s3control:createJob (S3ReplicateObject + S3JobManifestGenerator, no Inventory), fresh States.UUID() token
+- [Phase ?]: [07-02]: check_batch ASL polls s3control:describeJob in a 30s Wait+Choice loop; Complete->Succeed, Failed/Cancelled->Fail, non-terminal->loop
+- [Phase ?]: [07-02]: ShouldEnableReport Choice on ReportBucketArn IsPresent (O1) — two static createJob states rather than dynamic Report.Bucket injection
+- [Phase ?]: [07-03]: enable_s3 defaults false (S3 new, plan-noop for current consumers) vs enable_efs default true; s3control actions written under s3: IAM namespace; module Resources kept broad (Phase 8 wiring tightens ARNs)
+- [Phase ?]: [07-04]: s3 module mirrors EFS file()-map skeleton (single for_each + log group), drops EFS templatefile/sub-SFN maps + moved blocks (no sub-SFN ARN injection), Lambda-free per D-09; outputs collapse the EFS 3-way merge to a single map over aws_sfn_state_machine.s3; terraform validate/fmt deferred to orchestrator (sandbox refused tofu)
+
 ### Pending Todos
 
 None yet.
 
 ### Blockers/Concerns
 
-- [Pre-Phase 4]: Confirmer le pattern IAM pour cross-account SM/SSM access (quelles permissions sur le role assume)
-- [Pre-Phase 4]: Definir le schema input ConfigSync avant implementation (contrat d'interface)
+- [Pre-Phase 7]: Definir le schema input du bloc S3 optionnel (contrat d'interface, mirroir du bloc EFS) avant implementation
+- [Note]: v1.1 complet (audit passed 13/13) mais PAS archive via /gsd-complete-milestone — artifacts phases 04/05/06 preserves, MILESTONES.md non mis a jour pour v1.1
 
 ## Session Continuity
 
-Last session: 2026-03-17T11:59:58.887Z
-Stopped at: Completed 06-01-PLAN.md
-Resume file: None
+Last session: 2026-06-22T21:28:28.981Z
+Stopped at: Phase 8 context gathered
+Resume file: .planning/phases/08-orchestrator-integration/08-CONTEXT.md

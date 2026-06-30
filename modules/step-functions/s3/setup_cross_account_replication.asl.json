@@ -1,0 +1,174 @@
+{
+  "Comment": "Sets up S3 cross-account live replication on a source bucket owned by an external stack. Validates (never mutates) source versioning, then performs a SINGLE atomic read-merge-write on the one ReplicationConfiguration per bucket (WR-01): GetBucketReplication once, merge ALL Destinations[] Rules in one JSONata pass, PutBucketReplication once. PutBucketReplication replaces the whole config, so each spoke's Rule is keyed by a deterministic ID 'repl-<DestAccountId>-<DestBucketBasename>'; existing Rules for other spokes are preserved. Priority is stable per destination (CR-03): an existing rule's priority is reused, new destinations get max(existing priorities)+1, avoiding collisions on re-run. Every S3 Task assumes the source role imperatively via Credentials.RoleArn.$.",
+  "StartAt": "GetSourceVersioning",
+  "States": {
+    "GetSourceVersioning": {
+      "Type": "Task",
+      "Comment": "Validate-only versioning check (D-03). Reads the source bucket versioning status; never calls PutBucketVersioning.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getBucketVersioning",
+      "Parameters": {
+        "Bucket.$": "$.SourceBucket"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.Versioning",
+      "Next": "IsVersioningEnabled",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "IsVersioningEnabled": {
+      "Type": "Choice",
+      "Comment": "Gate on source bucket versioning. S3 replication requires versioning Enabled on the source.",
+      "Choices": [
+        {
+          "Variable": "$.Versioning.Status",
+          "StringEquals": "Enabled",
+          "Next": "HasDestinations"
+        }
+      ],
+      "Default": "VersioningNotEnabled"
+    },
+    "VersioningNotEnabled": {
+      "Type": "Fail",
+      "Error": "SourceVersioningNotEnabled",
+      "Cause": "Source bucket versioning must be Enabled before configuring replication. The client stack that owns the source bucket must enable versioning; this module is validate-only (D-03) and never mutates the source bucket."
+    },
+    "HasDestinations": {
+      "Type": "Choice",
+      "Comment": "Guard against an empty Destinations[] invocation (IN-04): short-circuit to a clear no-op rather than silently writing an unchanged config.",
+      "Choices": [
+        {
+          "Variable": "$.Destinations[0]",
+          "IsPresent": true,
+          "Next": "ReadExistingConfig"
+        }
+      ],
+      "Default": "NoDestinationsProvided"
+    },
+    "NoDestinationsProvided": {
+      "Type": "Pass",
+      "Comment": "No destinations supplied: nothing to configure. Reported explicitly so an empty-destinations invocation is not a silent success.",
+      "Parameters": {
+        "Status": "NoDestinations",
+        "ModuleName": "setup_cross_account_replication",
+        "SourceBucket.$": "$.SourceBucket",
+        "Message": "No destinations provided; no replication rules were added or changed."
+      },
+      "Next": "SetupSucceeded"
+    },
+    "ReadExistingConfig": {
+      "Type": "Task",
+      "Comment": "Read the current ReplicationConfiguration ONCE before merging (WR-01: single atomic read-merge-write, no per-destination read-back). GetBucketReplication throws S3.ReplicationConfigurationNotFoundError ONLY when no config exists (Pitfall 1) -> seed an empty config. Any other error (throttle/AccessDenied/transient) MUST NOT seed an empty config, otherwise PutBucketReplication would overwrite every other spoke's Rule (CR-01); route those to SetupFailed.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
+      "Parameters": {
+        "Bucket.$": "$.SourceBucket"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.Existing",
+      "Next": "MergeAllRules",
+      "Catch": [
+        {
+          "ErrorEquals": ["S3.ReplicationConfigurationNotFoundError"],
+          "ResultPath": "$.ExistingError",
+          "Next": "SeedEmptyConfig"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ExistingError",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "SeedEmptyConfig": {
+      "Type": "Pass",
+      "Comment": "No existing replication config on the source bucket: seed an empty Rules array keyed by the replication role.",
+      "Parameters": {
+        "ReplicationConfiguration": {
+          "Role.$": "$.ReplicationRoleArn",
+          "Rules": []
+        }
+      },
+      "ResultPath": "$.Existing",
+      "Next": "MergeAllRules"
+    },
+    "MergeAllRules": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Single-pass merge (WR-01) of every destination into the existing Rules array. For each destination: compute its deterministic ID 'repl-<DestAccountId>-<DestBucketBasename>' (truncated to 255 chars). Reduce over Destinations[] starting from the existing Rules: for each destination, drop any existing Rule with the same ID, then append a freshly-built Rule. Priority is STABLE per destination (CR-03): if a Rule with this ID already exists, reuse its Priority; otherwise assign max(current accumulator priorities)+1. Because the reduce threads the accumulator, priorities assigned to new destinations within the same run are also collision-free. RTC forces Metrics (Pitfall 4); Filter requires ID+Status+Priority+DeleteMarkerReplication (Pitfall 3).",
+      "Assign": {
+        "mergedRules": "{% ($existingRules := $exists($states.input.Existing.ReplicationConfiguration.Rules) ? $states.input.Existing.ReplicationConfiguration.Rules : []; $reduce($states.input.Destinations, function($acc, $dest) { ($bucketParts := $split($dest.Bucket, '/'); $bucketName := $bucketParts[$count($bucketParts) - 1]; $rawId := 'repl-' & $dest.AccountId & '-' & $bucketName; $ruleId := $length($rawId) > 255 ? $substring($rawId, 0, 255) : $rawId; $self := $acc[ID = $ruleId]; $kept := $filter($acc, function($r) { $r.ID != $ruleId }); $maxPrio := $count($kept) = 0 ? -1 : $max($kept.Priority); $priority := $exists($self) ? $self.Priority : $maxPrio + 1; $rtcEnabled := $exists($dest.RTC) and $dest.RTC.Status = 'Enabled'; $destination := $merge([ {'Bucket': $dest.Bucket, 'Account': $dest.AccountId}, $exists($dest.StorageClass) ? {'StorageClass': $dest.StorageClass} : {}, $rtcEnabled ? {'Metrics': {'Status': 'Enabled', 'EventThreshold': {'Minutes': 15}}, 'ReplicationTime': {'Status': 'Enabled', 'Time': {'Minutes': 15}}} : ($exists($dest.Metrics) and $dest.Metrics.Status = 'Enabled' ? {'Metrics': {'Status': 'Enabled', 'EventThreshold': {'Minutes': 15}}} : {}) ]); $newRule := {'ID': $ruleId, 'Status': 'Enabled', 'Priority': $priority, 'Filter': {'Prefix': $exists($dest.Prefix) ? $dest.Prefix : ''}, 'DeleteMarkerReplication': {'Status': $exists($dest.DeleteMarkerReplication) ? $dest.DeleteMarkerReplication.Status : 'Disabled'}, 'Destination': $destination}; $append($kept, [$newRule])) }, $existingRules)) %}",
+        "replicationRole": "{% $exists($states.input.Existing.ReplicationConfiguration.Role) ? $states.input.Existing.ReplicationConfiguration.Role : $states.input.ReplicationRoleArn %}",
+        "sourceBucket": "{% $states.input.SourceBucket %}",
+        "sourceRoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Next": "AssertDistinctPriorities"
+    },
+    "AssertDistinctPriorities": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "Defense-in-depth (CR-03): assert priorities are distinct across all merged Rules before PutBucketReplication. S3 V2 rules with a Filter require unique Priority; a duplicate would be rejected by the API. Fail fast with a clear error rather than surfacing an opaque PutBucketReplication rejection.",
+      "Choices": [
+        {
+          "Condition": "{% $count($mergedRules) = $count($distinct($mergedRules.Priority)) %}",
+          "Next": "WriteConfig"
+        }
+      ],
+      "Default": "DuplicatePriority"
+    },
+    "DuplicatePriority": {
+      "Type": "Fail",
+      "Error": "DuplicateReplicationPriority",
+      "Cause": "The merged ReplicationConfiguration contains duplicate Rule priorities, which PutBucketReplication would reject. This indicates a priority-derivation bug (CR-03)."
+    },
+    "WriteConfig": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Write the full merged Rules array back in a SINGLE PutBucketReplication (WR-01). PutBucketReplication replaces the entire ReplicationConfiguration (Pitfall 2), so the complete merged set is always written.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:putBucketReplication",
+      "Arguments": {
+        "Bucket": "{% $sourceBucket %}",
+        "ReplicationConfiguration": {
+          "Role": "{% $replicationRole %}",
+          "Rules": "{% $mergedRules %}"
+        }
+      },
+      "Credentials": {
+        "RoleArn": "{% $sourceRoleArn %}"
+      },
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "setup_cross_account_replication",
+        "SourceBucket.$": "$.SourceBucket",
+        "Message": "Cross-account replication configuration merged for all destinations on the source bucket in a single atomic write."
+      },
+      "Next": "SetupSucceeded"
+    },
+    "SetupFailed": {
+      "Type": "Fail",
+      "Error": "SetupReplicationFailed",
+      "Cause": "Failed to set up S3 cross-account replication configuration."
+    },
+    "SetupSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

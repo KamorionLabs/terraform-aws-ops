@@ -132,7 +132,7 @@
         "OldEfsFileSystemId.$": "$.Output.OldEfsFileSystemId"
       },
       "ResultPath": "$.PrepareResult",
-      "Next": "MergePrepareResults",
+      "Next": "CheckS3Present",
       "Catch": [
         {
           "ErrorEquals": [
@@ -142,6 +142,26 @@
           "Next": "Phase1DataRefresh"
         }
       ]
+    },
+    "CheckS3Present": {
+      "Type": "Choice",
+      "Comment": "Normalise optional S3 block before MergePrepareResults forwards it. Legacy inputs carry no S3 key; injecting {Enabled:false} when absent lets MergePrepareResults use a hard $.S3 reference without a States.Runtime error, preserving strict ORCH-05 no-op behaviour.",
+      "Choices": [
+        {
+          "Variable": "$.S3",
+          "IsPresent": true,
+          "Next": "MergePrepareResults"
+        }
+      ],
+      "Default": "InjectS3Default"
+    },
+    "InjectS3Default": {
+      "Type": "Pass",
+      "Result": {
+        "Enabled": false
+      },
+      "ResultPath": "$.S3",
+      "Next": "MergePrepareResults"
     },
     "MergePrepareResults": {
       "Type": "Pass",
@@ -162,6 +182,7 @@
         "MergedDatabaseTags.$": "$.Tags",
         "MergedEfsTags.$": "$.Tags",
         "ConfigSync.$": "$.ConfigSync",
+        "S3.$": "$.S3",
         "ComputedDumpSubPath.$": "States.Format('refresh-mysqldump-{}-{}', $.EKS.Namespace, $$.Execution.Name)"
       },
       "Next": "CheckEFSReplicationMode"
@@ -1111,6 +1132,147 @@
               "Type": "Fail",
               "Error": "EFSRefreshFailed",
               "Cause": "EFS restore process failed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch D: Optional S3 cross-account replication (setup + optional backfill). Self-guarded by CheckS3Enabled: a run without an S3 block, or with S3.Enabled=false, reduces to an instant no-op Succeed (ORCH-05/D-03), leaving the reachable-set strictly identical to before. No teardown (D-06).",
+          "StartAt": "CheckS3Enabled",
+          "States": {
+            "CheckS3Enabled": {
+              "Type": "Choice",
+              "Comment": "Activation guard (D-03/ORCH-05): only the operational path requires $.S3.Enabled present AND true. Absent S3 key fails IsPresent and falls to the no-op Succeed Default.",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.S3.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.S3.Enabled",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "S3SetupReplication"
+                }
+              ],
+              "Default": "S3ReplicationComplete"
+            },
+            "S3SetupReplication": {
+              "Type": "Task",
+              "Comment": "Always invoked when S3.Enabled (D-04). Reshapes the EFS-mirror S3 input block to the frozen setup_cross_account_replication contract (D-10). No Credentials here: the cross-account assume-role happens inside the S3 SFN.",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.S3.SetupCrossAccountReplication",
+                "Input": {
+                  "SourceBucket.$": "$.S3.Source.Bucket",
+                  "Destinations.$": "$.S3.Destinations",
+                  "ReplicationRoleArn.$": "$.S3.Replication.RoleArn",
+                  "SourceAccount.$": "$.S3.Source.Account"
+                },
+                "Name.$": "States.Format('{}-S3Setup', $$.Execution.Name)"
+              },
+              "ResultPath": "$.S3SetupResult",
+              "Next": "CheckS3BackfillEnabled",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.S3Error",
+                  "Next": "S3ReplicationFailed"
+                }
+              ]
+            },
+            "CheckS3BackfillEnabled": {
+              "Type": "Choice",
+              "Comment": "Backfill sub-toggle (D-05): run_batch + check_batch only when $.S3.Backfill.Enabled present AND true; otherwise skip straight to the Succeed.",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.S3.Backfill.Enabled",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.S3.Backfill.Enabled",
+                      "BooleanEquals": true
+                    }
+                  ],
+                  "Next": "S3RunBatch"
+                }
+              ],
+              "Default": "S3ReplicationComplete"
+            },
+            "S3RunBatch": {
+              "Type": "Task",
+              "Comment": "Dispatch the S3 Batch Replication job (D-05). Reshape to the frozen run_batch_replication contract. No manifest/override field is passed: the NONE/FAILED filter stays inside the frozen SFN (D-08). ReportBucketArn is intentionally omitted (the contract treats absence via ShouldEnableReport).",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.S3.RunBatchReplication",
+                "Input": {
+                  "SourceBucket.$": "$.S3.Source.Bucket",
+                  "SourceBucketArn.$": "$.S3.Source.BucketArn",
+                  "BatchReplicationRoleArn.$": "$.S3.Replication.BatchReplicationRoleArn",
+                  "SourceAccount.$": "$.S3.Source.Account"
+                },
+                "Name.$": "States.Format('{}-S3RunBatch', $$.Execution.Name)"
+              },
+              "ResultPath": "$.S3BatchResult",
+              "Next": "S3PrepareJobId",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.S3Error",
+                  "Next": "S3ReplicationFailed"
+                }
+              ]
+            },
+            "S3PrepareJobId": {
+              "Type": "Pass",
+              "Comment": "Re-extract the .sync:2 envelope (D-10): run_batch emits $.S3BatchResult.Output.JobId; check_batch expects $.BatchJob.JobId. Produce $.S3BatchJob.JobId for the next Task.",
+              "Parameters": {
+                "JobId.$": "$.S3BatchResult.Output.JobId"
+              },
+              "ResultPath": "$.S3BatchJob",
+              "Next": "S3CheckBatch"
+            },
+            "S3CheckBatch": {
+              "Type": "Task",
+              "Comment": "Poll the batch job to completion (D-05/D-07). Reshape to the frozen check_batch_replication contract: BatchJob.JobId from the re-extracted $.S3BatchJob.JobId, plus SourceAccount.",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.S3.CheckBatchReplication",
+                "Input": {
+                  "BatchJob": {
+                    "JobId.$": "$.S3BatchJob.JobId"
+                  },
+                  "SourceAccount.$": "$.S3.Source.Account"
+                },
+                "Name.$": "States.Format('{}-S3CheckBatch', $$.Execution.Name)"
+              },
+              "ResultPath": "$.S3CheckResult",
+              "Next": "S3ReplicationComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.S3Error",
+                  "Next": "S3ReplicationFailed"
+                }
+              ]
+            },
+            "S3ReplicationComplete": {
+              "Type": "Succeed"
+            },
+            "S3ReplicationFailed": {
+              "Type": "Fail",
+              "Error": "S3ReplicationFailed",
+              "Cause": "S3 cross-account replication setup or backfill failed"
             }
           }
         }

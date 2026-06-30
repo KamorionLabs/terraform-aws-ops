@@ -659,3 +659,171 @@ resource "aws_iam_role_policy" "efs_replication" {
     ]
   })
 }
+
+# -----------------------------------------------------------------------------
+# IAM Policy - S3 Cross-Account Replication (orchestrator-assumed source role)
+# Gated by var.enable_s3 (default false) so existing deployments stay plan-noop.
+# Mirrors the EFS pattern: replication management + batch control + scoped PassRole.
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "s3_access" {
+  count = local.should_attach_policies && var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-s3-access"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3ReplicationManage"
+        Effect = "Allow"
+        Action = [
+          "s3:PutBucketReplication",
+          "s3:GetBucketReplication",
+          "s3:GetBucketVersioning",
+          "s3:DeleteBucketReplication"
+        ]
+        # Generic module: kept broad here, tightened to client bucket ARNs at Phase 8 wiring.
+        Resource = "arn:aws:s3:::*"
+      },
+      {
+        Sid    = "S3BatchControl"
+        Effect = "Allow"
+        Action = [
+          # s3control:CreateJob / DescribeJob map to the s3: IAM namespace.
+          "s3:CreateJob",
+          "s3:DescribeJob"
+        ]
+        # TODO(Phase 8 / WR-04): CreateJob is powerful (can target arbitrary
+        # batch operations). Resource "*" is acceptable for this generic
+        # module but MUST be tightened at client wiring -- scope to the
+        # concrete source-account job ARNs alongside the bucket-ARN
+        # tightening below.
+        Resource = "*"
+      },
+      {
+        Sid    = "PassRoleToS3Replication"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-s3-replication-role"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = [
+              "s3.amazonaws.com",
+              "batchoperations.s3.amazonaws.com"
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# IAM Role - S3 Replication (assumed by S3 live replication + S3 Batch Operations)
+# Combined trust: both s3.amazonaws.com and batchoperations.s3.amazonaws.com.
+# -----------------------------------------------------------------------------
+
+# NOTE (WR-06): when enable_s3 is true this role is ALWAYS created with the
+# fixed name "${local.prefixes.iam_role}-s3-replication-role", and the
+# PassRoleToS3Replication statement in aws_iam_role_policy.s3_access is
+# hard-bound to that exact name. A client bringing their own replication role
+# under a different name would NOT be covered by that PassRole statement; in
+# that case the PassRole Resource must be parameterized. The precondition
+# below guards the related role-name pitfall (existing_role_name required when
+# create_role=false and attach_policies=true) so policies are never silently
+# dropped.
+resource "aws_iam_role" "s3_replication" {
+  count = var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_role}-s3-replication-role"
+
+  lifecycle {
+    precondition {
+      condition     = !(var.attach_policies && !var.create_role && (var.existing_role_name == null || var.existing_role_name == ""))
+      error_message = "When enable_s3=true, create_role=false and attach_policies=true, existing_role_name must be set: the s3_access inline policy (and its PassRole grant) attaches by role name. Otherwise should_attach_policies becomes false and the S3 source permissions are silently not attached (WR-06)."
+    }
+  }
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowAssumeByS3Service"
+        Effect = "Allow"
+        Principal = {
+          Service = "s3.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      },
+      {
+        Sid    = "AllowAssumeByS3BatchOperations"
+        Effect = "Allow"
+        Principal = {
+          Service = "batchoperations.s3.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "s3_replication" {
+  count = var.enable_s3 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-s3-replication"
+  role = aws_iam_role.s3_replication[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "S3LiveReplicationRead"
+        Effect = "Allow"
+        Action = [
+          "s3:GetReplicationConfiguration",
+          "s3:ListBucket",
+          "s3:GetObjectVersionForReplication",
+          "s3:GetObjectVersionAcl",
+          "s3:GetObjectVersionTagging",
+          "s3:GetObjectRetention",
+          "s3:GetObjectLegalHold"
+        ]
+        # Generic module; concrete bucket/KMS ARNs are Phase 8 client wiring.
+        Resource = "*"
+      },
+      {
+        Sid    = "S3LiveReplicationWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:ReplicateObject",
+          "s3:ReplicateDelete",
+          "s3:ReplicateTags",
+          "s3:ObjectOwnerOverrideToBucketOwner"
+        ]
+        # TODO(Phase 8 / WR-04): s3:ReplicateDelete + ObjectOwnerOverride on
+        # Resource "*" lets the replication role replicate-delete and override
+        # ownership on any reachable bucket. This is the standard live-
+        # replication service-role shape, but "*" is broader than necessary --
+        # tighten to the concrete destination bucket ARNs (and KMS key ARNs)
+        # at client wiring.
+        Resource = "*"
+      },
+      {
+        Sid    = "S3BatchInitiateReplication"
+        Effect = "Allow"
+        Action = [
+          "s3:InitiateReplication",
+          "s3:GetReplicationConfiguration",
+          "s3:PutInventoryConfiguration"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}

@@ -37,6 +37,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install JSONata check dependencies
+        working-directory: tests/jsonata
+        run: npm ci
+
+      - name: Validate JSONata expressions (reference engine)
+        working-directory: tests/jsonata
+        run: npm test
+
       - name: Validate JSON syntax
         run: |
           echo "Validating JSON syntax..."

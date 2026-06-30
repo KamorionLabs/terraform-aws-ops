@@ -1,0 +1,14 @@
+{
+  "name": "asl-jsonata-checks",
+  "private": true,
+  "version": "1.0.0",
+  "description": "JSONata grammar + semantic regression checks for Step Functions ASL. Validates {% ... %} expressions against the reference jsonata engine used by AWS Step Functions — catches grammar errors (e.g. multi-statement lambda bodies without parentheses) that `tofu validate` and the Python ASL structural tests cannot detect.",
+  "scripts": {
+    "test": "node validate-jsonata.js && node s3-replication.test.js",
+    "test:parse": "node validate-jsonata.js",
+    "test:semantics": "node s3-replication.test.js"
+  },
+  "dependencies": {
+    "jsonata": "^2.0.0"
+  }
+}

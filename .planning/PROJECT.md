@@ -33,15 +33,23 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - ✓ Tests ASL de validation pour chaque nouvelle sous-SFN — v1.0
 - ✓ Tests de non-regression des interfaces (snapshots JSON) — v1.0
 - ✓ Fix CI GitHub Actions (strip_credentials, matrix EFS/DB) — v1.0
+- ✓ SFN SyncConfigItems unique (SM + SSM via Choice state, fetch/transform/write) — v1.1
+- ✓ Fetch cross-account multi-region via sts:AssumeRole + path mapping configurable — v1.1
+- ✓ Transformations de valeurs dans les secrets JSON (regex/literal par cle) — v1.1
+- ✓ Creation si inexistant + merge mode (preserve cles destination-only) + recursive SSM — v1.1
+- ✓ Lambda generique fetch/transform/write (pas de logique Rubix hardcodee) — v1.1
+- ✓ Integration orchestrateur via section ConfigSync optionnelle, phase configurable — v1.1
+- ✓ SFN generique setup_cross_account_replication (s3:PutBucketReplication, assume-role imperatif, read-merge-write priorite stable) — v1.2 (Phase 7)
+- ✓ SFN backfill objets existants via S3 Batch Operations (s3control:CreateJob/DescribeJob, GeneratedManifest) — v1.2 (Phase 7)
+- ✓ SFN delete_replication pour teardown (read-filter-write, coercition tableau) — v1.2 (Phase 7)
+- ✓ Fan-out hub-and-spoke 1 source -> N destinations (same-region) — v1.2 (Phase 7)
+- ✓ Role de replication S3 optionnel (var.enable_s3) + perms source + PassRole scope — v1.2 (Phase 7)
+- ✓ Validation ASL + gate JSONata reference-engine en CI (module S3 sans Lambda) — v1.2 (Phase 7)
 
 ### Active
 
-- [ ] SFN generique pour synchroniser des secrets SM cross-account avec path mapping configurable
-- [ ] SFN generique pour synchroniser des parametres SSM cross-account avec path mapping configurable
-- [ ] Transformations de valeurs configurables dans les secrets JSON (remplacement endpoints, IPs, etc.)
-- [ ] Creation automatique des secrets/parametres cote destination si inexistants
-- [ ] Merge mode : preserver les cles destination-only lors de la sync
-- [ ] Configuration via l'input JSON de l'orchestrateur (optionnel, activable par refresh)
+- [ ] Integration orchestrateur via bloc input S3 optionnel (analogue EFS) — Phase 8
+- [ ] Confirmation runtime AWS de la semantique JSONata S3 (stepfunctions-local) + spec repl-s3-sync.md — Phase 9
 
 ### Out of Scope
 
@@ -52,30 +60,30 @@ Chaque pattern ASL duplique n'existe qu'une seule fois, dans une sous-SFN reutil
 - Rollback automatique depuis le parent — impossible par design AWS SFN
 - Execution parallele sous-SFN — complexite concurrence, revisiter si latence mesuree
 
-## Current Milestone: v1.1 Secrets & Parameters Sync
+## Current Milestone: v1.2 S3 Cross-Account Replication
 
-**Goal:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS source et destination, avec transformations configurables.
+**Goal:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch), en miroir du pattern EFS — module s3/, IAM source-account, integration orchestrateur optionnelle, spec + tests. Perimetre generique uniquement (wiring client hors scope).
 
 **Target features:**
-- Sync secrets Secrets Manager cross-account avec path mapping
-- Sync parametres SSM cross-account avec path mapping
-- Transformations de valeurs dans les secrets JSON
-- Creation si inexistant, merge mode, key filtering
-- Configuration via input JSON (optionnel dans le refresh orchestrator)
+- SFN setup_cross_account_replication (s3:PutBucketReplication, assume-role imperatif — bucket source owned par stack externe)
+- SFN run_batch_replication + check_batch_replication (backfill via S3 Batch Operations)
+- SFN delete_replication (teardown)
+- Fan-out hub-and-spoke 1 source -> N destinations, same-region (eu-central-1)
+- Role de replication S3 optionnel + perms source (analogue EFS) dans modules/source-account/
+- Bloc input S3 optionnel pilotant une phase optionnelle dans refresh_orchestrator
+- specs/repl-s3-sync.md + validation ASL (aucun Lambda dans le module S3 — sync-status via SDK natif)
 
 ## Context
 
-Shipped v1.0 — Step Functions Modularization complete.
+Shipped v1.0 (Modularization) + v1.1 (Secrets & Parameters Sync — audit passed 13/13).
 
-- 44 fichiers ASL, 6 sous-SFN reutilisables
-- Plus gros fichier : manage_storage.asl.json (31 states, unifie pub/priv)
-- 0 paires public/private restantes (6 consolidees via EKS.AccessMode)
-- 0 duplication de patterns (54 states dupliques elimines)
+- 44+ fichiers ASL, 6 sous-SFN reutilisables + SFN SyncConfigItems (SM/SSM)
 - 916+ tests ASL passent (auto-decouverte via rglob)
 - Architecture Terraform : triple-map (EFS) et dual-map (DB) avec moved blocks
-- Commutateur pub/priv : EKS.AccessMode dans l'input SFN (runtime, pas deploy-time)
-- Lambdas compare-secrets-manager et compare-ssm existent deja (comparaison, pas sync)
-- Patterns de mapping NBS→NH documentes (path mapping, value transformations, 6 instances)
+- Pattern EFS de reference pour v1.2 : assume-role imperatif Credentials.RoleArn.$ (efs/setup_cross_account_replication.asl.json), role de replication optionnel + perms source (modules/source-account/, gardes par var.enable_efs), bloc input EFS optionnel + phase conditionnelle (orchestrator CheckEFSReplicationMode), spec specs/repl-efs-sync.md
+- Module sync/ (v1.1) = analog le plus recent pour la structure Terraform d'un nouveau module step-functions (main.tf inline archive_file Lambda, outputs ARN)
+- S3 live replication ne cascade pas les replicas : backfill des objets existants = S3 Batch Operations job
+- Rubix target topology (wiring client ulterieur, hors scope ici) : s3-dig-prd-pim-media (366483377530) -> s3-dig-ppd-pim-media (287223952330) + s3-dig-stg-pim-media (281127105461)
 
 ## Constraints
 
@@ -97,6 +105,25 @@ Shipped v1.0 — Step Functions Modularization complete.
 | Three-tier Terraform pour EFS (avoid circular ARN refs) | efs → efs_sub_templated → efs_templated evite les references circulaires | ✓ Good — pattern propre |
 | $$.Execution.Input materialise via States.ArrayGetItem | Elimine SSM intermediary states, data inline dans InitializeState | ✓ Good — 3 refs resolues proprement |
 | Tests interface snapshots dans tests/snapshots/ | Non-regression automatisee des contrats Input/Output (REF-05) | ✓ Good — empeche les regressions silencieuses |
+| Module S3 sans Lambda — sync-status via SDK natif (Phase 7) | DescribeJob + GetBucketReplication couvrent le suivi sans compute ; le compare objet (le seul besoin de Lambda) est hors scope v1.2. Un Lambda violerait "privilegier SDK natif" | Decide — annulation du Lambda compare (cf. REPL-06, 07-CONTEXT.md) |
+| Fan-out S3 par merge de rules (Phase 7) | S3 = une seule ReplicationConfiguration a N Rules (vs EFS une config par paire) ; Map + Get/merge/Put permet de gerer un spoke independamment | Decide — idempotent, esprit check-existant EFS |
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd:complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
 
 ---
-*Last updated: 2026-03-16 after v1.1 milestone start*
+*Last updated: 2026-06-22 after Phase 7 completion*

@@ -1,0 +1,126 @@
+{
+  "Comment": "Symmetric teardown of S3 cross-account replication (D-04). Reads the single ReplicationConfiguration on the source bucket, filters OUT the Rules belonging to the targeted Destinations[] (same deterministic ID convention as setup: 'repl-<DestAccountId>-<DestBucketBasename>'), then either re-puts the remaining Rules (PutBucketReplication) or deletes the whole config (DeleteBucketReplication) when none remain. Idempotent on not-found. Every S3 Task assumes the source role imperatively via Credentials.RoleArn.$.",
+  "StartAt": "GetReplicationConfig",
+  "States": {
+    "GetReplicationConfig": {
+      "Type": "Task",
+      "Comment": "Read the existing ReplicationConfiguration. GetBucketReplication throws S3.ReplicationConfigurationNotFoundError ONLY when no config exists (Pitfall 1); that is an idempotent no-op for teardown -> NoReplicationExists. Any OTHER error (throttle/AccessDenied/transient) MUST route to DeleteFailed (CR-02) so a failed teardown is never reported as a no-op success.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
+      "Parameters": {
+        "Bucket.$": "$.SourceBucket"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.Existing",
+      "Next": "FilterRules",
+      "Catch": [
+        {
+          "ErrorEquals": ["S3.ReplicationConfigurationNotFoundError"],
+          "ResultPath": "$.Error",
+          "Next": "NoReplicationExists"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "DeleteFailed"
+        }
+      ]
+    },
+    "FilterRules": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Compute the set of Rule IDs to remove from Destinations[] using the SAME deterministic convention as setup ('repl-<DestAccountId>-<DestBucketBasename>' truncated to 255 chars), filter the existing Rules to drop those IDs, and expose remainingRules + remainingEmpty.",
+      "Assign": {
+        "remainingRules": "{% ($removeIds := $map($states.input.Destinations, function($d) { ($bucketParts := $split($d.Bucket, '/'); $bucketName := $bucketParts[$count($bucketParts) - 1]; $rawId := 'repl-' & $d.AccountId & '-' & $bucketName; $length($rawId) > 255 ? $substring($rawId, 0, 255) : $rawId) }); $existingRules := $exists($states.input.Existing.ReplicationConfiguration.Rules) ? $states.input.Existing.ReplicationConfiguration.Rules : []; $append([], $filter($existingRules, function($r) { $not($r.ID in $removeIds) }))) %}",
+        "remainingEmpty": "{% ($removeIds := $map($states.input.Destinations, function($d) { ($bucketParts := $split($d.Bucket, '/'); $bucketName := $bucketParts[$count($bucketParts) - 1]; $rawId := 'repl-' & $d.AccountId & '-' & $bucketName; $length($rawId) > 255 ? $substring($rawId, 0, 255) : $rawId) }); $existingRules := $exists($states.input.Existing.ReplicationConfiguration.Rules) ? $states.input.Existing.ReplicationConfiguration.Rules : []; $count($filter($existingRules, function($r) { $not($r.ID in $removeIds) })) = 0) %}",
+        "replicationRole": "{% $exists($states.input.Existing.ReplicationConfiguration.Role) ? $states.input.Existing.ReplicationConfiguration.Role : $states.input.ReplicationRoleArn %}",
+        "sourceBucket": "{% $states.input.SourceBucket %}",
+        "sourceRoleArn": "{% $states.input.SourceAccount.RoleArn %}"
+      },
+      "Next": "CheckRemainingEmpty"
+    },
+    "CheckRemainingEmpty": {
+      "Type": "Choice",
+      "QueryLanguage": "JSONata",
+      "Comment": "If no rule remains after filtering, delete the whole config; otherwise re-put the remaining Rules.",
+      "Choices": [
+        {
+          "Condition": "{% $remainingEmpty = true %}",
+          "Next": "DeleteAllReplication"
+        }
+      ],
+      "Default": "PutRemainingConfig"
+    },
+    "DeleteAllReplication": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "No rule remains: remove the entire ReplicationConfiguration from the source bucket.",
+      "Resource": "arn:aws:states:::aws-sdk:s3:deleteBucketReplication",
+      "Arguments": {
+        "Bucket": "{% $sourceBucket %}"
+      },
+      "Credentials": {
+        "RoleArn": "{% $sourceRoleArn %}"
+      },
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeleteFailed"
+        }
+      ]
+    },
+    "PutRemainingConfig": {
+      "Type": "Task",
+      "QueryLanguage": "JSONata",
+      "Comment": "Rules remain for other spokes: write back the filtered Rules array (PutBucketReplication replaces the whole config, so the full remaining set is written).",
+      "Resource": "arn:aws:states:::aws-sdk:s3:putBucketReplication",
+      "Arguments": {
+        "Bucket": "{% $sourceBucket %}",
+        "ReplicationConfiguration": {
+          "Role": "{% $replicationRole %}",
+          "Rules": "{% $remainingRules %}"
+        }
+      },
+      "Credentials": {
+        "RoleArn": "{% $sourceRoleArn %}"
+      },
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeleteFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "delete_replication",
+        "SourceBucket.$": "$.SourceBucket",
+        "Message": "Targeted destinations' replication rules removed from the source bucket."
+      },
+      "Next": "DeleteSucceeded"
+    },
+    "NoReplicationExists": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "NoReplication",
+        "ModuleName": "delete_replication",
+        "SourceBucket.$": "$.SourceBucket",
+        "Message": "No replication configuration found on the source bucket; teardown is a no-op."
+      },
+      "Next": "DeleteSucceeded"
+    },
+    "DeleteFailed": {
+      "Type": "Fail",
+      "Error": "DeleteReplicationFailed",
+      "Cause": "Failed to remove S3 cross-account replication rules from the source bucket."
+    },
+    "DeleteSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

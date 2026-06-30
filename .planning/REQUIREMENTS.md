@@ -1,78 +1,76 @@
-# Requirements: Secrets & Parameters Sync
+# Requirements: S3 Cross-Account Replication
 
-**Defined:** 2026-03-16
-**Core Value:** Synchronisation generique de secrets SM et parametres SSM entre comptes AWS source et destination, avec transformations configurables.
+**Defined:** 2026-06-17
+**Core Value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
 
-## v1.1 Requirements
+## v1.2 Requirements
 
-Requirements pour la synchronisation secrets/parametres. Chaque requirement mappe a une phase du roadmap.
+Requirements pour la replication S3 cross-account. Chaque requirement mappe a une phase du roadmap. Perimetre **module generique uniquement** — le wiring client et les grants cote destination sont explicitement hors scope (voir Out of Scope).
 
-### Sync Engine
+### Replication SFN
 
-- [x] **SYNC-01**: SFN SyncConfigItems unique traitant Secrets Manager et SSM Parameter Store via Choice state sur le type — un seul flow (fetch → transform → write) avec backend-specific API calls
-- [x] **SYNC-02**: Fetch cross-account des valeurs source via IAM role assumption (sts:AssumeRole) avec support multi-region
-- [x] **SYNC-03**: Path mapping configurable — renommage des chemins source vers destination (ex: /rubix/bene-prod/app/* → /digital/prd/app/mro-bene/*)
-- [x] **SYNC-04**: Transformations de valeurs dans les secrets JSON — remplacement de valeurs par cle (regex ou literal) avec regles configurables dans l'input
-- [x] **SYNC-05**: Creation automatique du secret/parametre cote destination si inexistant, mise a jour si existant avec valeur differente
-- [x] **SYNC-06**: Merge mode — preserver les cles destination-only lors de la mise a jour d'un secret JSON (pas d'ecrasement des cles ajoutees cote destination)
-- [x] **SYNC-07**: Recursive traversal pour SSM — copier tous les parametres sous un path donne avec mapping de path applique a chacun
-- [x] **SYNC-08**: Lambda(s) generique(s) pour la logique fetch/transform/write — pas de logique metier Rubix-specifique hardcodee
+- [x] **REPL-01**: SFN `setup_cross_account_replication` dans `modules/step-functions/s3/` configure la replication via `s3:PutBucketReplication` sur le bucket source — assume-role **imperatif** au runtime (`Credentials.RoleArn.$`, pattern EFS) car le bucket source appartient a un stack externe et du Terraform declaratif entrerait en conflit
+- [x] **REPL-02**: SFN `run_batch_replication` declenche un backfill des objets existants via `s3control:CreateJob` (S3 Batch Operations) — la live replication ne forwarde que les nouvelles ecritures, le backfill couvre l'existant
+- [x] **REPL-03**: SFN `check_batch_replication` poll l'etat du job via `s3control:DescribeJob` jusqu'a completion (Active/Complete/Failed)
+- [x] **REPL-04**: SFN `delete_replication` supprime la configuration de replication du bucket source (teardown)
+- [x] **REPL-05**: Fan-out hub-and-spoke — une source replique vers N destinations, same-region (eu-central-1) ; chaque destination configurable independamment
+- [x] **REPL-06**: Privilegier les integrations SDK natives `aws-sdk:s3:*` / `aws-sdk:s3control:*` dans les ASL ; **aucun Lambda en v1.2** — le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:DescribeJob`). Le compare objet source/destination reste hors scope v1.2 (cf. S3REPL-DR-02). [decision Phase 7, voir `phases/07-s3-replication-module/07-CONTEXT.md`]
+
+### Source-Account IAM
+
+- [x] **IAM-01**: Rôle de replication S3 optionnel dans `modules/source-account/` (analogue `efs-replication-role`, garde par une variable `enable_s3` ou equivalent), assumable par le service S3 / `batchoperations.s3.amazonaws.com`
+- [x] **IAM-02**: Permissions sur le rôle source assume par l'orchestrateur — `s3:PutBucketReplication`, `s3control:CreateJob`, `s3control:DescribeJob`, et `iam:PassRole` vers le rôle de replication S3 (condition `iam:PassedToService`)
 
 ### Integration Orchestrator
 
-- [x] **ORCH-01**: Section ConfigSync optionnelle dans l'input JSON du refresh orchestrator — si absente ou Enabled=false, la sync est ignoree
-- [x] **ORCH-02**: Orchestrateur appelle SyncConfigItems via startExecution.sync:2 quand ConfigSync.Enabled=true
-- [x] **ORCH-03**: Phase d'execution configurable dans l'input (post-restore, pre-verify, etc.)
+- [x] **ORCH-04**: Bloc input S3 optionnel dans `refresh_orchestrator` (analogue bloc EFS) pilotant une phase de replication S3 optionnelle ; structure d'input mirroir de `EFS` (Source/Destination/Replication)
+- [x] **ORCH-05**: Quand le bloc S3 est absent ou desactive (`S3.Enabled=false`), l'orchestrateur ignore completement la replication S3 et son comportement est strictement identique a avant
 
-### Infrastructure
+### Infrastructure & Spec
 
-- [x] **INFRA-01**: Module Terraform pour la SFN SyncConfigItems + Lambda(s) dans modules/step-functions/ avec ARN exporte
-- [x] **INFRA-02**: Tests ASL de validation pour la nouvelle SFN (auto-decouverte via rglob existant)
+- [ ] **INFRA-03**: `specs/repl-s3-sync.md` en miroir de `specs/repl-efs-sync.md` (objectif, architecture, inputs/outputs, appels AWS, logique metier, conditions de succes/alerte/erreur, mapping comptes)
+- [ ] **INFRA-04**: Validation ASL pour les nouvelles SFN S3 (auto-decouverte via rglob existant). **Pas de tests unitaires Lambda** — le module S3 ne contient aucun Lambda (cf. REPL-06, decision Phase 7)
 
 ## v2 Requirements
 
 Deferred a un milestone futur.
 
-### Qualite Avancee
-
-- **QAL-01**: Dry-run mode — simuler la sync sans ecrire, retourner un rapport de ce qui changerait
-- **QAL-02**: Rollback capability — sauvegarder l'etat destination avant sync pour restauration
-- **QAL-03**: Diff report post-sync — comparer source et destination apres la sync pour confirmer l'alignement
-- **QAL-04**: Key filtering — inclure/exclure des cles specifiques dans les secrets JSON
+- **S3REPL-DR-01**: Monitoring/alerting de l'etat de replication (lag, objets en echec) cote dashboard Dashborion
+- **S3REPL-DR-02**: Compare source/destination post-replication (inventaire S3, comptage objets/tailles) — analogue compare EFS
+- **S3REPL-DR-03**: Support cross-region (proxy lambda) si un besoin DR multi-region emerge
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Sync bidirectionnel (destination → source) | Risque de corruption des secrets prod, one-way seulement |
-| Rotation des secrets | Gere par AWS Secrets Manager nativement |
-| Sync de secrets K8s / ExternalSecrets | Domaine EKS different, couvert par k8s-secrets-sync-checker dans le dashboard |
-| Planification / scheduling | EventBridge existant gere le scheduling, pas dans la SFN |
-| Notification SNS de la sync | Gere par l'orchestrateur parent (pattern existant) |
+| Grants cote destination (bucket policy + KMS key policy autorisant le rôle de replication source) | Vivent dans le stack client `NewHorizon-IaC-Webshop`, hors perimetre du module generique |
+| Wiring client (`NewHorizon-IaC-AWS-Refresh`, rôle dans `sharedservices/refresh`, inputs orchestrateur reels) | Specifique au client Rubix, hors perimetre opensource generique |
+| Cascade des replicas (replication d'un replica vers un 3e bucket) | S3 live replication ne cascade pas par design ; le backfill batch couvre l'existant, pas une feature manquante |
+| Cross-region replication | Same-region (eu-central-1) uniquement pour ce milestone ; cross-region deferre a v2 si besoin DR |
+| Rollback automatique de la replication | `delete_replication` couvre le teardown ; pas de rollback transactionnel (limite AWS SFN) |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SYNC-01 | Phase 4 | Complete |
-| SYNC-02 | Phase 5 | Complete |
-| SYNC-03 | Phase 5 | Complete |
-| SYNC-04 | Phase 5 | Complete |
-| SYNC-05 | Phase 5 | Complete |
-| SYNC-06 | Phase 5 | Complete |
-| SYNC-07 | Phase 5 | Complete |
-| SYNC-08 | Phase 4 | Complete |
-| ORCH-01 | Phase 6 | Complete |
-| ORCH-02 | Phase 6 | Complete |
-| ORCH-03 | Phase 6 | Complete |
-| INFRA-01 | Phase 4 | Complete |
-| INFRA-02 | Phase 5 | Complete |
+| REPL-01 | Phase 7 | Planning |
+| REPL-02 | Phase 7 | Planning |
+| REPL-03 | Phase 7 | Planning |
+| REPL-04 | Phase 7 | Planning |
+| REPL-05 | Phase 7 | Planning |
+| REPL-06 | Phase 7 | Planning |
+| IAM-01 | Phase 7 | Planning |
+| IAM-02 | Phase 7 | Planning |
+| ORCH-04 | Phase 8 | Complete |
+| ORCH-05 | Phase 8 | Complete |
+| INFRA-03 | Phase 9 | Planning |
+| INFRA-04 | Phase 9 | Planning |
 
 **Coverage:**
-- v1.1 requirements: 13 total
-- Mapped to phases: 13
+- v1.2 requirements: 12 total
+- Mapped to phases: 12
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-03-16*
-*Last updated: 2026-03-16 after roadmap creation*
+*Requirements defined: 2026-06-17*
+*Last updated: 2026-06-17 after roadmap creation*

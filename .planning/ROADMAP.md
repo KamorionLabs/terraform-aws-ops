@@ -3,7 +3,8 @@
 ## Milestones
 
 - ✅ **v1.0 Step Functions Modularization** — Phases 1-3 (shipped 2026-03-16)
-- **v1.1 Secrets & Parameters Sync** — Phases 4-6 (in progress)
+- ✅ **v1.1 Secrets & Parameters Sync** — Phases 4-6 (complete 2026-03-17, audit passed 13/13)
+- **v1.2 S3 Cross-Account Replication** — Phases 7-9 (in progress)
 
 ## Phases
 
@@ -18,59 +19,62 @@ See: `.planning/milestones/v1.0-ROADMAP.md` for full details
 
 </details>
 
-### v1.1 Secrets & Parameters Sync
+<details>
+<summary>v1.1 Secrets & Parameters Sync (Phases 4-6) — COMPLETE 2026-03-17 (audit passed 13/13)</summary>
 
-**Milestone Goal:** SFN generique pour copier/synchroniser des secrets SM et parametres SSM entre comptes AWS source et destination, avec transformations configurables.
+- [x] Phase 4: Foundation (2/2 plans) — Module Terraform, Lambda generique, SFN SyncConfigItems skeleton avec Choice state SM/SSM
+- [x] Phase 5: Sync Engine (2/2 plans) — Flow fetch/transform/write avec path mapping, transformations, merge mode, tests ASL
+- [x] Phase 6: Orchestrator Integration (1/1 plan) — Branchement ConfigSync dans refresh_orchestrator (section input optionnelle)
 
-- [ ] **Phase 4: Foundation** - Module Terraform, Lambda generique, et SFN SyncConfigItems skeleton avec Choice state SM/SSM
-- [ ] **Phase 5: Sync Engine** - Flow complet fetch/transform/write avec path mapping, transformations, merge mode, et tests ASL
-- [ ] **Phase 6: Orchestrator Integration** - Branchement ConfigSync dans refresh_orchestrator avec section input optionnelle
+See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-AUDIT.md`
+
+</details>
+
+### v1.2 S3 Cross-Account Replication
+
+**Milestone Goal:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch), en miroir du pattern EFS — module s3/, IAM source-account, integration orchestrateur optionnelle, spec + tests. Perimetre generique uniquement (wiring client hors scope).
+
+- [x] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/` (completed 2026-06-19)
+- [x] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS) (completed 2026-06-23)
+- [x] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda) (completed 2026-07-01)
 
 ## Phase Details
 
-### Phase 4: Foundation
-**Goal**: L'infrastructure Terraform et le squelette SFN existent -- la Lambda generique est deployable et la SFN SyncConfigItems route correctement vers SM ou SSM via Choice state
-**Depends on**: Phase 3 (v1.0 complete)
-**Requirements**: SYNC-01, SYNC-08, INFRA-01
+### Phase 7: S3 Replication Module
+**Goal**: Le module Terraform `modules/step-functions/s3/` deploie 4 SFN (setup/run_batch/check_batch/delete) operant la replication S3 cross-account avec assume-role imperatif, et `modules/source-account/` expose un rôle de replication S3 optionnel + perms source ; `terraform plan` passe
+**Depends on**: Phase 6 (v1.1 complete)
+**Requirements**: REPL-01, REPL-02, REPL-03, REPL-04, REPL-05, REPL-06, IAM-01, IAM-02
 **Success Criteria** (what must be TRUE):
-  1. Le module Terraform dans modules/step-functions/ deploie la SFN SyncConfigItems et la Lambda generique, avec ARN exporte en output
-  2. La SFN contient un Choice state qui route vers le branch Secrets Manager ou SSM Parameter Store selon le type d'item en input
-  3. La Lambda generique accepte un input structure (type, source, destination, credentials) et retourne un output structure -- sans logique metier Rubix-specifique hardcodee
-  4. `terraform plan` passe sans erreur avec le nouveau module integre
-**Plans**: 2 plans
+  1. La SFN `setup_cross_account_replication` appelle `aws-sdk:s3:putBucketReplication` sur le bucket source via assume-role imperatif (`Credentials.RoleArn.$`) — aucune ressource Terraform declarative ne gere la config de replication du bucket source
+  2. Les SFN `run_batch_replication` (`s3control:createJob`) et `check_batch_replication` (`s3control:describeJob` en polling) backfillent les objets existants et suivent l'etat du job jusqu'a completion
+  3. La SFN `delete_replication` retire la configuration de replication du bucket source
+  4. Le fan-out hub-and-spoke (1 source -> N destinations, same-region) est supporte via la structure d'input (S3 = une ReplicationConfiguration a N Rules ; Map + GetBucketReplication/merge/PutBucketReplication par destination) ; le sync-status est lu via etats SDK natifs (`GetBucketReplication` + `s3control:describeJob`), sans Lambda
+  5. `modules/source-account/` deploie un rôle de replication S3 optionnel (garde par variable) + perms source (`s3:PutBucketReplication`, `s3control:CreateJob/DescribeJob`, `iam:PassRole`) ; `terraform plan` passe sans erreur
+**Plans**: 4 plans
+  - [x] 07-01-PLAN.md — ASL setup + delete (read-merge-write replication config, validate-only versioning, Map fan-out) [REPL-01, REPL-04, REPL-05]
+  - [x] 07-02-PLAN.md — ASL run_batch + check_batch (s3control createJob/describeJob, GeneratedManifest, poll loop) [REPL-02, REPL-03, REPL-05, REPL-06]
+  - [x] 07-03-PLAN.md — source-account IAM (enable_s3 toggle, combined replication role, scoped PassRole) [IAM-01, IAM-02]
+  - [x] 07-04-PLAN.md — s3 module Terraform skeleton (file()-based 4-SFN module, no Lambda, terraform validate) [REPL-01..06]
 
-Plans:
-- [ ] 04-01-PLAN.md — Lambda stub sync_config_items + tests unitaires + ASL SyncConfigItems avec Choice state
-- [ ] 04-02-PLAN.md — Module Terraform sync/ + wiring root main.tf et outputs.tf
-
-### Phase 5: Sync Engine
-**Goal**: Le flow complet fetch cross-account, transformation de valeurs, et ecriture destination fonctionne pour SM et SSM -- avec path mapping, merge mode, creation automatique, et recursive traversal
-**Depends on**: Phase 4
-**Requirements**: SYNC-02, SYNC-03, SYNC-04, SYNC-05, SYNC-06, SYNC-07, INFRA-02
+### Phase 8: Orchestrator Integration
+**Goal**: `refresh_orchestrator` appelle la replication S3 de maniere optionnelle via un bloc input S3 (analogue EFS), avec activation configurable et no-op quand absent/desactive
+**Depends on**: Phase 7
+**Requirements**: ORCH-04, ORCH-05
 **Success Criteria** (what must be TRUE):
-  1. La Lambda fetch les secrets/parametres depuis le compte source via sts:AssumeRole cross-account, avec support multi-region
-  2. Les chemins source sont renommes vers les chemins destination selon le path mapping configure dans l'input (ex: /rubix/bene-prod/* vers /digital/prd/*)
-  3. Les valeurs JSON des secrets sont transformees selon les regles configurees (remplacement regex ou literal par cle) et le merge mode preserve les cles destination-only
-  4. Les secrets/parametres sont crees cote destination si inexistants, mis a jour si la valeur differe, et le recursive traversal copie tous les parametres sous un path SSM donne
-  5. Les tests ASL de validation passent pour la SFN SyncConfigItems (auto-decouverte via rglob existant)
-**Plans**: 2 plans
-
-Plans:
-- [ ] 05-01-PLAN.md — Tests comportementaux TDD RED (SYNC-02 a SYNC-07) + fix ASL ItemFailed Pass pour continue+rapport
-- [ ] 05-02-PLAN.md — Implementation Lambda sync_config_items avec fetch/transform/merge/write + tests GREEN
-
-### Phase 6: Orchestrator Integration
-**Goal**: L'orchestrateur de refresh appelle SyncConfigItems de maniere optionnelle via une section ConfigSync dans l'input JSON, avec activation configurable (Enabled=true/false)
-**Depends on**: Phase 5
-**Requirements**: ORCH-01, ORCH-02, ORCH-03
-**Success Criteria** (what must be TRUE):
-  1. Quand ConfigSync est absent ou Enabled=false dans l'input JSON, le refresh_orchestrator ignore completement la sync et son comportement est identique a avant
-  2. Quand ConfigSync.Enabled=true, l'orchestrateur appelle SyncConfigItems via startExecution.sync:2 avec la configuration fournie
-  3. La phase d'execution de la sync est configurable dans l'input (post-restore, pre-verify, etc.) -- pas hardcodee a un point fixe du flow
+  1. Un bloc input S3 optionnel (structure mirroir du bloc EFS : Source/Destination/Replication) pilote une phase de replication S3 dans l'orchestrateur
+  2. Quand le bloc S3 est absent ou `S3.Enabled=false`, l'orchestrateur ignore completement la replication S3 et son comportement est strictement identique a avant (Choice state de garde)
+  3. Quand active, l'orchestrateur invoque les SFN S3 (setup -> run_batch -> check_batch) via startExecution.sync:2 avec la configuration fournie
 **Plans**: 1 plan
+  - [x] 08-01-PLAN.md — Tisser la branche S3 self-guarded (CheckS3Enabled) dans Phase1DataRefresh + reshape vers contrats figes + module step_functions_s3 racine + regeneration snapshot [ORCH-04, ORCH-05]
 
-Plans:
-- [ ] 06-01-PLAN.md — ASL CheckConfigSyncOption + ExecuteSyncConfigItems states + Terraform ARN wiring
+### Phase 9: Spec & Tests
+**Goal**: La documentation spec et la couverture de tests existent — `specs/repl-s3-sync.md` miroite `repl-efs-sync.md`, et la validation ASL couvre les nouvelles SFN (pas de tests Lambda — le module S3 ne contient aucun Lambda)
+**Depends on**: Phase 8
+**Requirements**: INFRA-03, INFRA-04
+**Success Criteria** (what must be TRUE):
+  1. `specs/repl-s3-sync.md` existe et miroite la structure de `repl-efs-sync.md` (objectif, architecture, inputs/outputs, appels AWS, logique metier, conditions succes/alerte/erreur, mapping comptes)
+  2. La validation ASL passe pour les nouvelles SFN S3 (auto-decouverte via rglob existant)
+**Plans**: 1 plan (estimation)
 
 ## Progress
 
@@ -79,6 +83,9 @@ Plans:
 | 1. Extraction | v1.0 | 3/3 | Complete | 2026-03-13 |
 | 2. Refactoring | v1.0 | 3/3 | Complete | 2026-03-13 |
 | 3. Consolidation | v1.0 | 3/3 | Complete | 2026-03-16 |
-| 4. Foundation | v1.1 | 0/2 | Planning | - |
-| 5. Sync Engine | v1.1 | 0/2 | Planning | - |
-| 6. Orchestrator Integration | v1.1 | 0/1 | Planning | - |
+| 4. Foundation | v1.1 | 2/2 | Complete | 2026-03-17 |
+| 5. Sync Engine | v1.1 | 2/2 | Complete | 2026-03-17 |
+| 6. Orchestrator Integration | v1.1 | 1/1 | Complete | 2026-03-17 |
+| 7. S3 Replication Module | v1.2 | 4/4 | Complete   | 2026-06-19 |
+| 8. Orchestrator Integration | v1.2 | 1/1 | Complete   | 2026-06-23 |
+| 9. Spec & Tests | v1.2 | 1/1 | Complete   | 2026-07-01 |

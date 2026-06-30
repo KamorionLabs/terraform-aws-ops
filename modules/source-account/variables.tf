@@ -67,7 +67,7 @@ variable "existing_role_arn" {
 }
 
 variable "existing_role_name" {
-  description = "Name of existing IAM role (for attaching policies). Required if create_role is false and attach_policies is true."
+  description = "Name of existing IAM role (for attaching policies). REQUIRED when create_role is false and attach_policies is true: inline policies (including s3_access) attach via role name, and if it is null while attach_policies is true, should_attach_policies silently becomes false and NO policies are attached (WR-06). A null/empty value combined with create_role=false and attach_policies=true is rejected by the precondition on aws_iam_role_policy.s3_access."
   type        = string
   default     = null
 }
@@ -86,6 +86,12 @@ variable "enable_efs" {
   description = "Enable EFS-related permissions (for backup copy)"
   type        = bool
   default     = true
+}
+
+variable "enable_s3" {
+  description = "Enable S3 cross-account replication IAM (source role permissions + replication role)"
+  type        = bool
+  default     = false
 }
 
 # -----------------------------------------------------------------------------
