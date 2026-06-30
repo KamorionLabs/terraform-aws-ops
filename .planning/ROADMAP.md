@@ -36,7 +36,7 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 
 - [x] **Phase 7: S3 Replication Module** - Module `modules/step-functions/s3/` (4 ops SFN, **aucun Lambda** — sync-status SDK natif) + rôle/perms S3 optionnels dans `modules/source-account/` (completed 2026-06-19)
 - [x] **Phase 8: Orchestrator Integration** - Bloc input S3 optionnel pilotant une phase de replication optionnelle dans `refresh_orchestrator` (analogue EFS) (completed 2026-06-23)
-- [ ] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda)
+- [x] **Phase 9: Spec & Tests** - `specs/repl-s3-sync.md` en miroir de `repl-efs-sync.md` + validation ASL (pas de tests Lambda — module sans Lambda) (completed 2026-07-01)
 
 ## Phase Details
 
@@ -88,4 +88,4 @@ See: `.planning/milestones/v1.1-REQUIREMENTS.md` and `.planning/v1.1-MILESTONE-A
 | 6. Orchestrator Integration | v1.1 | 1/1 | Complete | 2026-03-17 |
 | 7. S3 Replication Module | v1.2 | 4/4 | Complete   | 2026-06-19 |
 | 8. Orchestrator Integration | v1.2 | 1/1 | Complete   | 2026-06-23 |
-| 9. Spec & Tests | v1.2 | 0/? | Planning | - |
+| 9. Spec & Tests | v1.2 | 1/1 | Complete   | 2026-07-01 |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: S3 Cross-Account Replication
-status: ready_to_plan
-stopped_at: Phase 08 complete (1/1) — ready to discuss Phase 9
-last_updated: 2026-06-23T15:56:06.939Z
-last_activity: 2026-06-22 -- Phase 08 execution started
+status: milestone_complete
+stopped_at: Phase 09 complete — milestone v1.2 (S3 cross-account replication) complete
+last_updated: 2026-07-01T00:00:00.000Z
+last_activity: 2026-07-01 -- Phase 09 spec delivered (specs/repl-s3-sync.md); tofu validate + jsonata tests pass
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 3
   total_plans: 5
   completed_plans: 10
-  percent: 33
+  percent: 100
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-17)
 
 **Core value:** SFN generique pour configurer et piloter la replication S3 cross-account (live + backfill batch) en miroir du pattern EFS, perimetre generique uniquement.
-**Current focus:** Phase 9 — spec & tests
+**Current focus:** Milestone v1.2 complete — ready for next milestone
 
 ## Current Position
 
 Phase: 9
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-06-23
+Plan: Complete (spec delivered)
+Status: Milestone complete
+Last activity: 2026-07-01
 
 ## Performance Metrics
 
