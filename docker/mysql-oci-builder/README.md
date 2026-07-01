@@ -23,10 +23,12 @@ Daemonless build via **buildah** (vfs storage driver) — no Docker daemon, runs
 
 ## Hard requirements / gotchas
 
-- **`OCI_BASE_IMAGE` must NOT declare `VOLUME /var/lib/mysql`** — otherwise `buildah commit` drops
-  the baked data. The entrypoint fails fast (`buildah inspect`) if it detects the volume.
+- **Datadir outside the VOLUME**: the datadir is baked at `OCI_DATADIR` (default `/data/mysql`),
+  deliberately OUTSIDE the base image's `VOLUME` (usually `/var/lib/mysql`) — a `VOLUME` path is not
+  captured by `buildah commit`. This means **any MySQL image works as base, no no-VOLUME rebuild**.
+  The entrypoint fails fast if `OCI_DATADIR` happens to sit under a declared VOLUME.
 - **Version parity**: the datadir format is bound to the mysqld version. `OCI_BASE_IMAGE` must be
-  the same MySQL version devs/EKS run (e.g. a no-VOLUME `mysql:8.0.15` variant).
+  the same MySQL version devs/EKS run (no cross-minor downgrade of a datadir).
 - **securityContext**: buildah needs a privileged (or fuse-overlayfs) pod. `run_archive_job`
   injects `{privileged:true}` when `OciBuild=true` (overridable via `ArchiveJob.Oci.SecurityContext`).
 - **Scratch space**: the build writes the datadir under the node-ephemeral `scratch` emptyDir —
@@ -37,7 +39,7 @@ Daemonless build via **buildah** (vfs storage driver) — no Docker daemon, runs
 
 Always: `MYSQL_HOST MYSQL_USER MYSQL_PASSWORD MYSQL_DATABASE SHARED_FOLDER SHARED_MEDIA_FOLDER SCRATCH_DIR`
 S3: `S3_SYNC S3_BUCKET S3_PREFIX MEDIAFOLDER`
-OCI: `OCI_BUILD OCI_ECR_REPO OCI_IMAGE_TAG OCI_BASE_IMAGE OCI_MYSQL_VERSION AWS_REGION OCI_MEDIA OCI_MEDIA_REPO`
+OCI: `OCI_BUILD OCI_ECR_REPO OCI_IMAGE_TAG OCI_BASE_IMAGE OCI_MYSQL_VERSION OCI_DATADIR AWS_REGION OCI_MEDIA OCI_MEDIA_REPO`
 
 All values are wired by `modules/step-functions/utils/run_archive_job.asl.json` (state
 `BuildArchiveEnv`) from the refresh input. The job's ServiceAccount needs ECR push (Pod Identity)

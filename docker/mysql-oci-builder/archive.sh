@@ -26,6 +26,10 @@ SHARED_MEDIA_FOLDER="${SHARED_MEDIA_FOLDER:-/shared-data-media}"
 SCRATCH_DIR="${SCRATCH_DIR:-/scratch}"
 S3_SYNC="${S3_SYNC:-false}"
 OCI_BUILD="${OCI_BUILD:-false}"
+# Datadir path baked in the image. Kept OUTSIDE the base image's VOLUME (usually
+# /var/lib/mysql) so buildah commit actually captures the data — this lets ANY MySQL
+# image be used as base, no no-VOLUME rebuild required.
+OCI_DATADIR="${OCI_DATADIR:-/data/mysql}"
 
 log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -76,22 +80,26 @@ build_oci_image() {
   ctr="$(buildah from "${OCI_BASE_IMAGE}")"
   trap 'buildah rm "${ctr}" >/dev/null 2>&1 || true' EXIT
 
-  # Guard: a VOLUME on the datadir would void the committed data.
-  if buildah inspect --format '{{json .Docker.Config.Volumes}}' "${ctr}" 2>/dev/null \
-       | grep -q '/var/lib/mysql'; then
-    die "OCI_BASE_IMAGE declares VOLUME /var/lib/mysql — use a no-VOLUME variant (data would be dropped on commit)"
-  fi
+  # Guard: OCI_DATADIR must not sit under a declared VOLUME (else buildah commit drops it).
+  local vols
+  vols="$(buildah inspect --format '{{range $k,$v := .Docker.Config.Volumes}}{{$k}} {{end}}' "${ctr}" 2>/dev/null || true)"
+  for v in ${vols}; do
+    if [[ "${OCI_DATADIR}" == "${v}" || "${OCI_DATADIR}" == "${v}/"* ]]; then
+      die "OCI_DATADIR ${OCI_DATADIR} is under declared VOLUME ${v} — pick a datadir outside any VOLUME"
+    fi
+  done
 
-  log "OCI: initialize + import dump into the base image datadir (mysqld ${OCI_MYSQL_VERSION:-?})"
+  log "OCI: initialize + import dump into ${OCI_DATADIR} (mysqld ${OCI_MYSQL_VERSION:-?})"
   buildah run \
     --volume "${SHARED_FOLDER}:/refresh:ro" \
     --env "MYSQL_DATABASE=${MYSQL_DATABASE}" \
+    --env "OCI_DATADIR=${OCI_DATADIR}" \
     "${ctr}" -- bash -euo pipefail -c '
-      datadir=/var/lib/mysql
       sock=/tmp/oci-build.sock
-      rm -rf "${datadir:?}/"* || true
-      mysqld --initialize-insecure --datadir="$datadir" --user=root
-      mysqld --datadir="$datadir" --user=root --skip-networking --socket="$sock" &
+      rm -rf "${OCI_DATADIR:?}" && mkdir -p "$OCI_DATADIR"
+      chown -R mysql:mysql "$OCI_DATADIR" 2>/dev/null || true
+      mysqld --initialize-insecure --datadir="$OCI_DATADIR" --user=root
+      mysqld --datadir="$OCI_DATADIR" --user=root --skip-networking --socket="$sock" &
       pid=$!
       for i in $(seq 1 60); do mysqladmin --socket="$sock" ping >/dev/null 2>&1 && break; sleep 1; done
       mysql --socket="$sock" -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\`;"
@@ -103,9 +111,9 @@ build_oci_image() {
       wait "$pid" 2>/dev/null || true
     '
 
-  log "OCI: configure image metadata (no VOLUME; mysqld on baked datadir)"
+  log "OCI: configure image metadata (mysqld on baked datadir ${OCI_DATADIR})"
   buildah config \
-    --entrypoint '["mysqld","--datadir=/var/lib/mysql"]' \
+    --entrypoint "[\"mysqld\",\"--datadir=${OCI_DATADIR}\"]" \
     --cmd '' \
     --label "org.kamorion.refresh.market=${OCI_IMAGE_TAG}" \
     --label "org.kamorion.refresh.date=${stamp}" \
