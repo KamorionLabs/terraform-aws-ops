@@ -343,6 +343,12 @@ variable "eks_pod_identity_s3_arns" {
   default     = []
 }
 
+variable "eks_pod_identity_ecr_arns" {
+  description = "ECR repository ARNs the Pod Identity role may push to (archive job OCI image build). Empty disables ECR push."
+  type        = list(string)
+  default     = []
+}
+
 # -----------------------------------------------------------------------------
 # K8s Proxy Lambda Configuration
 # For EKS clusters with private-only API endpoints

@@ -119,9 +119,9 @@ resource "aws_iam_role_policy" "rds_access" {
         Resource = "*"
       },
       {
-        Sid    = "RDSPassRole"
-        Effect = "Allow"
-        Action = "iam:PassRole"
+        Sid      = "RDSPassRole"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
         Resource = "arn:aws:iam::${local.account_id}:role/*"
         Condition = {
           StringEquals = {
@@ -567,9 +567,9 @@ resource "aws_iam_role_policy" "assume_eks_roles" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AssumeEksRoles"
-        Effect = "Allow"
-        Action = "sts:AssumeRole"
+        Sid      = "AssumeEksRoles"
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
         Resource = var.eks_role_arns
       }
     ]
@@ -665,6 +665,39 @@ resource "aws_iam_role_policy" "eks_pod_identity_s3" {
           "s3:ListBucket"
         ]
         Resource = var.eks_pod_identity_s3_arns
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "eks_pod_identity_ecr" {
+  count = var.create_eks_pod_identity && length(var.eks_pod_identity_ecr_arns) > 0 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-eks-job-ecr"
+  role = aws_iam_role.eks_pod_identity[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPushPull"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+        Resource = var.eks_pod_identity_ecr_arns
       }
     ]
   })
