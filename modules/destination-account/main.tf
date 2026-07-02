@@ -282,7 +282,7 @@ resource "aws_iam_role_policy" "lambda_access" {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Resource = local.lambda_resource_arns
+        Resource = distinct(concat(local.lambda_resource_arns, var.additional_lambda_invoke_arns))
       },
       {
         Sid    = "LambdaManage"

@@ -5,8 +5,8 @@
     "InitDefaults": {
       "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Comment": "Default CleanupJobs to true if not provided",
-      "Output": "{% $merge([$states.input, {'CleanupJobs': $exists($states.input.CleanupJobs) ? $states.input.CleanupJobs : false}]) %}",
+      "Comment": "Default CleanupJobs to true if not provided; compute a RFC1123-safe (lowercased, sanitized) base for K8s Job names from OrchestratorExecutionName",
+      "Output": "{% $merge([$states.input, {'CleanupJobs': $exists($states.input.CleanupJobs) ? $states.input.CleanupJobs : false, 'SafeExecName': $lowercase($replace($states.input.OrchestratorExecutionName, /[^A-Za-z0-9-]/, '-'))}]) %}",
       "Next": "EnsureClusterAvailable"
     },
     "EnsureClusterAvailable": {
@@ -153,6 +153,7 @@
         "TableName.$": "$$.Map.Item.Value.Table",
         "JobIndex.$": "$$.Map.Item.Index",
         "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+        "SafeExecName.$": "$.SafeExecName",
         "CleanupJobs.$": "$.CleanupJobs"
       },
       "ItemProcessor": {
@@ -186,7 +187,7 @@
                 "apiVersion": "batch/v1",
                 "kind": "Job",
                 "metadata": {
-                  "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
+                  "name.$": "States.Format('mysqldump-{}-{}', $.SafeExecName, $.JobIndex)"
                 },
                 "spec": {
                   "ttlSecondsAfterFinished": 86400,
@@ -241,7 +242,7 @@
                   "apiVersion": "batch/v1",
                   "kind": "Job",
                   "metadata": {
-                    "name.$": "States.Format('mysqldump-{}-{}', $.OrchestratorExecutionName, $.JobIndex)"
+                    "name.$": "States.Format('mysqldump-{}-{}', $.SafeExecName, $.JobIndex)"
                   },
                   "spec": {
                     "template": {

@@ -1123,6 +1123,7 @@
               "Type": "Pass",
               "Result": {
                 "SourceCluster": {"Status": "NOT_RUN"},
+                "SourceSnapshot": {"Status": "NOT_RUN"},
                 "DestSubnetGroup": {"Status": "NOT_RUN"},
                 "DestClusterParameterGroup": {"Status": "NOT_RUN"},
                 "DestInstanceParameterGroup": {"Status": "NOT_RUN"},
@@ -1184,10 +1185,44 @@
                 "ClusterStatus.$": "$.DbClusters[0].Status"
               },
               "ResultPath": "$.V.SourceCluster",
-              "Next": "CheckDestSubnetGroup",
+              "Next": "CheckSnapshotProvided",
               "Catch": [{
                 "ErrorEquals": ["States.ALL"],
                 "ResultPath": "$.V.SourceCluster",
+                "Next": "DBFailed"
+              }]
+            },
+            "CheckSnapshotProvided": {
+              "Type": "Choice",
+              "QueryLanguage": "JSONata",
+              "Comment": "If an explicit source snapshot is provided (same-region path), verify it exists before restore",
+              "Choices": [
+                {
+                  "Condition": "{% $exists($states.input.Database.Source.SourceSnapshot.SourceSnapshotArn) %}",
+                  "Next": "CheckSourceSnapshot"
+                }
+              ],
+              "Default": "CheckDestSubnetGroup"
+            },
+            "CheckSourceSnapshot": {
+              "Type": "Task",
+              "Comment": "Verify the explicit source DB cluster snapshot exists and is accessible",
+              "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+              "Parameters": {
+                "DbClusterSnapshotIdentifier.$": "$.Database.Source.SourceSnapshot.SourceSnapshotArn"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "Status": "PASSED",
+                "SnapshotStatus.$": "$.DbClusterSnapshots[0].Status"
+              },
+              "ResultPath": "$.V.SourceSnapshot",
+              "Next": "CheckDestSubnetGroup",
+              "Catch": [{
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.V.SourceSnapshot",
                 "Next": "DBFailed"
               }]
             },
