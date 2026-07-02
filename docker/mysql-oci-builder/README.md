@@ -11,6 +11,11 @@ same refreshed dataset it produces, toggle-driven, either or both of:
 Both toggles are independent: a single archive job can emit the S3 archive, the OCI image, or both.
 Daemonless build via **buildah** (vfs storage driver) — no Docker daemon, runs in an EKS Job.
 
+Generic image, published multi-arch (amd64/arm64) to `ghcr.io/kamorionlabs/mysql-oci-builder` and
+Docker Hub by `.github/workflows/docker-mysql-oci-builder.yml` (same pattern as `mysql-s3`). Consumers
+set it as the archive job `JobImage`. The **produced data images** are pushed to a destination-owned
+ECR repo (`OCI_ECR_REPO`), never baked into this generic image.
+
 ## How the OCI image is built
 
 1. `buildah from $OCI_BASE_IMAGE` (a MySQL image of `$OCI_MYSQL_VERSION`).

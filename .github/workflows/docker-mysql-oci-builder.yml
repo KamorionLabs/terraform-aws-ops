@@ -1,0 +1,164 @@
+---
+name: Build and Push mysql-oci-builder Docker Image
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - 'docker/mysql-oci-builder/**'
+      - '.github/workflows/docker-mysql-oci-builder.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docker/mysql-oci-builder/**'
+      - '.github/workflows/docker-mysql-oci-builder.yml'
+  workflow_dispatch:
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE_NAME: kamorionlabs/mysql-oci-builder
+  DOCKERHUB_IMAGE_NAME: ${{ vars.DOCKERHUB_REPO }}/mysql-oci-builder
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata for GHCR
+        id: meta-ghcr
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Extract metadata for Docker Hub
+        id: meta-dockerhub
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push to both registries
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/mysql-oci-builder
+          file: docker/mysql-oci-builder/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ steps.meta-ghcr.outputs.tags }}
+            ${{ steps.meta-dockerhub.outputs.tags }}
+          labels: ${{ steps.meta-ghcr.outputs.labels }}
+          cache-from: type=gha,scope=mysql-oci-builder
+          cache-to: type=gha,mode=max,scope=mysql-oci-builder
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        uses: docker/build-push-action@v6
+        with:
+          context: docker/mysql-oci-builder
+          file: docker/mysql-oci-builder/Dockerfile
+          load: true
+          tags: test-mysql-oci-builder:latest
+          cache-from: type=gha,scope=mysql-oci-builder
+
+      - name: Test tools availability
+        run: |
+          docker run --rm test-mysql-oci-builder:latest bash -c '
+            set -e
+            echo "--- buildah ---"; buildah --version
+            echo "--- mysql client ---"; mysql --version
+            echo "--- aws cli ---"; aws --version
+            echo "--- entrypoint ---"; test -x /archive.sh && echo "archive.sh OK"
+            echo "All checks passed!"
+          '
+
+  security-scan:
+    name: Trivy scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    permissions:
+      packages: read
+      security-events: write
+
+    steps:
+      - name: Run Trivy vulnerability scanner (GHCR)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.GHCR_REGISTRY }}/${{ env.GHCR_IMAGE_NAME }}:latest"
+          format: sarif
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  sync-dockerhub-readme:
+    name: Sync README to Docker Hub
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE_NAME }}
+          readme-filepath: ./docker/mysql-oci-builder/README.md
+          short-description: "Refresh archive builder — S3 dump/media archive and/or OCI data-image build via buildah"
