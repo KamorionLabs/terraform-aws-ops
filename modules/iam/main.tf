@@ -97,9 +97,9 @@ resource "aws_iam_role_policy" "orchestrator_lambda_invoke" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "InvokeLambdas"
-        Effect = "Allow"
-        Action = "lambda:InvokeFunction"
+        Sid      = "InvokeLambdas"
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
         Resource = "arn:aws:lambda:${data.aws_region.current.id}:${local.orchestrator_account_id}:function:${var.prefix}-*"
       }
     ]

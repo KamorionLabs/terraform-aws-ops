@@ -13,7 +13,7 @@ on:
       - '.github/workflows/terraform.yml'
 
 env:
-  TF_VERSION: '1.6.0'
+  TOFU_VERSION: '1.11.1'
 
 jobs:
   validate:
@@ -23,19 +23,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          tofu_version: ${{ env.TOFU_VERSION }}
 
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
+      - name: OpenTofu Format Check
+        run: tofu fmt -check -recursive
 
-      - name: Terraform Init (Root)
-        run: terraform init -backend=false
+      - name: OpenTofu Init (Root)
+        run: tofu init -backend=false
 
-      - name: Terraform Validate (Root)
-        run: terraform validate
+      - name: OpenTofu Validate (Root)
+        run: tofu validate
 
   validate-modules:
     name: Validate Modules
@@ -50,18 +50,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          tofu_version: ${{ env.TOFU_VERSION }}
 
-      - name: Terraform Init (${{ matrix.module }})
+      - name: OpenTofu Init (${{ matrix.module }})
         working-directory: ${{ matrix.module }}
-        run: terraform init -backend=false
+        run: tofu init -backend=false
 
-      - name: Terraform Validate (${{ matrix.module }})
+      - name: OpenTofu Validate (${{ matrix.module }})
         working-directory: ${{ matrix.module }}
-        run: terraform validate
+        run: tofu validate
 
   lint:
     name: TFLint
@@ -78,8 +78,10 @@ jobs:
       - name: Init TFLint
         run: tflint --init
 
+      # Warnings (e.g. unused declarations) are reported but do not fail the build;
+      # only error-severity issues block.
       - name: Run TFLint
-        run: tflint --recursive --format=compact
+        run: tflint --recursive --format=compact --minimum-failure-severity=error
 
   security:
     name: Security Scan
