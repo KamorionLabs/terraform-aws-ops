@@ -19,7 +19,9 @@
       "Next": "EnsureNodegroupCapacity",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ArchiveFailed"
         }
@@ -43,7 +45,9 @@
       "Next": "GetDatabaseCredentials",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.EnsureNodegroupError",
           "Next": "GetDatabaseCredentials"
         }
@@ -62,7 +66,9 @@
       "Next": "ParseSecretString",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ArchiveFailed"
         }
@@ -74,6 +80,13 @@
         "ParsedSecret.$": "States.StringToJson($.SecretValue.SecretString)"
       },
       "ResultPath": "$.ParsedSecretResult",
+      "Next": "BuildArchiveEnv"
+    },
+    "BuildArchiveEnv": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Build the archive container env + securityContext from ArchiveJob toggles. S3Sync (default true) keeps the legacy dump+media S3 archive; OciBuild (default false) adds OCI image build (buildah->ECR). Backward compatible: an input without S3Sync/OciBuild/Oci behaves exactly as before.",
+      "Output": "{% ( $aj := $states.input.EKS.ArchiveJob; $s3 := $exists($aj.S3Sync) ? $aj.S3Sync : true; $oci := $exists($aj.OciBuild) ? $aj.OciBuild : false; $base := [ {'name':'TZ','value':'Europe/Paris'}, {'name':'MYSQL_HOST','value':$states.input.DbClusterInfo.Endpoint}, {'name':'MYSQL_USER','value':$states.input.ParsedSecretResult.ParsedSecret.username}, {'name':'MYSQL_PASSWORD','value':$states.input.ParsedSecretResult.ParsedSecret.password}, {'name':'MYSQL_DATABASE','value':$states.input.Database.MySQLOperations.DatabaseName}, {'name':'SHARED_FOLDER','value':'/refresh'}, {'name':'SHARED_MEDIA_FOLDER','value':'/shared-data-media'}, {'name':'SCRATCH_DIR','value':'/scratch'} ]; $media := $exists($aj.MediaFolder) ? [{'name':'MEDIAFOLDER','value':$aj.MediaFolder}] : []; $s3env := $s3 ? [ {'name':'S3_SYNC','value':'true'}, {'name':'S3_BUCKET','value':$aj.S3Bucket}, {'name':'S3_PREFIX','value':$aj.S3Prefix} ] : []; $ocienv := $oci ? [ {'name':'OCI_BUILD','value':'true'}, {'name':'OCI_ECR_REPO','value':$aj.Oci.EcrRepo}, {'name':'OCI_IMAGE_TAG','value':$aj.Oci.ImageTag}, {'name':'OCI_BASE_IMAGE','value':$aj.Oci.BaseImage}, {'name':'OCI_MYSQL_VERSION','value':$aj.Oci.MysqlVersion}, {'name':'OCI_DATADIR','value':($exists($aj.Oci.Datadir) ? $aj.Oci.Datadir : '/data/mysql')}, {'name':'AWS_REGION','value':($exists($aj.Oci.Region) ? $aj.Oci.Region : 'eu-central-1')}, {'name':'OCI_MEDIA','value':($exists($aj.Oci.Media) ? $string($aj.Oci.Media) : 'false')}, {'name':'OCI_MEDIA_REPO','value':($exists($aj.Oci.MediaRepo) ? $aj.Oci.MediaRepo : '')} ] : []; $secctx := $oci ? ($exists($aj.Oci.SecurityContext) ? $aj.Oci.SecurityContext : {'privileged': true}) : {}; $merge([$states.input, {'ArchiveEnv': $append($append($append($base, $media), $s3env), $ocienv), 'ArchiveSecCtx': $secctx}]) ) %}",
       "Next": "CheckAccessModeForJob"
     },
     "CheckAccessModeForJob": {
@@ -101,7 +114,9 @@
       "Next": "RunKubernetesJob",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ArchiveFailed"
         }
@@ -143,6 +158,10 @@
                     "persistentVolumeClaim": {
                       "claimName.$": "$.EfsPvcName"
                     }
+                  },
+                  {
+                    "name": "scratch",
+                    "emptyDir": {}
                   }
                 ],
                 "containers": [
@@ -160,21 +179,14 @@
                         "name": "shared-data-media",
                         "mountPath": "/shared-data-media",
                         "subPath.$": "$.EfsSubPath"
+                      },
+                      {
+                        "name": "scratch",
+                        "mountPath": "/scratch"
                       }
                     ],
-                    "env": [
-                      {"name": "TZ", "value": "Europe/Paris"},
-                      {"name": "MYSQL_HOST", "value.$": "$.DbClusterInfo.Endpoint"},
-                      {"name": "MYSQL_USER", "value.$": "$.ParsedSecretResult.ParsedSecret.username"},
-                      {"name": "MYSQL_PASSWORD", "value.$": "$.ParsedSecretResult.ParsedSecret.password"},
-                      {"name": "MYSQL_DATABASE", "value.$": "$.Database.MySQLOperations.DatabaseName"},
-                      {"name": "S3_SYNC", "value": "true"},
-                      {"name": "S3_BUCKET", "value.$": "$.EKS.ArchiveJob.S3Bucket"},
-                      {"name": "S3_PREFIX", "value.$": "$.EKS.ArchiveJob.S3Prefix"},
-                      {"name": "SHARED_FOLDER", "value": "/refresh"},
-                      {"name": "SHARED_MEDIA_FOLDER", "value": "/shared-data-media"},
-                      {"name": "MEDIAFOLDER", "value.$": "$.EKS.ArchiveJob.MediaFolder"}
-                    ]
+                    "env.$": "$.ArchiveEnv",
+                    "securityContext.$": "$.ArchiveSecCtx"
                   }
                 ],
                 "restartPolicy": "Never"
@@ -190,7 +202,9 @@
       "Next": "PrepareOutput",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ArchiveFailed"
         }
@@ -233,6 +247,10 @@
                       "persistentVolumeClaim": {
                         "claimName.$": "$.EfsPvcName"
                       }
+                    },
+                    {
+                      "name": "scratch",
+                      "emptyDir": {}
                     }
                   ],
                   "containers": [
@@ -250,21 +268,14 @@
                           "name": "shared-data-media",
                           "mountPath": "/shared-data-media",
                           "subPath.$": "$.EfsSubPath"
+                        },
+                        {
+                          "name": "scratch",
+                          "mountPath": "/scratch"
                         }
                       ],
-                      "env": [
-                        {"name": "TZ", "value": "Europe/Paris"},
-                        {"name": "MYSQL_HOST", "value.$": "$.DbClusterInfo.Endpoint"},
-                        {"name": "MYSQL_USER", "value.$": "$.ParsedSecretResult.ParsedSecret.username"},
-                        {"name": "MYSQL_PASSWORD", "value.$": "$.ParsedSecretResult.ParsedSecret.password"},
-                        {"name": "MYSQL_DATABASE", "value.$": "$.Database.MySQLOperations.DatabaseName"},
-                        {"name": "S3_SYNC", "value": "true"},
-                        {"name": "S3_BUCKET", "value.$": "$.EKS.ArchiveJob.S3Bucket"},
-                        {"name": "S3_PREFIX", "value.$": "$.EKS.ArchiveJob.S3Prefix"},
-                        {"name": "SHARED_FOLDER", "value": "/refresh"},
-                        {"name": "SHARED_MEDIA_FOLDER", "value": "/shared-data-media"},
-                        {"name": "MEDIAFOLDER", "value.$": "$.EKS.ArchiveJob.MediaFolder"}
-                      ]
+                      "env.$": "$.ArchiveEnv",
+                      "securityContext.$": "$.ArchiveSecCtx"
                     }
                   ],
                   "restartPolicy": "Never"
@@ -279,7 +290,11 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
@@ -294,7 +309,9 @@
       "Next": "WaitForArchiveJob",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "ArchiveFailed"
         }
@@ -322,7 +339,11 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
@@ -337,7 +358,9 @@
       "Next": "ArchiveJobStatusChoice",
       "Catch": [
         {
-          "ErrorEquals": ["States.ALL"],
+          "ErrorEquals": [
+            "States.ALL"
+          ],
           "ResultPath": "$.Error",
           "Next": "DeleteArchiveJobOnError"
         }
@@ -376,7 +399,11 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2
@@ -402,7 +429,11 @@
       },
       "Retry": [
         {
-          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException"
+          ],
           "IntervalSeconds": 5,
           "MaxAttempts": 3,
           "BackoffRate": 2

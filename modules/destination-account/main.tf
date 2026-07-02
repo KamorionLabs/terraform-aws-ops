@@ -670,6 +670,39 @@ resource "aws_iam_role_policy" "eks_pod_identity_s3" {
   })
 }
 
+resource "aws_iam_role_policy" "eks_pod_identity_ecr" {
+  count = var.create_eks_pod_identity && length(var.eks_pod_identity_ecr_arns) > 0 ? 1 : 0
+
+  name = "${local.prefixes.iam_policy}-eks-job-ecr"
+  role = aws_iam_role.eks_pod_identity[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "EcrAuthToken"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "EcrPushPull"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload",
+          "ecr:PutImage",
+          "ecr:BatchGetImage",
+          "ecr:GetDownloadUrlForLayer"
+        ]
+        Resource = var.eks_pod_identity_ecr_arns
+      }
+    ]
+  })
+}
+
 # Pod Identity Associations - one per namespace/service_account pair
 locals {
   pod_identity_map = var.create_eks_pod_identity && var.eks_cluster_name != null ? {
