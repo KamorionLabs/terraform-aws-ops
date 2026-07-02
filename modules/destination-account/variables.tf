@@ -228,6 +228,12 @@ variable "lambda_log_level" {
   default     = "INFO"
 }
 
+variable "additional_lambda_invoke_arns" {
+  description = "Extra Lambda ARNs the destination role may invoke (lambda:InvokeFunction only), e.g. a Secrets Manager rotation function outside the refresh prefix. Needed for secretsmanager:RotateSecret to associate the rotation Lambda."
+  type        = list(string)
+  default     = []
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
