@@ -119,9 +119,9 @@ resource "aws_iam_role_policy" "rds_access" {
         Resource = "*"
       },
       {
-        Sid    = "RDSPassRole"
-        Effect = "Allow"
-        Action = "iam:PassRole"
+        Sid      = "RDSPassRole"
+        Effect   = "Allow"
+        Action   = "iam:PassRole"
         Resource = "arn:aws:iam::${local.account_id}:role/*"
         Condition = {
           StringEquals = {
@@ -282,7 +282,7 @@ resource "aws_iam_role_policy" "lambda_access" {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Resource = local.lambda_resource_arns
+        Resource = distinct(concat(local.lambda_resource_arns, var.additional_lambda_invoke_arns))
       },
       {
         Sid    = "LambdaManage"
@@ -567,9 +567,9 @@ resource "aws_iam_role_policy" "assume_eks_roles" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AssumeEksRoles"
-        Effect = "Allow"
-        Action = "sts:AssumeRole"
+        Sid      = "AssumeEksRoles"
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
         Resource = var.eks_role_arns
       }
     ]

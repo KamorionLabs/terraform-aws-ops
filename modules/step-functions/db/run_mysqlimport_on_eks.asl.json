@@ -5,8 +5,8 @@
     "InitDefaults": {
       "Type": "Pass",
       "QueryLanguage": "JSONata",
-      "Comment": "Default CleanupJobs to true if not provided",
-      "Output": "{% $merge([$states.input, {'CleanupJobs': $exists($states.input.CleanupJobs) ? $states.input.CleanupJobs : false}]) %}",
+      "Comment": "Default CleanupJobs to true if not provided; compute a RFC1123-safe (lowercased, sanitized) K8s Job name from OrchestratorExecutionName",
+      "Output": "{% $merge([$states.input, {'CleanupJobs': $exists($states.input.CleanupJobs) ? $states.input.CleanupJobs : false, 'JobName': $substring('mysqlimport-' & $lowercase($replace($states.input.OrchestratorExecutionName, /[^A-Za-z0-9-]/, '-')), 0, 63)}]) %}",
       "Next": "EnsureClusterAvailable"
     },
     "EnsureClusterAvailable": {
@@ -182,7 +182,7 @@
           "apiVersion": "batch/v1",
           "kind": "Job",
           "metadata": {
-            "name.$": "States.Format('mysqlimport-{}', $.OrchestratorExecutionName)"
+            "name.$": "$.JobName"
           },
           "spec": {
             "ttlSecondsAfterFinished": 86400,
@@ -285,7 +285,7 @@
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {
-              "name.$": "States.Format('mysqlimport-{}', $.OrchestratorExecutionName)"
+              "name.$": "$.JobName"
             },
             "spec": {
               "template": {
