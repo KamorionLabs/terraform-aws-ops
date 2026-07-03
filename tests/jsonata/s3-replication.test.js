@@ -69,6 +69,15 @@ const existingAB = { ReplicationConfiguration: { Rules: [
   r = await evalWith(MERGE, { Destinations: [{ Bucket: 'b1', AccountId: '111111111111', RTC: { Status: 'Enabled' } }] });
   check('S5 RTC enabled -> Metrics + ReplicationTime', !!r[0].Destination.Metrics && !!r[0].Destination.ReplicationTime, JSON.stringify(r[0].Destination));
 
+  const KMS = 'arn:aws:kms:eu-central-1:111111111111:key/abc';
+  r = await evalWith(MERGE, { Destinations: [{ Bucket: 'b1', AccountId: '111111111111', ReplicaKmsKeyID: KMS }] });
+  check('S6 ReplicaKmsKeyID -> SourceSelectionCriteria + Destination.EncryptionConfiguration',
+    r[0].SourceSelectionCriteria.SseKmsEncryptedObjects.Status === 'Enabled' && r[0].Destination.EncryptionConfiguration.ReplicaKmsKeyID === KMS, JSON.stringify(r[0]));
+
+  r = await evalWith(MERGE, { Destinations: [{ Bucket: 'b1', AccountId: '111111111111' }] });
+  check('S7 no ReplicaKmsKeyID -> no SSE-KMS fields (backward-compat)',
+    !r[0].SourceSelectionCriteria && !r[0].Destination.EncryptionConfiguration, JSON.stringify(r[0]));
+
   console.log('\nFILTER (delete / FilterRules)');
   let f = await evalWith(REMAINING, { Existing: existingAB, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
   let empty = await evalWith(REMAINING_EMPTY, { Existing: existingAB, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
