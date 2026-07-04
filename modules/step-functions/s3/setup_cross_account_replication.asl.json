@@ -147,7 +147,6 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "ResultPath": "$.Error",
           "Next": "SetupFailed"
         }
       ]
