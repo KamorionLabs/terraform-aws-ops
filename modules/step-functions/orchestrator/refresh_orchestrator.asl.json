@@ -1953,13 +1953,140 @@
         "Name.$": "States.Format('{}-RunArchiveJob', $$.Execution.Name)"
       },
       "ResultPath": "$.ArchiveResult",
-      "Next": "Phase5Cleanup",
+      "Next": "CheckDeleteTargetAfterArchive",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.ArchiveError",
+          "Next": "CheckDeleteTargetAfterArchive"
+        }
+      ]
+    },
+    "CheckDeleteTargetAfterArchive": {
+      "Type": "Choice",
+      "Comment": "Disposable image-build flow: tear down the just-refreshed target cluster + EFS. Opt-in, default off.",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EKS.Options.DeleteTargetAfterArchive",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EKS.Options.DeleteTargetAfterArchive",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "DeleteTargetResources"
+        }
+      ],
+      "Default": "Phase5Cleanup"
+    },
+    "DeleteTargetResources": {
+      "Type": "Parallel",
+      "Comment": "Delete the disposable target DB cluster and target EFS created for this build.",
+      "Branches": [
+        {
+          "StartAt": "DeleteTargetCluster",
+          "States": {
+            "DeleteTargetCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "OrchestratorExecutionName.$": "$$.Execution.Name",
+                  "StepFunctions.$": "$.StepFunctions",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-DelTargetCluster', $$.Execution.Name)"
+              },
+              "ResultPath": "$.DeleteTargetClusterResult",
+              "Next": "TargetClusterDeleteDone",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.DeleteTargetClusterError",
+                  "Next": "TargetClusterDeleteDone"
+                }
+              ]
+            },
+            "TargetClusterDeleteDone": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "StartAt": "ResolveTargetEfsId",
+          "States": {
+            "ResolveTargetEfsId": {
+              "Type": "Pass",
+              "QueryLanguage": "JSONata",
+              "Comment": "Resolve the new/target EFS id using the same precedence as DeleteEFSReplication.",
+              "Output": "{% $merge([$states.input, {'TargetEfsFileSystemId': ($exists($states.input.Phase1Results[2].EfsRestoreResult.Output.FileSystemId) ? $states.input.Phase1Results[2].EfsRestoreResult.Output.FileSystemId : ($exists($states.input.EFS.Replication.DestinationFileSystemId) and $states.input.EFS.Replication.DestinationFileSystemId != '') ? $states.input.EFS.Replication.DestinationFileSystemId : null)}]) %}",
+              "Next": "CheckTargetEfsPresent"
+            },
+            "CheckTargetEfsPresent": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.TargetEfsFileSystemId",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.TargetEfsFileSystemId",
+                      "IsNull": false
+                    }
+                  ],
+                  "Next": "DeleteTargetEfs"
+                }
+              ],
+              "Default": "TargetEfsDeleteDone"
+            },
+            "DeleteTargetEfs": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.DeleteFilesystem",
+                "Input": {
+                  "FileSystemId.$": "$.TargetEfsFileSystemId",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                },
+                "Name.$": "States.Format('{}-DelTargetEfs', $$.Execution.Name)"
+              },
+              "ResultPath": "$.DeleteTargetEfsResult",
+              "Next": "TargetEfsDeleteDone",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.DeleteTargetEfsError",
+                  "Next": "TargetEfsDeleteDone"
+                }
+              ]
+            },
+            "TargetEfsDeleteDone": {
+              "Type": "Succeed"
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.DeleteTargetResult",
+      "Next": "Phase5Cleanup",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.DeleteTargetError",
           "Next": "Phase5Cleanup"
         }
       ]
