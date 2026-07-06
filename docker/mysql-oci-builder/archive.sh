@@ -66,10 +66,23 @@ archive_to_s3() {
 build_oci_image() {
   require OCI_ECR_REPO OCI_IMAGE_TAG OCI_BASE_IMAGE MYSQL_DATABASE AWS_REGION
   local registry="${OCI_ECR_REPO%%/*}"
-  local stamp tag_dated tag_market
+  local stamp tag_dated tag_instance
   stamp="$(date '+%Y%m%d')"
   tag_dated="${OCI_ECR_REPO}:${OCI_IMAGE_TAG}-${stamp}"
-  tag_market="${OCI_ECR_REPO}:${OCI_IMAGE_TAG}"
+  tag_instance="${OCI_ECR_REPO}:${OCI_IMAGE_TAG}"
+
+  # Point buildah storage at the dedicated scratch volume (a sized EBS PVC mounted at
+  # SCRATCH_DIR), NOT the node's ephemeral disk: a baked MySQL datadir can be many GB and
+  # the vfs driver doubles it on commit — this is what busts node disk otherwise.
+  export CONTAINERS_STORAGE_CONF="${SCRATCH_DIR}/storage.conf"
+  mkdir -p "${SCRATCH_DIR}/containers" "${SCRATCH_DIR}/runroot"
+  cat > "${CONTAINERS_STORAGE_CONF}" <<EOF
+[storage]
+driver = "${BUILDAH_STORAGE_DRIVER:-vfs}"
+graphroot = "${SCRATCH_DIR}/containers"
+runroot = "${SCRATCH_DIR}/runroot"
+EOF
+  log "OCI: buildah storage on ${SCRATCH_DIR} (driver ${BUILDAH_STORAGE_DRIVER:-vfs})"
 
   log "OCI: ECR login to ${registry}"
   aws ecr get-login-password --region "${AWS_REGION}" \
@@ -115,16 +128,16 @@ build_oci_image() {
   buildah config \
     --entrypoint "[\"mysqld\",\"--datadir=${OCI_DATADIR}\"]" \
     --cmd '' \
-    --label "org.kamorion.refresh.market=${OCI_IMAGE_TAG}" \
+    --label "org.kamorion.refresh.instance=${OCI_IMAGE_TAG}" \
     --label "org.kamorion.refresh.date=${stamp}" \
     --label "org.kamorion.refresh.mysql=${OCI_MYSQL_VERSION:-unknown}" \
     "${ctr}"
 
-  log "OCI: commit + push ${tag_dated} and ${tag_market}"
+  log "OCI: commit + push ${tag_dated} and ${tag_instance}"
   buildah commit "${ctr}" "${tag_dated}"
-  buildah tag "${tag_dated}" "${tag_market}"
-  buildah push "${tag_dated}"
-  buildah push "${tag_market}"
+  buildah tag "${tag_dated}" "${tag_instance}"
+  buildah push --compression-format "${OCI_COMPRESSION:-zstd}" "${tag_dated}"
+  buildah push --compression-format "${OCI_COMPRESSION:-zstd}" "${tag_instance}"
   log "OCI: data image pushed"
 
   if [[ "${OCI_MEDIA:-false}" == "true" && -n "${OCI_MEDIA_REPO:-}" && -n "${MEDIAFOLDER:-}" ]]; then
@@ -134,8 +147,8 @@ build_oci_image() {
     buildah copy "${mctr}" "${SHARED_MEDIA_FOLDER}/${MEDIAFOLDER}" /media
     buildah commit "${mctr}" "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}-${stamp}"
     buildah tag "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}-${stamp}" "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}"
-    buildah push "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}-${stamp}"
-    buildah push "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}"
+    buildah push --compression-format "${OCI_COMPRESSION:-zstd}" "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}-${stamp}"
+    buildah push --compression-format "${OCI_COMPRESSION:-zstd}" "${OCI_MEDIA_REPO}:${OCI_IMAGE_TAG}"
     buildah rm "${mctr}" >/dev/null 2>&1 || true
     log "OCI: media artifact pushed"
   fi
