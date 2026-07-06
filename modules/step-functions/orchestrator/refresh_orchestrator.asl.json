@@ -1945,6 +1945,9 @@
         "StateMachineArn.$": "$.StepFunctions.Utils.RunArchiveJob",
         "Input": {
           "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "Database.$": "$.Database",
+          "ExecutionName.$": "$$.Execution.Name",
+          "EfsPvcName.$": "$.EKS.Storage.PvcName",
           "EKS.$": "$.EKS",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "StepFunctions.$": "$.StepFunctions",

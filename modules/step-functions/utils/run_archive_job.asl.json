@@ -1,7 +1,14 @@
 {
   "Comment": "Runs archive Kubernetes job. Supports both public (eks:runJob.sync) and private (k8s-proxy Lambda) access modes.",
-  "StartAt": "GetClusterInfo",
+  "StartAt": "InitArchiveDefaults",
   "States": {
+    "InitArchiveDefaults": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Resolve top-level fields the job spec needs (ExecutionName, media EfsPvcName/EfsSubPath) from context or the EKS.ArchiveJob block so the orchestrator only has to pass EKS + Database.",
+      "Output": "{% $merge([$states.input, {'ExecutionName': ($exists($states.input.ExecutionName) ? $states.input.ExecutionName : $states.context.Execution.Name), 'EfsPvcName': ($exists($states.input.EfsPvcName) ? $states.input.EfsPvcName : $states.input.EKS.ArchiveJob.EfsPvcName), 'EfsSubPath': ($exists($states.input.EfsSubPath) ? $states.input.EfsSubPath : ($exists($states.input.EKS.ArchiveJob.EfsSubPath) ? $states.input.EKS.ArchiveJob.EfsSubPath : '.'))}]) %}",
+      "Next": "GetClusterInfo"
+    },
     "GetClusterInfo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
