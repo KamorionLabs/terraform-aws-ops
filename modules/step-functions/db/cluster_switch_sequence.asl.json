@@ -16,7 +16,7 @@
     },
     "CheckDeleteOldClusterOption": {
       "Type": "Choice",
-      "Comment": "If not renaming, check if we should delete old cluster to free target name. If neither, skip switch entirely (test mode).",
+      "Comment": "If not renaming, optionally delete the old cluster to free the target name. If neither rename nor delete (e.g. a brand-new disposable target with no existing cluster to swap), still promote the tmp cluster to the target name so downstream always finds it and DbClusterArn is emitted.",
       "Choices": [
         {
           "Variable": "$.Options.DeleteOldCluster",
@@ -24,7 +24,7 @@
           "Next": "DeleteOldCluster"
         }
       ],
-      "Default": "SkipClusterSwitch"
+      "Default": "EnsureTargetClusterAvailable"
     },
     "DeleteOldCluster": {
       "Type": "Task",
@@ -49,16 +49,6 @@
           "Next": "ClusterSwitchSequenceFailed"
         }
       ]
-    },
-    "SkipClusterSwitch": {
-      "Type": "Pass",
-      "Comment": "Test mode: both RenameOldCluster and DeleteOldCluster are false. Restored cluster keeps its temporary name.",
-      "Parameters": {
-        "TargetClusterIdentifier.$": "$.TargetClusterIdentifier",
-        "Status": "SKIPPED",
-        "SwitchCompletedAt.$": "$$.State.EnteredTime"
-      },
-      "Next": "SwitchComplete"
     },
     "EnsureOldClusterNotExists": {
       "Type": "Task",
