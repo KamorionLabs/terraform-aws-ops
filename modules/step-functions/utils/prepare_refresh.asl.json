@@ -105,12 +105,9 @@
     },
     "ExtractCurrentEFSTags": {
       "Type": "Pass",
-      "Parameters": {
-        "Tags.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].Tags, 0)",
-        "FileSystemId.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].FileSystemId, 0)",
-        "FileSystemArn.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].FileSystemArn, 0)"
-      },
-      "ResultPath": "$.CurrentEfsTags",
+      "QueryLanguage": "JSONata",
+      "Comment": "Extract the target EFS current tags/id/arn. Tolerates a not-yet-existing target (new/disposable EFS): empty tags + null ids when no filesystem matches EFS.Name, instead of failing on ArrayGetItem of an empty filter.",
+      "Output": "{% ( $match := $states.input.AllFileSystems.FileSystems[Name = $states.input.EFS.Name]; $one := $match[0]; $merge([$states.input, {'CurrentEfsTags': ($exists($one) ? {'Tags': ($exists($one.Tags) ? $one.Tags : []), 'FileSystemId': $one.FileSystemId, 'FileSystemArn': $one.FileSystemArn} : {'Tags': [], 'FileSystemId': null, 'FileSystemArn': null})}]) ) %}",
       "Next": "PrepareOutput"
     },
     "PrepareOutput": {
