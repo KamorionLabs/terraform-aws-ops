@@ -64,7 +64,7 @@
     },
     "ReadExistingConfig": {
       "Type": "Task",
-      "Comment": "Read the current ReplicationConfiguration ONCE before merging (WR-01: single atomic read-merge-write, no per-destination read-back). GetBucketReplication throws S3.ReplicationConfigurationNotFoundError ONLY when no config exists (Pitfall 1) -> seed an empty config. Any other error (throttle/AccessDenied/transient) MUST NOT seed an empty config, otherwise PutBucketReplication would overwrite every other spoke's Rule (CR-01); route those to SetupFailed.",
+      "Comment": "Read the current ReplicationConfiguration ONCE before merging (WR-01: single atomic read-merge-write, no per-destination read-back). GetBucketReplication returns a 404 when no config exists (Pitfall 1); the SDK integration surfaces it as S3.S3Exception, so the catch routes to CheckReplicationNotFound which seeds an empty config only for the genuine not-found case. Any other error (throttle/AccessDenied/transient) MUST NOT seed an empty config, otherwise PutBucketReplication would overwrite every other spoke's Rule (CR-01); route those to SetupFailed.",
       "Resource": "arn:aws:states:::aws-sdk:s3:getBucketReplication",
       "Parameters": {
         "Bucket.$": "$.SourceBucket"
@@ -76,9 +76,9 @@
       "Next": "MergeAllRules",
       "Catch": [
         {
-          "ErrorEquals": ["S3.ReplicationConfigurationNotFoundError"],
+          "ErrorEquals": ["S3.S3Exception"],
           "ResultPath": "$.ExistingError",
-          "Next": "SeedEmptyConfig"
+          "Next": "CheckReplicationNotFound"
         },
         {
           "ErrorEquals": ["States.ALL"],
@@ -86,6 +86,18 @@
           "Next": "SetupFailed"
         }
       ]
+    },
+    "CheckReplicationNotFound": {
+      "Type": "Choice",
+      "Comment": "The Step Functions AWS SDK integration surfaces a missing replication config as a generic S3.S3Exception (404 'replication configuration was not found'), not S3.ReplicationConfigurationNotFoundError. Distinguish the genuine not-found case (-> seed an empty config) from any other S3 error (throttle/AccessDenied/transient -> fail), preserving CR-01: never seed empty on a non-not-found error, which would drop other spokes' rules on the following PutBucketReplication.",
+      "Choices": [
+        {
+          "Variable": "$.ExistingError.Cause",
+          "StringMatches": "*was not found*",
+          "Next": "SeedEmptyConfig"
+        }
+      ],
+      "Default": "SetupFailed"
     },
     "SeedEmptyConfig": {
       "Type": "Pass",
