@@ -156,7 +156,6 @@
         "ModuleName": "run_batch_replication",
         "JobId.$": "$.BatchJob.JobId"
       },
-      "ResultPath": "$.Output",
       "Next": "BatchSucceeded"
     },
     "BatchSucceeded": {
