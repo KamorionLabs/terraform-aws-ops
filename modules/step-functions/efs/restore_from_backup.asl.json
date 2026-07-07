@@ -1,7 +1,17 @@
 {
-  "Comment": "Restores an EFS file system from the latest AWS Backup recovery point in destination account",
-  "StartAt": "GetSourceEFSInfo",
+  "Comment": "Restores an EFS file system from an AWS Backup recovery point. Two modes: (1) local — same-account restore (start-restore-job directly); (2) cross-account — copy-then-restore: AWS Backup has NO direct cross-account restore, so the source recovery point is first copied into a destination-account vault (start-copy-job, source is READ-ONLY), then restored locally (start-restore-job). Mode is driven by input $.CrossAccount. Recovery point is taken from input $.RecoveryPointArn if provided, otherwise the latest COMPLETED point for the source EFS is auto-selected (its source vault is auto-discovered).",
+  "StartAt": "InitCounters",
   "States": {
+    "InitCounters": {
+      "Type": "Pass",
+      "Comment": "Bound the copy/restore polling loops to avoid infinite waits",
+      "Parameters": {
+        "Copy": 0,
+        "Restore": 0
+      },
+      "ResultPath": "$.Polls",
+      "Next": "GetSourceEFSInfo"
+    },
     "GetSourceEFSInfo": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
@@ -26,7 +36,30 @@
         "FileSystemId.$": "States.ArrayGetItem($.SourceFileSystems.FileSystems[?(@.Name==$.SourceEFSName)].FileSystemId, 0)"
       },
       "ResultPath": "$.SourceEFS",
-      "Next": "GetLatestRecoveryPoint"
+      "Next": "HasExplicitRecoveryPoint"
+    },
+    "HasExplicitRecoveryPoint": {
+      "Type": "Choice",
+      "Comment": "Use an explicitly provided recovery point (with its vault), else auto-select the latest COMPLETED point for the source EFS.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.RecoveryPointArn", "IsPresent": true},
+            {"Variable": "$.SourceVaultName", "IsPresent": true}
+          ],
+          "Next": "UseExplicitRecoveryPoint"
+        }
+      ],
+      "Default": "GetLatestRecoveryPoint"
+    },
+    "UseExplicitRecoveryPoint": {
+      "Type": "Pass",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.RecoveryPointArn",
+        "BackupVaultName.$": "$.SourceVaultName"
+      },
+      "ResultPath": "$.SourceRP",
+      "Next": "IsCrossAccount"
     },
     "GetLatestRecoveryPoint": {
       "Type": "Task",
@@ -38,10 +71,11 @@
         "RoleArn.$": "$.SourceAccount.RoleArn"
       },
       "ResultSelector": {
-        "RecoveryPointArn.$": "$.RecoveryPoints[0].RecoveryPointArn"
+        "RecoveryPointArn.$": "States.ArrayGetItem($.RecoveryPoints[?(@.Status=='COMPLETED')].RecoveryPointArn, 0)",
+        "BackupVaultName.$": "States.ArrayGetItem($.RecoveryPoints[?(@.Status=='COMPLETED')].BackupVaultName, 0)"
       },
-      "ResultPath": "$.RecoveryPoint",
-      "Next": "StartRestoreJob",
+      "ResultPath": "$.SourceRP",
+      "Next": "IsCrossAccount",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
@@ -50,11 +84,144 @@
         }
       ]
     },
+    "IsCrossAccount": {
+      "Type": "Choice",
+      "Comment": "Cross-account requires copy-then-restore; same-account restores directly from the source recovery point.",
+      "Choices": [
+        {
+          "Variable": "$.CrossAccount",
+          "BooleanEquals": true,
+          "Next": "StartCopyJob"
+        }
+      ],
+      "Default": "SetLocalRestoreRP"
+    },
+    "SetLocalRestoreRP": {
+      "Type": "Pass",
+      "Comment": "Local mode: restore straight from the source recovery point (same account).",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.SourceRP.RecoveryPointArn"
+      },
+      "ResultPath": "$.RestoreRP",
+      "Next": "StartRestoreJob"
+    },
+    "StartCopyJob": {
+      "Type": "Task",
+      "Comment": "Copy the source recovery point into the destination-account vault. Runs with SOURCE credentials; passes the source copy role to AWS Backup. Non-destructive on the source.",
+      "Resource": "arn:aws:states:::aws-sdk:backup:startCopyJob",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.SourceRP.RecoveryPointArn",
+        "SourceBackupVaultName.$": "$.SourceRP.BackupVaultName",
+        "DestinationBackupVaultArn.$": "$.DestinationVaultArn",
+        "IamRoleArn.$": "$.CopyRoleArn"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.CopyJob",
+      "Next": "WaitCopyDone",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "RestoreFailed"
+        }
+      ]
+    },
+    "WaitCopyDone": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "IncrementCopyPoll"
+    },
+    "IncrementCopyPoll": {
+      "Type": "Pass",
+      "Parameters": {
+        "Copy.$": "States.MathAdd($.Polls.Copy, 1)",
+        "Restore.$": "$.Polls.Restore"
+      },
+      "ResultPath": "$.Polls",
+      "Next": "GetCopyStatus"
+    },
+    "GetCopyStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:backup:describeCopyJob",
+      "Parameters": {
+        "CopyJobId.$": "$.CopyJob.CopyJobId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.CopyStatus",
+      "Next": "IsCopyCompleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CopyStatusError",
+          "Next": "CheckCopyPollLimit"
+        }
+      ]
+    },
+    "IsCopyCompleted": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.CopyStatus.CopyJob.State",
+          "StringEquals": "COMPLETED",
+          "Next": "SetCopiedRestoreRP"
+        },
+        {
+          "Variable": "$.CopyStatus.CopyJob.State",
+          "StringEquals": "FAILED",
+          "Next": "RestoreFailed"
+        },
+        {
+          "Variable": "$.CopyStatus.CopyJob.State",
+          "StringEquals": "PARTIAL",
+          "Next": "RestoreFailed"
+        }
+      ],
+      "Default": "CheckCopyPollLimit"
+    },
+    "CheckCopyPollLimit": {
+      "Type": "Choice",
+      "Comment": "Cap copy polling (60s x 480 = up to 8h) before failing.",
+      "Choices": [
+        {
+          "Variable": "$.Polls.Copy",
+          "NumericGreaterThan": 480,
+          "Next": "CopyTimedOut"
+        }
+      ],
+      "Default": "WaitCopyDone"
+    },
+    "CopyTimedOut": {
+      "Type": "Fail",
+      "Error": "CopyTimedOut",
+      "Cause": "Cross-account copy job did not complete within the polling window"
+    },
+    "SetCopiedRestoreRP": {
+      "Type": "Pass",
+      "Comment": "Cross-account mode: restore from the copied recovery point now in the destination vault.",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.CopyStatus.CopyJob.DestinationRecoveryPointArn"
+      },
+      "ResultPath": "$.RestoreRP",
+      "Next": "StartRestoreJob"
+    },
     "StartRestoreJob": {
       "Type": "Task",
+      "Comment": "Restore a new EFS from the recovery point (local to the destination account). Runs with DESTINATION credentials.",
       "Resource": "arn:aws:states:::aws-sdk:backup:startRestoreJob",
       "Parameters": {
-        "RecoveryPointArn.$": "$.RecoveryPoint.RecoveryPointArn",
+        "RecoveryPointArn.$": "$.RestoreRP.RecoveryPointArn",
         "IamRoleArn.$": "$.AWSBackupRoleArn",
         "Metadata": {
           "file-system-id.$": "$.SourceEFS.FileSystemId",
@@ -82,6 +249,15 @@
     "WaitRestoreDone": {
       "Type": "Wait",
       "Seconds": 30,
+      "Next": "IncrementRestorePoll"
+    },
+    "IncrementRestorePoll": {
+      "Type": "Pass",
+      "Parameters": {
+        "Copy.$": "$.Polls.Copy",
+        "Restore.$": "States.MathAdd($.Polls.Restore, 1)"
+      },
+      "ResultPath": "$.Polls",
       "Next": "GetRestoreStatus"
     },
     "GetRestoreStatus": {
@@ -99,7 +275,7 @@
         {
           "ErrorEquals": ["States.ALL"],
           "ResultPath": "$.StatusError",
-          "Next": "WaitRestoreDone"
+          "Next": "CheckRestorePollLimit"
         }
       ]
     },
@@ -122,7 +298,24 @@
           "Next": "RestoreFailed"
         }
       ],
+      "Default": "CheckRestorePollLimit"
+    },
+    "CheckRestorePollLimit": {
+      "Type": "Choice",
+      "Comment": "Cap restore polling (30s x 480 = up to 4h) before failing.",
+      "Choices": [
+        {
+          "Variable": "$.Polls.Restore",
+          "NumericGreaterThan": 480,
+          "Next": "RestoreTimedOut"
+        }
+      ],
       "Default": "WaitRestoreDone"
+    },
+    "RestoreTimedOut": {
+      "Type": "Fail",
+      "Error": "RestoreTimedOut",
+      "Cause": "EFS restore job did not complete within the polling window"
     },
     "FormatRestoredEFS": {
       "Type": "Pass",
