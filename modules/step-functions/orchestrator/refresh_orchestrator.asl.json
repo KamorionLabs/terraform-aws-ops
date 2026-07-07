@@ -1200,10 +1200,57 @@
                       "BooleanEquals": true
                     }
                   ],
-                  "Next": "S3RunBatch"
+                  "Next": "CheckS3BackfillMode"
                 }
               ],
               "Default": "S3ReplicationComplete"
+            },
+            "CheckS3BackfillMode": {
+              "Type": "Choice",
+              "Comment": "Backfill mode toggle. Mode=copy -> S3PutObjectCopy job (copies EVERY object incl. replicas that S3ReplicateObject skips; needed to seed from a bucket populated by inbound replication). Absent/anything else -> replicate mode (S3ReplicateObject, incremental via NONE/FAILED, reuses the live config).",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.S3.Backfill.Mode",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.S3.Backfill.Mode",
+                      "StringEquals": "copy"
+                    }
+                  ],
+                  "Next": "S3RunBatchCopy"
+                }
+              ],
+              "Default": "S3RunBatch"
+            },
+            "S3RunBatchCopy": {
+              "Type": "Task",
+              "Comment": "Dispatch the S3 Batch Copy job (copy mode). Copies the full current contents of the source bucket to the single target Destinations[0] via S3PutObjectCopy, including replica objects. Same output envelope as run_batch_replication so S3PrepareJobId is shared. Copy targets one bucket per job; run per destination.",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.S3.RunBatchCopy",
+                "Input": {
+                  "SourceBucket.$": "$.S3.Source.Bucket",
+                  "SourceBucketArn.$": "$.S3.Source.BucketArn",
+                  "BatchCopyRoleArn.$": "$.S3.Replication.BatchReplicationRoleArn",
+                  "SourceAccount.$": "$.S3.Source.Account",
+                  "TargetBucketArn.$": "$.S3.Destinations[0].Bucket"
+                },
+                "Name.$": "States.Format('{}-S3RunBatchCopy', $$.Execution.Name)"
+              },
+              "ResultPath": "$.S3BatchResult",
+              "Next": "S3PrepareJobId",
+              "Catch": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "ResultPath": "$.S3Error",
+                  "Next": "S3ReplicationFailed"
+                }
+              ]
             },
             "S3RunBatch": {
               "Type": "Task",

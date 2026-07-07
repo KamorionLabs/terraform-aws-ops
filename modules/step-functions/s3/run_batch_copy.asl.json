@@ -1,0 +1,125 @@
+{
+  "Comment": "Dispatches a single S3 Batch Operations job (S3PutObjectCopy) to seed a destination bucket with the FULL current contents of the source bucket, including objects that are themselves replicas (which S3ReplicateObject/Batch Replication skips via EligibleForReplication). Copy ignores replication status entirely, so it is the correct tool to backfill a bucket that was itself populated by inbound replication (e.g. a legacy source being decommissioned). Uses S3JobManifestGenerator (no S3 Inventory precondition). When CreatedAfter is provided the manifest is time-filtered so re-runs only copy newer objects (incremental catch-up); otherwise every current object is copied. The target object inherits the destination bucket's default SSE-KMS encryption, so no per-object key is set here. Native SDK only (no Lambda). createJob assumes the source role via Credentials.RoleArn.$, passes AccountId explicitly, supplies a fresh ClientRequestToken via States.UUID() with ConfirmationRequired:false (idempotency), and runs the copy under BatchCopyRoleArn.",
+  "StartAt": "HasCreatedAfter",
+  "States": {
+    "HasCreatedAfter": {
+      "Type": "Choice",
+      "Comment": "Branch on the optional CreatedAfter time filter. Present -> incremental copy (only objects created after the cutoff). Absent -> full copy of every current object.",
+      "Choices": [
+        {
+          "Variable": "$.CreatedAfter",
+          "IsPresent": true,
+          "Next": "CreateCopyJobIncremental"
+        }
+      ],
+      "Default": "CreateCopyJobFull"
+    },
+    "CreateCopyJobFull": {
+      "Type": "Task",
+      "Comment": "Full copy: manifest generator lists every current object in the source bucket (no Filter). S3PutObjectCopy to the destination bucket; MetadataDirective COPY preserves source metadata; target encryption comes from the destination bucket's default SSE-KMS. SourceBucket and TargetResource are bucket ARNs (Pitfall: not names).",
+      "Resource": "arn:aws:states:::aws-sdk:s3control:createJob",
+      "Parameters": {
+        "AccountId.$": "$.SourceAccount.AccountId",
+        "ConfirmationRequired": false,
+        "Priority": 1,
+        "ClientRequestToken.$": "States.UUID()",
+        "RoleArn.$": "$.BatchCopyRoleArn",
+        "Operation": {
+          "S3PutObjectCopy": {
+            "TargetResource.$": "$.TargetBucketArn",
+            "MetadataDirective": "COPY"
+          }
+        },
+        "Report": {
+          "Enabled": false
+        },
+        "ManifestGenerator": {
+          "S3JobManifestGenerator": {
+            "ExpectedBucketOwner.$": "$.SourceAccount.AccountId",
+            "SourceBucket.$": "$.SourceBucketArn",
+            "EnableManifestOutput": false
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "JobId.$": "$.JobId"
+      },
+      "ResultPath": "$.BatchJob",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CopyJobFailed"
+        }
+      ]
+    },
+    "CreateCopyJobIncremental": {
+      "Type": "Task",
+      "Comment": "Incremental copy: identical to CreateCopyJobFull but the manifest generator Filter restricts to objects created after CreatedAfter (ISO-8601), so a re-run only copies newer objects. Live replication covers new objects continuously; this is a batch catch-up lever.",
+      "Resource": "arn:aws:states:::aws-sdk:s3control:createJob",
+      "Parameters": {
+        "AccountId.$": "$.SourceAccount.AccountId",
+        "ConfirmationRequired": false,
+        "Priority": 1,
+        "ClientRequestToken.$": "States.UUID()",
+        "RoleArn.$": "$.BatchCopyRoleArn",
+        "Operation": {
+          "S3PutObjectCopy": {
+            "TargetResource.$": "$.TargetBucketArn",
+            "MetadataDirective": "COPY"
+          }
+        },
+        "Report": {
+          "Enabled": false
+        },
+        "ManifestGenerator": {
+          "S3JobManifestGenerator": {
+            "ExpectedBucketOwner.$": "$.SourceAccount.AccountId",
+            "SourceBucket.$": "$.SourceBucketArn",
+            "EnableManifestOutput": false,
+            "Filter": {
+              "CreatedAfter.$": "$.CreatedAfter"
+            }
+          }
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "JobId.$": "$.JobId"
+      },
+      "ResultPath": "$.BatchJob",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CopyJobFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Comment": "Normalize success output with JobId at the top level so the orchestrator reads $.S3BatchResult.Output.JobId and check_batch_replication consumes $.BatchJob.JobId (same envelope as run_batch_replication).",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "run_batch_copy",
+        "JobId.$": "$.BatchJob.JobId"
+      },
+      "Next": "CopySucceeded"
+    },
+    "CopySucceeded": {
+      "Type": "Succeed"
+    },
+    "CopyJobFailed": {
+      "Type": "Fail",
+      "Error": "BatchCopyJobFailed",
+      "Cause": "Failed to create the S3 Batch Copy job (s3control:createJob). See $.Error for the underlying error."
+    }
+  }
+}

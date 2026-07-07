@@ -823,6 +823,22 @@ resource "aws_iam_role_policy" "s3_replication" {
           "s3:PutInventoryConfiguration"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "S3BatchCopy"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:GetObjectTagging",
+          "s3:PutObject",
+          "s3:PutObjectTagging"
+        ]
+        # S3PutObjectCopy batch jobs (copy mode) read every source object and
+        # write it to the destination bucket. Read applies to the source, write
+        # to the destination; both are scoped to concrete bucket ARNs at client
+        # wiring (Phase 8). ListBucket is already granted above.
+        Resource = "*"
       }
     ]
   })

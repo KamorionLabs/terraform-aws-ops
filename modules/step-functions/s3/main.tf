@@ -8,6 +8,7 @@ locals {
   step_functions = {
     setup_cross_account_replication = "setup_cross_account_replication.asl.json"
     run_batch_replication           = "run_batch_replication.asl.json"
+    run_batch_copy                  = "run_batch_copy.asl.json"
     check_batch_replication         = "check_batch_replication.asl.json"
     delete_replication              = "delete_replication.asl.json"
   }
