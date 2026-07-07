@@ -796,3 +796,114 @@ resource "aws_eks_pod_identity_association" "refresh" {
 
   tags = var.tags
 }
+
+# -----------------------------------------------------------------------------
+# AWS Backup — Destination Vault for cross-account EFS restore (copy-then-restore)
+# -----------------------------------------------------------------------------
+# A cross-account restore is a two-step operation (AWS Backup has no direct
+# cross-account restore): the source account copies its recovery point INTO a
+# vault owned by this destination account, then this account restores locally.
+# This block creates that destination vault + (optionally) a dedicated CMK, and
+# grants the source account(s) the single action backup:CopyIntoBackupVault.
+# EFS is "fully managed by AWS Backup", so the SOURCE CMK does NOT need sharing.
+
+locals {
+  backup_vault_name = coalesce(var.backup_vault_name, "${var.prefix}-efs-restore")
+
+  # KMS key used to encrypt the destination vault (and the restored EFS):
+  #   created CMK  > explicit ARN  > null (AWS-managed aws/backup key)
+  backup_vault_kms_key_arn = (
+    var.create_backup_vault && var.backup_vault_create_kms_key
+    ? aws_kms_key.backup_vault[0].arn
+    : var.backup_vault_kms_key_arn
+  )
+}
+
+resource "aws_kms_key" "backup_vault" {
+  count = var.create_backup_vault && var.backup_vault_create_kms_key ? 1 : 0
+
+  description             = "CMK for ${local.backup_vault_name} destination backup vault and restored EFS"
+  deletion_window_in_days = 7
+  enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "EnableRoot"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${local.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        # AWS Backup (in THIS account) re-encrypts incoming copies with this key.
+        Sid       = "AllowBackupService"
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = ["kms:CreateGrant", "kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService"    = "backup.${local.region}.amazonaws.com"
+            "kms:CallerAccount" = local.account_id
+          }
+        }
+      },
+      {
+        # The restored EFS is encrypted with this key.
+        Sid       = "AllowEFSService"
+        Effect    = "Allow"
+        Principal = { AWS = "*" }
+        Action    = ["kms:CreateGrant", "kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey*", "kms:DescribeKey"]
+        Resource  = "*"
+        Condition = {
+          StringEquals = {
+            "kms:ViaService"    = "elasticfilesystem.${local.region}.amazonaws.com"
+            "kms:CallerAccount" = local.account_id
+          }
+        }
+      }
+    ]
+  })
+
+  tags = merge(var.tags, { Name = "${local.backup_vault_name}-cmk" })
+}
+
+resource "aws_kms_alias" "backup_vault" {
+  count = var.create_backup_vault && var.backup_vault_create_kms_key ? 1 : 0
+
+  name          = "alias/${local.backup_vault_name}"
+  target_key_id = aws_kms_key.backup_vault[0].key_id
+}
+
+resource "aws_backup_vault" "restore" {
+  count = var.create_backup_vault ? 1 : 0
+
+  name          = local.backup_vault_name
+  kms_key_arn   = local.backup_vault_kms_key_arn
+  force_destroy = var.backup_vault_force_destroy
+
+  tags = merge(var.tags, { Name = local.backup_vault_name })
+}
+
+# Vault access policy: allow the source account(s) to copy recovery points in.
+# This is the ONLY cross-account grant required; it is scoped to a single action.
+resource "aws_backup_vault_policy" "restore" {
+  count = var.create_backup_vault && length(var.backup_vault_source_account_ids) > 0 ? 1 : 0
+
+  backup_vault_name = aws_backup_vault.restore[0].name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AllowSourceAccountsCopyIntoBackupVault"
+        Effect    = "Allow"
+        Principal = { AWS = [for acct in var.backup_vault_source_account_ids : "arn:aws:iam::${acct}:root"] }
+        Action    = "backup:CopyIntoBackupVault"
+        Resource  = "*"
+      }
+    ]
+  })
+}

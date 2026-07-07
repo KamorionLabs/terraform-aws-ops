@@ -140,3 +140,18 @@ output "backup_efs_role_arn" {
   description = "ARN of the AWS Backup role for EFS restore operations"
   value       = var.enable_efs ? aws_iam_role.backup_efs[0].arn : null
 }
+
+output "backup_vault_arn" {
+  description = "ARN of the destination backup vault for cross-account copy-then-restore: the created vault when create_backup_vault is true, otherwise the existing vault provided via existing_backup_vault_arn (null if neither). Feed this into the orchestrator EFS restore input (DestinationVaultArn)."
+  value       = var.create_backup_vault ? aws_backup_vault.restore[0].arn : var.existing_backup_vault_arn
+}
+
+output "backup_vault_name" {
+  description = "Name of the destination backup vault (created vault only; null when using an existing vault by ARN)."
+  value       = var.create_backup_vault ? aws_backup_vault.restore[0].name : null
+}
+
+output "backup_vault_kms_key_arn" {
+  description = "KMS key ARN encrypting the destination vault (and restored EFS): created CMK, explicit ARN, or null for the AWS-managed aws/backup key."
+  value       = var.create_backup_vault ? local.backup_vault_kms_key_arn : null
+}
