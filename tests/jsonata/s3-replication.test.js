@@ -38,14 +38,14 @@ function check(name, cond, detail) {
   if (cond) { pass++; console.log('  ok   ' + name); }
   else { fail++; console.log('  FAIL ' + name + (detail ? '  <<< ' + detail : '')); }
 }
-const prio = (rules, id) => { const r = (rules || []).find(x => x.ID === id); return r ? r.Priority : null; };
+const prio = (rules, id) => { const r = (rules || []).find(x => x.Id === id); return r ? r.Priority : null; };
 const ID_A = 'repl-111111111111-dst-a-bucket';
 const ID_B = 'repl-222222222222-dst-b-bucket';
 const existingA = { ReplicationConfiguration: { Rules: [
-  { ID: ID_A, Priority: 0, Status: 'Enabled', Destination: { Bucket: 'dst-a-bucket', Account: '111111111111' } },
+  { Id: ID_A, Priority: 0, Status: 'Enabled', Destination: { Bucket: 'dst-a-bucket', Account: '111111111111' } },
 ] } };
 const existingAB = { ReplicationConfiguration: { Rules: [
-  { ID: ID_A, Priority: 0 }, { ID: ID_B, Priority: 1 },
+  { Id: ID_A, Priority: 0 }, { Id: ID_B, Priority: 1 },
 ] } };
 
 (async () => {
@@ -55,11 +55,11 @@ const existingAB = { ReplicationConfiguration: { Rules: [
 
   r = await evalWith(MERGE, { Existing: existingA, Destinations: [{ Bucket: 'dst-b-bucket', AccountId: '222222222222' }] });
   check('S2 add destination -> A preserved @0, B @1 (max+1)',
-    r.length === 2 && prio(r, ID_A) === 0 && prio(r, ID_B) === 1, JSON.stringify(r.map(x => ({ ID: x.ID, P: x.Priority }))));
+    r.length === 2 && prio(r, ID_A) === 0 && prio(r, ID_B) === 1, JSON.stringify(r.map(x => ({ ID: x.Id, P: x.Priority }))));
 
   r = await evalWith(MERGE, { Existing: existingA, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
   check('S3 re-run same destination -> no duplicate, priority stable @0 (CR-03)',
-    r.length === 1 && prio(r, ID_A) === 0, JSON.stringify(r.map(x => ({ ID: x.ID, P: x.Priority }))));
+    r.length === 1 && prio(r, ID_A) === 0, JSON.stringify(r.map(x => ({ ID: x.Id, P: x.Priority }))));
 
   r = await evalWith(MERGE, { Destinations: [
     { Bucket: 'b1', AccountId: '111111111111' }, { Bucket: 'b2', AccountId: '222222222222' }, { Bucket: 'b3', AccountId: '333333333333' },
@@ -82,7 +82,7 @@ const existingAB = { ReplicationConfiguration: { Rules: [
   let f = await evalWith(REMAINING, { Existing: existingAB, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
   let empty = await evalWith(REMAINING_EMPTY, { Existing: existingAB, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
   check('D1 remove 1 of 2 -> remainingRules is an ARRAY (singleton fix)', Array.isArray(f), JSON.stringify(f));
-  check('D1 remaining is B only', Array.isArray(f) && f.length === 1 && f[0].ID === ID_B);
+  check('D1 remaining is B only', Array.isArray(f) && f.length === 1 && f[0].Id === ID_B);
   check('D1 remainingEmpty = false', empty === false, String(empty));
 
   empty = await evalWith(REMAINING_EMPTY, { Existing: existingA, Destinations: [{ Bucket: 'dst-a-bucket', AccountId: '111111111111' }] });
