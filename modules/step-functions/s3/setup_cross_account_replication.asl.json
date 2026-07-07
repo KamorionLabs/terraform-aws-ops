@@ -155,6 +155,7 @@
       "Credentials": {
         "RoleArn": "{% $sourceRoleArn %}"
       },
+      "Output": "{% {'SourceBucket': $sourceBucket} %}",
       "Next": "PrepareOutput",
       "Catch": [
         {
