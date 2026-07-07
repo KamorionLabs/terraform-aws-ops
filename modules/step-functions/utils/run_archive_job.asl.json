@@ -145,6 +145,7 @@
             "namespace.$": "$.EKS.Namespace"
           },
           "spec": {
+            "ttlSecondsAfterFinished": 86400,
             "template": {
               "metadata": {
                 "name": "refresh-archive"
@@ -238,6 +239,7 @@
               "namespace.$": "$.EKS.Namespace"
             },
             "spec": {
+              "ttlSecondsAfterFinished": 86400,
               "template": {
                 "metadata": {
                   "name": "refresh-archive"
@@ -377,85 +379,26 @@
             "States.ALL"
           ],
           "ResultPath": "$.Error",
-          "Next": "DeleteArchiveJobOnError"
+          "Next": "ArchiveJobFailed"
         }
       ]
     },
     "ArchiveJobStatusChoice": {
       "Type": "Choice",
+      "Comment": "Keep the K8s job on both success and failure (for log inspection); ttlSecondsAfterFinished (24h) on the job spec is the safety-net cleanup.",
       "Choices": [
         {
           "Variable": "$.JobStatus.Status",
           "StringEquals": "Complete",
-          "Next": "DeleteArchiveJob"
+          "Next": "PrepareOutput"
         },
         {
           "Variable": "$.JobStatus.Status",
           "StringEquals": "Failed",
-          "Next": "DeleteArchiveJobOnError"
+          "Next": "ArchiveJobFailed"
         }
       ],
       "Default": "WaitForArchiveJob"
-    },
-    "DeleteArchiveJob": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName.$": "$.K8sProxyLambdaArn",
-        "Payload": {
-          "Action": "deleteJob",
-          "ClusterName.$": "$.JobInfo.ClusterName",
-          "Namespace.$": "$.JobInfo.Namespace",
-          "JobName.$": "$.JobInfo.JobName"
-        }
-      },
-      "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 5,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "ResultPath": null,
-      "Next": "PrepareOutput"
-    },
-    "DeleteArchiveJobOnError": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::lambda:invoke",
-      "Parameters": {
-        "FunctionName.$": "$.K8sProxyLambdaArn",
-        "Payload": {
-          "Action": "deleteJob",
-          "ClusterName.$": "$.JobInfo.ClusterName",
-          "Namespace.$": "$.JobInfo.Namespace",
-          "JobName.$": "$.JobInfo.JobName"
-        }
-      },
-      "Credentials": {
-        "RoleArn.$": "$.DestinationAccount.RoleArn"
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "Lambda.ServiceException",
-            "Lambda.AWSLambdaException",
-            "Lambda.SdkClientException"
-          ],
-          "IntervalSeconds": 5,
-          "MaxAttempts": 3,
-          "BackoffRate": 2
-        }
-      ],
-      "ResultPath": null,
-      "Next": "ArchiveJobFailed"
     },
     "ArchiveJobFailed": {
       "Type": "Fail",
