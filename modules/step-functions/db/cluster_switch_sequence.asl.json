@@ -1,5 +1,5 @@
 {
-  "Comment": "ClusterSwitchSequence | Input: {TargetClusterIdentifier, TmpClusterIdentifier, OldClusterIdentifier, OldInstanceIdentifierPrefix, TargetInstanceIdentifierPrefix, Options: {RenameOldCluster, DeleteOldCluster}, StepFunctions: {Database: {RenameCluster, DeleteCluster, EnsureClusterNotExists, EnsureClusterAvailable}, Utils: {TagResources}}, DestinationAccount: {RoleArn}} | Output: {TargetClusterIdentifier, Status, SwitchCompletedAt}",
+  "Comment": "ClusterSwitchSequence | Input: {TargetClusterIdentifier, TmpClusterIdentifier, OldClusterIdentifier, OldInstanceIdentifierPrefix, TargetInstanceIdentifierPrefix, Options: {RenameOldCluster, DeleteOldCluster}, StepFunctions: {Database: {RenameCluster, DeleteCluster, EnsureClusterNotExists, EnsureClusterAvailable}, Utils: {TagResources}}, DestinationAccount: {RoleArn}} | Output (all paths): {TargetClusterIdentifier, DbClusterArn, Status: 'SwitchComplete', SwitchCompletedAt}. Every path promotes the tmp cluster to the target name (rename) and emits DbClusterArn. RenameOldCluster/DeleteOldCluster only decide the fate of a pre-existing cluster occupying the target name; when both are false (brand-new/disposable target) there is no old cluster to swap, so this is a promotion only, not a full old<->new switch.",
   "StartAt": "CheckRenameOldClusterOption",
   "States": {
     "CheckRenameOldClusterOption": {
