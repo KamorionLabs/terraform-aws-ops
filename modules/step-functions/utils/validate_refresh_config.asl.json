@@ -539,14 +539,48 @@
                   "Next": "CheckEFSContextFields"
                 },
                 {
-                  "Comment": "Backup restore mode: no Replication section, check Backup fields instead",
+                  "Comment": "Backup restore mode: no Replication section, check Backup fields (then backup sub-mode)",
                   "And": [
                     {"Variable": "$.EFS.Backup.RoleArn", "IsPresent": true}
+                  ],
+                  "Next": "CheckEFSBackupMode"
+                }
+              ],
+              "Default": "ConfigMissing_EFS"
+            },
+            "CheckEFSBackupMode": {
+              "Type": "Choice",
+              "Comment": "Backup restore sub-mode: cross-account (copy-then-restore) requires a destination vault + a source copy role; local (same-account) restore needs neither.",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Backup.CrossAccount", "IsPresent": true},
+                    {"Variable": "$.EFS.Backup.CrossAccount", "BooleanEquals": true}
+                  ],
+                  "Next": "CheckEFSBackupCrossAccountFields"
+                }
+              ],
+              "Default": "CheckEFSContextFields"
+            },
+            "CheckEFSBackupCrossAccountFields": {
+              "Type": "Choice",
+              "Comment": "Cross-account copy-then-restore requires DestinationVaultArn (a vault owned by the destination account, with a backup:CopyIntoBackupVault policy) and CopyRoleArn (the source-account role AWS Backup assumes to copy).",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Backup.DestinationVaultArn", "IsPresent": true},
+                    {"Variable": "$.EFS.Backup.CopyRoleArn", "IsPresent": true}
                   ],
                   "Next": "CheckEFSContextFields"
                 }
               ],
-              "Default": "ConfigMissing_EFS"
+              "Default": "ConfigMissing_EFSBackupXAccount"
+            },
+            "ConfigMissing_EFSBackupXAccount": {
+              "Type": "Pass",
+              "Result": {"Status": "FAILED", "MissingGroup": "EFS.Backup", "Required": ["EFS.Backup.DestinationVaultArn", "EFS.Backup.CopyRoleArn (both required when EFS.Backup.CrossAccount is true)"]},
+              "ResultPath": "$.V.FailedCheck",
+              "Next": "ConfigFailed"
             },
             "CheckEFSContextFields": {
               "Type": "Choice",
