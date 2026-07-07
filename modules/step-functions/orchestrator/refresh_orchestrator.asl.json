@@ -1154,10 +1154,30 @@
                       "BooleanEquals": true
                     }
                   ],
-                  "Next": "S3SetupReplication"
+                  "Next": "CheckS3SetupNeeded"
                 }
               ],
               "Default": "S3ReplicationComplete"
+            },
+            "CheckS3SetupNeeded": {
+              "Type": "Choice",
+              "Comment": "Copy mode is a one-shot seed via S3PutObjectCopy and does NOT use (or leave) a live ReplicationConfiguration on the source, so it skips setup entirely. Replicate mode needs the live config, so it runs setup first.",
+              "Choices": [
+                {
+                  "And": [
+                    {
+                      "Variable": "$.S3.Backfill.Mode",
+                      "IsPresent": true
+                    },
+                    {
+                      "Variable": "$.S3.Backfill.Mode",
+                      "StringEquals": "copy"
+                    }
+                  ],
+                  "Next": "CheckS3BackfillEnabled"
+                }
+              ],
+              "Default": "S3SetupReplication"
             },
             "S3SetupReplication": {
               "Type": "Task",
