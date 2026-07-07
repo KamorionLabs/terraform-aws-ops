@@ -658,11 +658,13 @@ resource "aws_iam_role_policy" "eks_pod_identity_s3" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "S3RefreshBucketRead"
+        Sid    = "S3RefreshBucketReadWrite"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:PutObject",
+          "s3:AbortMultipartUpload"
         ]
         Resource = var.eks_pod_identity_s3_arns
       }
