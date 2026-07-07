@@ -679,10 +679,10 @@ resource "aws_iam_role_policy" "s3_access" {
         Sid    = "S3ReplicationManage"
         Effect = "Allow"
         Action = [
-          "s3:PutBucketReplication",
-          "s3:GetBucketReplication",
+          "s3:PutReplicationConfiguration",
+          "s3:GetReplicationConfiguration",
           "s3:GetBucketVersioning",
-          "s3:DeleteBucketReplication"
+          "s3:DeleteReplicationConfiguration"
         ]
         # Generic module: kept broad here, tightened to client bucket ARNs at Phase 8 wiring.
         Resource = "arn:aws:s3:::*"
