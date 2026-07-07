@@ -148,7 +148,10 @@
             "ttlSecondsAfterFinished": 86400,
             "template": {
               "metadata": {
-                "name": "refresh-archive"
+                "name": "refresh-archive",
+                "annotations": {
+                  "karpenter.sh/do-not-disrupt": "true"
+                }
               },
               "spec": {
                 "serviceAccountName.$": "$.EKS.ArchiveJob.ServiceAccount",
@@ -242,7 +245,10 @@
               "ttlSecondsAfterFinished": 86400,
               "template": {
                 "metadata": {
-                  "name": "refresh-archive"
+                  "name": "refresh-archive",
+                  "annotations": {
+                    "karpenter.sh/do-not-disrupt": "true"
+                  }
                 },
                 "spec": {
                   "serviceAccountName.$": "$.EKS.ArchiveJob.ServiceAccount",
