@@ -43,16 +43,34 @@
       "Comment": "Use an explicitly provided recovery point (with its vault), else auto-select the latest COMPLETED point for the source EFS.",
       "Choices": [
         {
+          "Comment": "Explicit RP, cross-account: needs the source vault name for the copy.",
           "And": [
             {"Variable": "$.RecoveryPointArn", "IsPresent": true},
+            {"Variable": "$.CrossAccount", "IsPresent": true},
+            {"Variable": "$.CrossAccount", "BooleanEquals": true},
             {"Variable": "$.SourceVaultName", "IsPresent": true}
           ],
-          "Next": "UseExplicitRecoveryPoint"
+          "Next": "UseExplicitRecoveryPointXAccount"
+        },
+        {
+          "Comment": "Explicit RP, cross-account but SourceVaultName missing: fail loudly (never silently fall back to the latest point).",
+          "And": [
+            {"Variable": "$.RecoveryPointArn", "IsPresent": true},
+            {"Variable": "$.CrossAccount", "IsPresent": true},
+            {"Variable": "$.CrossAccount", "BooleanEquals": true}
+          ],
+          "Next": "MissingVaultForExplicitRP"
+        },
+        {
+          "Comment": "Explicit RP, local (same-account) restore: only the RP ARN is needed, no vault.",
+          "Variable": "$.RecoveryPointArn",
+          "IsPresent": true,
+          "Next": "UseExplicitRecoveryPointLocal"
         }
       ],
       "Default": "GetLatestRecoveryPoint"
     },
-    "UseExplicitRecoveryPoint": {
+    "UseExplicitRecoveryPointXAccount": {
       "Type": "Pass",
       "Parameters": {
         "RecoveryPointArn.$": "$.RecoveryPointArn",
@@ -60,6 +78,19 @@
       },
       "ResultPath": "$.SourceRP",
       "Next": "IsCrossAccount"
+    },
+    "UseExplicitRecoveryPointLocal": {
+      "Type": "Pass",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.RecoveryPointArn"
+      },
+      "ResultPath": "$.SourceRP",
+      "Next": "IsCrossAccount"
+    },
+    "MissingVaultForExplicitRP": {
+      "Type": "Fail",
+      "Error": "MissingSourceVaultName",
+      "Cause": "Cross-account restore with an explicit RecoveryPointArn also requires SourceVaultName (the source vault holding that recovery point, needed for the copy job)"
     },
     "GetLatestRecoveryPoint": {
       "Type": "Task",

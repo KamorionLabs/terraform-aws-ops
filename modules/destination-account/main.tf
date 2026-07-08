@@ -885,6 +885,13 @@ resource "aws_backup_vault" "restore" {
   force_destroy = var.backup_vault_force_destroy
 
   tags = merge(var.tags, { Name = local.backup_vault_name })
+
+  lifecycle {
+    precondition {
+      condition     = length(var.backup_vault_source_account_ids) > 0
+      error_message = "backup_vault_source_account_ids must be non-empty when create_backup_vault is true: the destination vault needs a backup:CopyIntoBackupVault grant for the source account(s), otherwise cross-account copy jobs are denied at runtime. (For a same-account/local restore you do not need to create this vault.)"
+    }
+  }
 }
 
 # Vault access policy: allow the source account(s) to copy recovery points in.
