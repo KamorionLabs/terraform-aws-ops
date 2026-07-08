@@ -243,11 +243,27 @@ resource "aws_iam_role_policy" "efs_access" {
         Sid    = "BackupCopy"
         Effect = "Allow"
         Action = [
+          "backup:CopyFromBackupVault",
           "backup:CopyIntoBackupVault",
           "backup:StartCopyJob",
           "backup:DescribeCopyJob"
         ]
         Resource = "*"
+      },
+      {
+        # Allow the orchestrator (this role) to hand the dedicated backup copy
+        # role to AWS Backup when calling start-copy-job for cross-account EFS.
+        Sid    = "PassRoleToBackupCopy"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-backup-efs-copy-role"
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "backup.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -570,10 +586,17 @@ resource "aws_iam_role_policy" "backup_efs" {
     Version = "2012-10-17"
     Statement = [
       {
+        # Cross-account copy: AWS Backup (assuming this role) must be able to
+        # read/share the source recovery point (CopyFromBackupVault) AND write
+        # into the destination vault (CopyIntoBackupVault). Both are required on
+        # the role passed to start-copy-job. Strictly read-only on the source:
+        # NO DeleteRecoveryPoint / UpdateRecoveryPointLifecycle / vault mutation.
         Sid    = "BackupCopyOperations"
         Effect = "Allow"
         Action = [
+          "backup:CopyFromBackupVault",
           "backup:CopyIntoBackupVault",
+          "backup:StartCopyJob",
           "backup:DescribeCopyJob",
           "backup:GetRecoveryPointRestoreMetadata"
         ]
@@ -585,7 +608,8 @@ resource "aws_iam_role_policy" "backup_efs" {
         Action = [
           "backup:DescribeBackupVault",
           "backup:ListRecoveryPointsByBackupVault",
-          "backup:ListRecoveryPointsByResource"
+          "backup:ListRecoveryPointsByResource",
+          "backup:DescribeRecoveryPoint"
         ]
         Resource = "*"
       },

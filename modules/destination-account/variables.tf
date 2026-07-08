@@ -377,3 +377,53 @@ variable "k8s_proxy_lambda_path" {
   type        = string
   default     = null
 }
+
+# -----------------------------------------------------------------------------
+# AWS Backup — Destination Vault (for cross-account EFS restore, copy-then-restore)
+# A cross-account restore ALWAYS lands the copied recovery point in a vault owned
+# by THIS (destination) account, then restores locally. This creates that vault.
+# Safe: only affects the destination account; grants the source account(s) the
+# single action backup:CopyIntoBackupVault (no read/delete on their data).
+# -----------------------------------------------------------------------------
+
+variable "create_backup_vault" {
+  description = "Create an AWS Backup vault in this destination account to receive cross-account recovery-point copies (copy-then-restore). Not needed for local (same-account) restore or EFS replication modes."
+  type        = bool
+  default     = false
+}
+
+variable "backup_vault_name" {
+  description = "Name of the destination backup vault to create. Defaults to '<prefix>-efs-restore'."
+  type        = string
+  default     = null
+}
+
+variable "backup_vault_source_account_ids" {
+  description = "Source account IDs allowed to copy recovery points into the destination vault (grants only backup:CopyIntoBackupVault via the vault access policy). Required when create_backup_vault is true."
+  type        = list(string)
+  default     = []
+}
+
+variable "backup_vault_create_kms_key" {
+  description = "Create a dedicated customer-managed KMS key to encrypt the destination vault (and the restored EFS). If false, backup_vault_kms_key_arn is used, or the AWS-managed aws/backup key when that is also null. Note: EFS is fully-managed by AWS Backup, so the source CMK does NOT need sharing."
+  type        = bool
+  default     = true
+}
+
+variable "backup_vault_kms_key_arn" {
+  description = "Existing KMS key ARN to encrypt the destination vault, used when backup_vault_create_kms_key is false. Null falls back to the AWS-managed aws/backup key."
+  type        = string
+  default     = null
+}
+
+variable "backup_vault_force_destroy" {
+  description = "Allow destroying the destination backup vault even if it still contains recovery points (test/ephemeral vaults)."
+  type        = bool
+  default     = false
+}
+
+variable "existing_backup_vault_arn" {
+  description = "ARN of an existing destination backup vault to use for cross-account copy-then-restore when create_backup_vault is false. When set, the module does NOT manage the vault/policy/KMS; you are responsible for its backup:CopyIntoBackupVault policy. Exposed via the backup_vault_arn output for the orchestrator input."
+  type        = string
+  default     = null
+}

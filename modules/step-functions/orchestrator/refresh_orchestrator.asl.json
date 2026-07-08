@@ -210,6 +210,12 @@
                 "Variable": "$.EFS.Source.Account.AccountId",
                 "StringEqualsPath": "$.DestinationAccount.AccountId"
               }
+            },
+            {
+              "Or": [
+                { "Variable": "$.EFS.Strategy", "IsPresent": false },
+                { "Not": { "Variable": "$.EFS.Strategy", "StringEquals": "backup_restore" } }
+              ]
             }
           ],
           "Next": "Phase1WithReplication"
@@ -935,6 +941,12 @@
                         "Variable": "$.EFS.Source.Account.AccountId",
                         "StringEqualsPath": "$.DestinationAccount.AccountId"
                       }
+                    },
+                    {
+                      "Or": [
+                        { "Variable": "$.EFS.Strategy", "IsPresent": false },
+                        { "Not": { "Variable": "$.EFS.Strategy", "StringEquals": "backup_restore" } }
+                      ]
                     }
                   ],
                   "Next": "SetupCrossAccountReplication"
@@ -1023,30 +1035,22 @@
             },
             "RestoreEFS": {
               "Type": "Task",
+              "QueryLanguage": "JSONata",
+              "Comment": "Restore EFS from AWS Backup. JSONata so cross-account fields (CrossAccount/DestinationVaultArn/CopyRoleArn) and the optional explicit RecoveryPointArn/SourceVaultName are passed only when present in EFS.Backup (JSONata omits absent keys) — same-account restore is unaffected. Reused by both local and cross-account backup_restore strategies; converges to CreateEFSMountTargets like replication.",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
-              "Parameters": {
-                "StateMachineArn.$": "$.StepFunctions.EFS.RestoreFromBackup",
-                "Input": {
-                  "SourceEFSName.$": "$.EFS.Source.Name",
-                  "AWSBackupRoleArn.$": "$.EFS.Backup.RoleArn",
-                  "Encrypted": "true",
-                  "KmsKeyId.$": "$.EFS.Security.KmsKeyId",
-                  "NewFileSystem": "true",
-                  "ItemsToRestore.$": "$.EFS.Backup.ItemsToRestore",
-                  "Tags.$": "$.EFS.Tags",
-                  "SourceAccount.$": "$.SourceAccount",
-                  "DestinationAccount.$": "$.DestinationAccount"
-                },
-                "Name.$": "States.Format('{}-RestoreEFS', $$.Execution.Name)"
+              "Arguments": {
+                "StateMachineArn": "{% $states.input.StepFunctions.EFS.RestoreFromBackup %}",
+                "Input": "{% {'SourceEFSName': $states.input.EFS.Source.Name, 'AWSBackupRoleArn': $states.input.EFS.Backup.RoleArn, 'Encrypted': 'true', 'KmsKeyId': $states.input.EFS.Security.KmsKeyId, 'NewFileSystem': 'true', 'ItemsToRestore': $states.input.EFS.Backup.ItemsToRestore, 'Tags': $states.input.EFS.Tags, 'SourceAccount': $states.input.SourceAccount, 'DestinationAccount': $states.input.DestinationAccount, 'CrossAccount': $states.input.EFS.Backup.CrossAccount, 'DestinationVaultArn': $states.input.EFS.Backup.DestinationVaultArn, 'CopyRoleArn': $states.input.EFS.Backup.CopyRoleArn, 'RecoveryPointArn': $states.input.EFS.Backup.RecoveryPointArn, 'SourceVaultName': $states.input.EFS.Backup.SourceVaultName} %}",
+                "Name": "{% $states.context.Execution.Name & '-RestoreEFS' %}"
               },
-              "ResultPath": "$.EfsRestoreResult",
+              "Output": "{% $merge([$states.input, {'EfsRestoreResult': $states.result}]) %}",
               "Next": "CreateEFSMountTargets",
               "Catch": [
                 {
                   "ErrorEquals": [
                     "States.ALL"
                   ],
-                  "ResultPath": "$.Error",
+                  "Output": "{% $merge([$states.input, {'Error': $states.errorOutput}]) %}",
                   "Next": "EFSRefreshFailed"
                 }
               ]
@@ -1599,6 +1603,12 @@
                 "Variable": "$.EFS.Source.Account.AccountId",
                 "StringEqualsPath": "$.DestinationAccount.AccountId"
               }
+            },
+            {
+              "Or": [
+                { "Variable": "$.EFS.Strategy", "IsPresent": false },
+                { "Not": { "Variable": "$.EFS.Strategy", "StringEquals": "backup_restore" } }
+              ]
             }
           ],
           "Next": "CheckReplicationSyncFinal"
