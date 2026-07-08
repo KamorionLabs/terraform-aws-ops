@@ -1865,7 +1865,9 @@
     },
     "Phase4PostSwitchEKS": {
       "Type": "Pass",
-      "Comment": "Phase 4: Create new EKS storage, scale up services, verify and restart",
+      "QueryLanguage": "JSONata",
+      "Comment": "Phase 4: Create new EKS storage, scale up services, verify and restart. Resolve the EFS id created this run (if any) so storage creation can use it directly for a disposable EFS that has no /infra/efs/<name>/id SSM parameter; null falls back to the SSM lookup.",
+      "Output": "{% $merge([$states.input, {'PostSwitchEfsId': ($exists($states.input.Phase1Results[2].EfsRestoreResult.Output.FileSystemId) ? $states.input.Phase1Results[2].EfsRestoreResult.Output.FileSystemId : ($exists($states.input.EFS.Replication.DestinationFileSystemId) and $states.input.EFS.Replication.DestinationFileSystemId != '') ? $states.input.EFS.Replication.DestinationFileSystemId : null)}]) %}",
       "Next": "CheckEKSEnabled_PostSwitch"
     },
     "CheckEKSEnabled_PostSwitch": {
@@ -1906,7 +1908,7 @@
           "Next": "ScaleUpServices"
         }
       ],
-      "Default": "Phase5Cleanup"
+      "Default": "CheckArchiveJobOption"
     },
     "CreateEKSStorage": {
       "Type": "Task",
@@ -1922,6 +1924,7 @@
           "StorageClassName.$": "$.EKS.Storage.StorageClassName",
           "MountOptions.$": "$.EKS.Storage.MountOptions",
           "Action": "Create",
+          "FileSystemId.$": "$.PostSwitchEfsId",
           "EfsIdSSMParameterName.$": "$.EFS.SSMParameters.EfsId",
           "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
           "DestinationAccount.$": "$.DestinationAccount"
@@ -1936,7 +1939,7 @@
             "States.ALL"
           ],
           "ResultPath": "$.CreateStorageError",
-          "Next": "CheckScaleServicesPostSwitch"
+          "Next": "CheckNotifyEnabled_Failure"
         }
       ]
     },
