@@ -48,7 +48,7 @@
         {
           "Variable": "$.Action",
           "StringEquals": "Create",
-          "Next": "GetEfsIdFromSsm"
+          "Next": "CheckEfsIdProvided"
         },
         {
           "Variable": "$.Action",
@@ -72,7 +72,7 @@
         {
           "Variable": "$.Action",
           "StringEquals": "Create",
-          "Next": "GetEfsIdFromSsmPrivate"
+          "Next": "CheckEfsIdProvidedPrivate"
         },
         {
           "Variable": "$.Action",
@@ -335,6 +335,43 @@
       "Next": "ProcessSucceeded"
     },
 
+    "CheckEfsIdProvided": {
+      "Type": "Choice",
+      "Comment": "Disposable-EFS flow (public): if a FileSystemId is passed directly, skip the SSM lookup — an EFS created on the fly has no /infra/efs/<name>/id parameter. Falls back to SSM otherwise.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.FileSystemId", "IsPresent": true},
+            {"Variable": "$.FileSystemId", "IsNull": false},
+            {"Variable": "$.FileSystemId", "StringGreaterThan": ""}
+          ],
+          "Next": "UseProvidedEfsId"
+        }
+      ],
+      "Default": "GetEfsIdFromSsm"
+    },
+    "CheckEfsIdProvidedPrivate": {
+      "Type": "Choice",
+      "Comment": "Disposable-EFS flow (private): same as CheckEfsIdProvided but falls back to the private-mode SSM lookup.",
+      "Choices": [
+        {
+          "And": [
+            {"Variable": "$.FileSystemId", "IsPresent": true},
+            {"Variable": "$.FileSystemId", "IsNull": false},
+            {"Variable": "$.FileSystemId", "StringGreaterThan": ""}
+          ],
+          "Next": "UseProvidedEfsId"
+        }
+      ],
+      "Default": "GetEfsIdFromSsmPrivate"
+    },
+    "UseProvidedEfsId": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Use the directly-provided FileSystemId instead of the SSM-published one (same shape as the SSM ResultSelector: $.EfsInfo.Id).",
+      "Output": "{% $merge([$states.input, {'EfsInfo': {'Id': $states.input.FileSystemId}}]) %}",
+      "Next": "CheckCreateStorageClassOption"
+    },
     "GetEfsIdFromSsm": {
       "Type": "Task",
       "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
