@@ -82,7 +82,11 @@ driver = "${BUILDAH_STORAGE_DRIVER:-vfs}"
 graphroot = "${SCRATCH_DIR}/containers"
 runroot = "${SCRATCH_DIR}/runroot"
 EOF
-  log "OCI: buildah storage on ${SCRATCH_DIR} (driver ${BUILDAH_STORAGE_DRIVER:-vfs})"
+  # buildah commit/push stage the (multi-GB) compressed layer blobs via TMPDIR, which defaults
+  # to /var/tmp on the node's ephemeral overlay and busts it. Pin it to the scratch volume too.
+  export TMPDIR="${SCRATCH_DIR}/tmp"
+  mkdir -p "${TMPDIR}"
+  log "OCI: buildah storage + TMPDIR on ${SCRATCH_DIR} (driver ${BUILDAH_STORAGE_DRIVER:-vfs})"
 
   log "OCI: ECR login to ${registry}"
   aws ecr get-login-password --region "${AWS_REGION}" \
