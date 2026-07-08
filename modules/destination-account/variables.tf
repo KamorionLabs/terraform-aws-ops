@@ -90,6 +90,20 @@ variable "deploy_lambdas" {
   default     = true
 }
 
+variable "create_lambda_role" {
+  description = <<-EOT
+    Whether to create the Lambda execution role (+ its inline policy) and the Lambda security group.
+    Decoupled from deploy_lambdas so sensitive IAM/SG live in the infra stack while lambda CODE is
+    deployed from the app stack:
+      - infra stack: create_lambda_role = true,  deploy_lambdas = false  -> creates role + SG only
+      - app stack:   create_lambda_role = false, deploy_lambdas = true   -> deploys functions using
+                     existing_lambda_role_arn + lambda_security_group_ids (from infra)
+    Default null keeps the legacy behavior (follows deploy_lambdas) so existing callers are unaffected.
+  EOT
+  type        = bool
+  default     = null
+}
+
 variable "existing_lambda_role_arn" {
   description = "ARN of existing Lambda execution role. Used when deploy_lambdas is false but dynamic Lambda creation is still needed."
   type        = string

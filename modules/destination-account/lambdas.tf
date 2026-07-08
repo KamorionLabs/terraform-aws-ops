@@ -7,6 +7,17 @@ locals {
   python_version_long = "python${local.python_version}"
   lambdas_path        = "${path.module}/../../lambdas"
 
+  # Create the lambda role/SG here? Decoupled from deploy_lambdas; defaults to
+  # legacy behavior (follows deploy_lambdas) when create_lambda_role is null.
+  create_lambda_role = var.create_lambda_role != null ? var.create_lambda_role : var.deploy_lambdas
+
+  # Role the lambda functions run as: the one created here, else the provided one.
+  # one(...[*]) is safe when the role isn't created (count = 0 -> null).
+  lambda_exec_role_arn = local.create_lambda_role ? one(aws_iam_role.lambda[*].arn) : var.existing_lambda_role_arn
+
+  # Security groups for lambda VPC config: created here (0/1 via splat), else provided.
+  lambda_sg_ids = var.create_lambda_security_group ? aws_security_group.lambda[*].id : var.lambda_security_group_ids
+
   lambda_layers = var.deploy_lambdas ? ["pymysql"] : []
 
   # Base lambda functions (always deployed if deploy_lambdas is true)
@@ -117,7 +128,7 @@ resource "aws_lambda_function" "functions" {
 
   function_name    = "${local.prefixes.lambda}-${each.key}"
   description      = lookup(local.lambda_functions_filtered[each.key], "description", "")
-  role             = aws_iam_role.lambda[0].arn
+  role             = local.lambda_exec_role_arn
   filename         = each.value.output_path
   source_code_hash = each.value.output_base64sha256
   handler          = local.lambda_functions_filtered[each.key].handler
@@ -128,7 +139,7 @@ resource "aws_lambda_function" "functions" {
   memory_size      = lookup(local.lambda_functions_filtered[each.key], "memory_size", 320)
 
   vpc_config {
-    security_group_ids = var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+    security_group_ids = local.lambda_sg_ids
     subnet_ids         = var.lambda_subnet_ids
   }
 
@@ -149,7 +160,7 @@ resource "aws_lambda_function" "functions" {
   tags = var.tags
 
   depends_on = [
-    aws_iam_role_policy.lambda[0],
+    aws_iam_role_policy.lambda,
     aws_cloudwatch_log_group.lambda
   ]
 }
@@ -159,7 +170,7 @@ resource "aws_lambda_function" "functions" {
 # -----------------------------------------------------------------------------
 
 resource "aws_iam_role" "lambda" {
-  count = var.deploy_lambdas ? 1 : 0
+  count = local.create_lambda_role ? 1 : 0
 
   name = "${local.prefixes.iam_role}-lambda-role"
 
@@ -180,7 +191,7 @@ resource "aws_iam_role" "lambda" {
 }
 
 resource "aws_iam_role_policy" "lambda" {
-  count = var.deploy_lambdas ? 1 : 0
+  count = local.create_lambda_role ? 1 : 0
 
   name = "${local.prefixes.iam_policy}-lambda-policy"
   role = aws_iam_role.lambda[0].id
@@ -256,7 +267,7 @@ resource "aws_iam_role_policy" "lambda" {
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "lambda" {
-  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
+  count = (local.create_lambda_role || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   name        = "${local.prefixes.security_group}-dest-lambda-sg"
   description = "Security group for Lambda functions"
@@ -272,7 +283,7 @@ resource "aws_security_group" "lambda" {
 }
 
 resource "aws_security_group_rule" "lambda_https_egress" {
-  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
+  count = (local.create_lambda_role || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -284,7 +295,7 @@ resource "aws_security_group_rule" "lambda_https_egress" {
 }
 
 resource "aws_security_group_rule" "lambda_mysql_egress" {
-  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
+  count = (local.create_lambda_role || var.enable_k8s_proxy) && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -296,7 +307,7 @@ resource "aws_security_group_rule" "lambda_mysql_egress" {
 }
 
 resource "aws_security_group_rule" "lambda_nfs_egress" {
-  count = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group && var.enable_efs ? 1 : 0
+  count = (local.create_lambda_role || var.enable_k8s_proxy) && var.create_lambda_security_group && var.enable_efs ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -358,7 +369,7 @@ resource "aws_lambda_function" "k8s_proxy" {
   memory_size      = 256
 
   vpc_config {
-    security_group_ids = var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+    security_group_ids = local.lambda_sg_ids
     subnet_ids         = var.lambda_subnet_ids
   }
 
