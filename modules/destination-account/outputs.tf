@@ -42,23 +42,23 @@ output "lambda_get_efs_subpath_name" {
 }
 
 output "lambda_role_arn" {
-  description = "ARN of the Lambda execution IAM role"
-  value       = var.deploy_lambdas ? aws_iam_role.lambda[0].arn : var.existing_lambda_role_arn
+  description = "ARN of the Lambda execution IAM role (created here, or the provided existing one)"
+  value       = local.lambda_exec_role_arn
 }
 
 output "lambda_role_name" {
   description = "Name of the Lambda execution role"
-  value       = var.deploy_lambdas ? aws_iam_role.lambda[0].name : var.existing_lambda_role_name
+  value       = local.create_lambda_role ? one(aws_iam_role.lambda[*].name) : var.existing_lambda_role_name
 }
 
 output "lambda_security_group_id" {
-  description = "ID of the Lambda security group (created by this module)"
-  value       = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? aws_security_group.lambda[0].id : null
+  description = "ID of the Lambda security group (created by this module, else null)"
+  value       = (local.create_lambda_role || var.enable_k8s_proxy) && var.create_lambda_security_group ? one(aws_security_group.lambda[*].id) : null
 }
 
 output "lambda_security_group_ids" {
   description = "Security group IDs for Lambda VPC configuration (created or provided)"
-  value       = (var.deploy_lambdas || var.enable_k8s_proxy) && var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+  value       = local.lambda_sg_ids
 }
 
 output "lambda_subnet_ids" {
