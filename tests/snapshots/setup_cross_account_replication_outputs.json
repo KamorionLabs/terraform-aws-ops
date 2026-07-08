@@ -1,5 +1,5 @@
 {
-  "comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in). Supports cross-region via Lambda proxy (ProxyLambdaArn + SourceAccount.Region).",
+  "comment": "Sets up EFS cross-account replication. Uses existing destination EFS (DestinationFileSystemId) or creates a new one. Copies pod-access policy from ExistingFileSystemId (or applies defaults with CsiDriverRoleArn) before adding replication policies. Skips replication policy adds if already present. Policies managed by Terraform by default (UpdateSourcePolicy/UpdateDestinationPolicy opt-in). Supports cross-region via Lambda proxy (ProxyLambdaArn + SourceAccount.Region).",
   "terminal_outputs": {
     "PrepareExistingOutput": [
       "DestinationFileSystemArn",
