@@ -116,13 +116,18 @@ EOF
       rm -rf "${OCI_DATADIR:?}" && mkdir -p "$OCI_DATADIR"
       chown -R mysql:mysql "$OCI_DATADIR" 2>/dev/null || true
       mysqld --initialize-insecure --datadir="$OCI_DATADIR" --user=root
-      mysqld --datadir="$OCI_DATADIR" --user=root --skip-networking --socket="$sock" &
+      # Throwaway datadir baked into an image: run with unsafe-but-fast bulk-load settings
+      # (no per-commit flush, no doublewrite, no binlog, large buffer pool) to speed up the
+      # single-threaded dump import — build-time durability is irrelevant.
+      mysqld --datadir="$OCI_DATADIR" --user=root --skip-networking --socket="$sock" \
+        --innodb-flush-log-at-trx-commit=0 --innodb-doublewrite=0 --innodb-flush-method=O_DIRECT \
+        --innodb-buffer-pool-size="${OCI_IMPORT_BUFFER_POOL:-8G}" --skip-log-bin &
       pid=$!
       for i in $(seq 1 60); do mysqladmin --socket="$sock" ping >/dev/null 2>&1 && break; sleep 1; done
       mysql --socket="$sock" -e "CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\`;"
       for f in /refresh/*.sql; do
         echo "importing $(basename "$f")"
-        mysql --socket="$sock" "${MYSQL_DATABASE}" < "$f"
+        { echo "SET SESSION foreign_key_checks=0; SET SESSION unique_checks=0;"; cat "$f"; } | mysql --socket="$sock" "${MYSQL_DATABASE}"
       done
       mysqladmin --socket="$sock" shutdown
       wait "$pid" 2>/dev/null || true
