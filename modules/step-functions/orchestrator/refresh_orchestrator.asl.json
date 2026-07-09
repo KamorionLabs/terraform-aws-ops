@@ -2100,7 +2100,11 @@
               ]
             },
             "TargetClusterDeleteDone": {
-              "Type": "Succeed"
+              "Type": "Pass",
+              "QueryLanguage": "JSONata",
+              "Comment": "Emit a small summary (not the full accumulated state) so the Parallel aggregate stays under the 256KB limit.",
+              "Output": "{% {'TargetCluster': $states.input.Database.Target.ClusterIdentifier, 'Deleted': $not($exists($states.input.DeleteTargetClusterError))} %}",
+              "End": true
             }
           }
         },
@@ -2157,7 +2161,11 @@
               ]
             },
             "TargetEfsDeleteDone": {
-              "Type": "Succeed"
+              "Type": "Pass",
+              "QueryLanguage": "JSONata",
+              "Comment": "Emit a small summary (not the full accumulated state) so the Parallel aggregate stays under the 256KB limit.",
+              "Output": "{% {'TargetEFS': ($exists($states.input.TargetEfsFileSystemId) ? $states.input.TargetEfsFileSystemId : null), 'Deleted': $not($exists($states.input.DeleteTargetEfsError))} %}",
+              "End": true
             }
           }
         }
@@ -2227,7 +2235,7 @@
           "Next": "SendSuccessNotification"
         }
       ],
-      "Default": "RefreshComplete"
+      "Default": "BuildRefreshSummary"
     },
     "SendSuccessNotification": {
       "Type": "Task",
@@ -2254,14 +2262,14 @@
         "Name.$": "States.Format('{}-NotifySuccess', $$.Execution.Name)"
       },
       "ResultPath": null,
-      "Next": "RefreshComplete",
+      "Next": "BuildRefreshSummary",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
           "ResultPath": "$.NotifyError",
-          "Next": "RefreshComplete"
+          "Next": "BuildRefreshSummary"
         }
       ]
     },
@@ -2330,6 +2338,13 @@
       "Type": "Fail",
       "Error": "RefreshFailed",
       "Cause": "The refresh process encountered an error"
+    },
+    "BuildRefreshSummary": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Collapse the accumulated orchestration state into a compact execution output: resource names/ids + per-step success flags. Detailed per-step timings come from the execution history (see scripts/refresh_report.py), not from this state.",
+      "Output": "{% ( $aj := $states.input.EKS.ArchiveJob; { 'Instance': ($exists($aj.Oci.ImageTag) ? $aj.Oci.ImageTag : null), 'Resources': { 'SourceCluster': $states.input.Database.Source.ClusterIdentifier, 'TargetCluster': $states.input.Database.Target.ClusterIdentifier, 'SourceEFS': ($exists($states.input.EFS.Source.FileSystemId) ? $states.input.EFS.Source.FileSystemId : null), 'Namespace': $states.input.EKS.Namespace, 'OciImage': ($exists($aj.Oci) ? $aj.Oci.EcrRepo & ':' & $aj.Oci.ImageTag : null), 'OciMediaImage': ($exists($aj.Oci.MediaRepo) ? $aj.Oci.MediaRepo & ':' & $aj.Oci.ImageTag : null) }, 'Steps': { 'Restore': $exists($states.input.RestoreResult), 'ClusterSwitch': $not($exists($states.input.ClusterSwitchError)), 'Minify': $exists($states.input.MysqlImportResult), 'CreateStorage': $not($exists($states.input.CreateStorageError)), 'Archive': $not($exists($states.input.ArchiveError)), 'DeleteTarget': ($exists($states.input.DeleteTargetResult) ? $states.input.DeleteTargetResult : $not($exists($states.input.DeleteTargetError))) } } ) %}",
+      "Next": "RefreshComplete"
     },
     "RefreshComplete": {
       "Type": "Succeed"
