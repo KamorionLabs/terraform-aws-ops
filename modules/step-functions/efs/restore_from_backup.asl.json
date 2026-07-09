@@ -10,7 +10,29 @@
         "Restore": 0
       },
       "ResultPath": "$.Polls",
-      "Next": "GetSourceEFSInfo"
+      "Next": "HasSourceEFSId"
+    },
+    "HasSourceEFSId": {
+      "Type": "Choice",
+      "Comment": "Prefer an explicit source FileSystemId (like replication) over a Name lookup: if $.SourceEFSFileSystemId is provided, use it directly and skip describeFileSystems + the Name filter (which requires a unique Name tag and breaks if absent). Falls back to the Name-based lookup otherwise.",
+      "Choices": [
+        {
+          "Variable": "$.SourceEFSFileSystemId",
+          "IsPresent": true,
+          "Next": "BuildSourceEFSFromId"
+        }
+      ],
+      "Default": "GetSourceEFSInfo"
+    },
+    "BuildSourceEFSFromId": {
+      "Type": "Pass",
+      "Comment": "Build SourceEFS from the explicit FileSystemId (construct the ARN from the source account region + id).",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceEFSFileSystemId",
+        "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.SourceAccount.Region, $.SourceAccount.AccountId, $.SourceEFSFileSystemId)"
+      },
+      "ResultPath": "$.SourceEFS",
+      "Next": "HasExplicitRecoveryPoint"
     },
     "GetSourceEFSInfo": {
       "Type": "Task",

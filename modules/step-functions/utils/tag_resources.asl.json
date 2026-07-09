@@ -25,11 +25,12 @@
     },
     "MergeTags": {
       "Type": "Pass",
-      "Comment": "Merge source tags with config tags, config tags take precedence",
-      "Parameters": {
-        "ResourceARNList.$": "$.ResourceARNList",
-        "Tags.$": "States.JsonMerge($.SourceTagList, $.ConfigTags)",
-        "DestinationAccount.$": "$.DestinationAccount"
+      "QueryLanguage": "JSONata",
+      "Comment": "Merge source tags with config tags, config tags take precedence. SourceTagList is a list of {Key,Value} (resource describe format); convert to a {key:value} map (required by tagResources) before merging.",
+      "Output": {
+        "ResourceARNList": "{% $states.input.ResourceARNList %}",
+        "Tags": "{% $merge([$states.input.SourceTagList{Key: Value}, $states.input.ConfigTags]) %}",
+        "DestinationAccount": "{% $states.input.DestinationAccount %}"
       },
       "Next": "TagResources"
     },
