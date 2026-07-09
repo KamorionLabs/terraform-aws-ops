@@ -564,13 +564,9 @@
     },
     "PrepareOutput": {
       "Type": "Pass",
-      "Parameters": {
-        "Status": "Completed",
-        "ModuleName": "restore_cluster",
-        "PrimaryIdentifier.$": "$.TmpDbClusterIdentifier",
-        "SnapshotUsed.$": "$.SnapshotInfo.SnapshotIdentifier",
-        "CrossAccountShared.$": "$.SnapshotInfo.Shared"
-      },
+      "QueryLanguage": "JSONata",
+      "Comment": "SnapshotInfo only exists on the snapshot-restore path; fast-clone and point-in-time restores have no snapshot, so guard the reference (was States.Runtime on fast-clone).",
+      "Output": "{% { 'Status': 'Completed', 'ModuleName': 'restore_cluster', 'PrimaryIdentifier': $states.input.TmpDbClusterIdentifier, 'SnapshotUsed': ($exists($states.input.SnapshotInfo) ? $states.input.SnapshotInfo.SnapshotIdentifier : null), 'CrossAccountShared': ($exists($states.input.SnapshotInfo) ? $states.input.SnapshotInfo.Shared : false) } %}",
       "Next": "RestoreSucceeded"
     },
     "InvalidRestoreType": {
