@@ -1,7 +1,63 @@
 {
   "Comment": "Creates context-specific Lambda on first use, invokes to find EFS subpath, stores in SSM. Lambdas are reused on subsequent runs.",
-  "StartAt": "InitializeState",
+  "StartAt": "CheckSubpathMode",
   "States": {
+    "CheckSubpathMode": {
+      "Type": "Choice",
+      "Comment": "Replication mode: media is at EFS root -> store subpath '.' directly, WITHOUT running the aws-backup-restore_* detector lambda (which would wrongly pick up a stale aws-backup-restore_* dir left on the EFS). Only backup_restore mode runs the detector.",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.SubpathMode", "IsPresent": true },
+            { "Variable": "$.SubpathMode", "StringEquals": "root" }
+          ],
+          "Next": "StoreRootEfsIdSSM"
+        }
+      ],
+      "Default": "InitializeState"
+    },
+    "StoreRootEfsIdSSM": {
+      "Type": "Task",
+      "Comment": "Replication mode: store the new EFS id in SSM (no lambda/access-point needed).",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+      "Parameters": {
+        "Name.$": "$.EfsIdSSMParameterName",
+        "Value.$": "$.FileSystemId",
+        "Type": "String",
+        "Overwrite": true
+      },
+      "Credentials": { "RoleArn.$": "$.DestinationAccount.RoleArn" },
+      "ResultPath": null,
+      "Next": "StoreRootSubPathSSM"
+    },
+    "StoreRootSubPathSSM": {
+      "Type": "Task",
+      "Comment": "Replication mode: subpath is always root '.'.",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+      "Parameters": {
+        "Name.$": "$.EfsSubPathSSMParameterName",
+        "Value": ".",
+        "Type": "String",
+        "Overwrite": true
+      },
+      "Credentials": { "RoleArn.$": "$.DestinationAccount.RoleArn" },
+      "ResultPath": null,
+      "Next": "RootSubpathStored"
+    },
+    "RootSubpathStored": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "get_subpath_and_store_in_ssm",
+        "FileSystemId.$": "$.FileSystemId",
+        "EfsSubPath": ".",
+        "Context.$": "$.Context",
+        "EfsIdSSMParameterName.$": "$.EfsIdSSMParameterName",
+        "EfsSubPathSSMParameterName.$": "$.EfsSubPathSSMParameterName",
+        "Message": "Replication mode: EFS subpath set to root '.' in SSM (detector skipped)"
+      },
+      "Next": "ProcessSucceeded"
+    },
     "InitializeState": {
       "Type": "Pass",
       "Comment": "Initialize state and build Lambda name based on context",

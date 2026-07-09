@@ -406,11 +406,12 @@
             },
             "StoreSubpathInSSM_Repl": {
               "Type": "Task",
-              "Comment": "Find EFS subpath and store both EFS ID and subpath in SSM",
+              "Comment": "Replication mode: media is at EFS root, so store subpath '.' directly (SubpathMode=root) WITHOUT running the aws-backup-restore_* detector lambda, which would wrongly pick up a stale aws-backup-restore_* dir left on the EFS.",
               "Resource": "arn:aws:states:::states:startExecution.sync:2",
               "Parameters": {
                 "StateMachineArn.$": "$.StepFunctions.EFS.GetSubpathAndStoreInSSM",
                 "Input": {
+                  "SubpathMode": "root",
                   "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
                   "FileSystemArn.$": "States.Format('arn:aws:elasticfilesystem:{}:{}:file-system/{}', $.DestinationAccount.Region, $.DestinationAccount.AccountId, $.EfsRestoreResult.Output.FileSystemId)",
                   "Context.$": "$.EFS.Context",

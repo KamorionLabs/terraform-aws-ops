@@ -20,10 +20,19 @@
     },
     "IsRefreshAllowed": {
       "Type": "Choice",
+      "Comment": "Guard the index access: when the EFS has no 'refresh' tag the filtered RefreshTagValue array is empty, so $.Tags.RefreshTagValue[0] would be an invalid path and crash the Choice. IsPresent first → clean deny (SafetyCheckFailed) instead of a runtime error.",
       "Choices": [
         {
-          "Variable": "$.Tags.RefreshTagValue[0]",
-          "StringEquals": "true",
+          "And": [
+            {
+              "Variable": "$.Tags.RefreshTagValue[0]",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Tags.RefreshTagValue[0]",
+              "StringEquals": "true"
+            }
+          ],
           "Next": "DescribeAccessPoints"
         }
       ],

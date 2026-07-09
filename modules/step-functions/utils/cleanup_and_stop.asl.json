@@ -194,7 +194,7 @@
             "RetagOldEFS": {
               "Type": "Task",
               "QueryLanguage": "JSONata",
-              "Comment": "Change Name tag of old EFS to add -old suffix",
+              "Comment": "Change Name tag of old EFS to add -old suffix, and set refresh=true so DeleteOldEFS (delete_filesystem IsRefreshAllowed) is allowed to remove it. Without refresh=true the old EFS (created by IaC, no refresh tag) can never be deleted.",
               "Resource": "arn:aws:states:::aws-sdk:efs:tagResource",
               "Credentials": {
                 "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
@@ -205,6 +205,10 @@
                   {
                     "Key": "Name",
                     "Value": "{% $states.input.EFS.Name & '-old' %}"
+                  },
+                  {
+                    "Key": "refresh",
+                    "Value": "true"
                   },
                   {
                     "Key": "refresh-replaced-by",
