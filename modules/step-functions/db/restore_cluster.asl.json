@@ -391,7 +391,7 @@
     "RestoreClusterFastClone": {
       "Type": "Task",
       "QueryLanguage": "JSONata",
-      "Comment": "Fast clone within destination account",
+      "Comment": "Fast clone (copy-on-write). Same-account when SourceDBClusterIdentifier is a local id; cross-account when it is a cross-account cluster ARN (arn:aws:rds:...:<source-acct>:cluster:<id>) — requires the RAM share + KMS grant provisioned in IaC (ADR-018). Credentials are always the destination role, which performs the clone.",
       "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
       "Credentials": {
         "RoleArn": "{% $states.input.DestinationAccount.RoleArn %}"
