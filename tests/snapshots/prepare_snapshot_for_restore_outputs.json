@@ -1,9 +1,37 @@
 {
   "comment": "Prepares a snapshot for cross-account or same-account restore. Handles snapshot copy (from automated) or creation (from cluster), and sharing with KMS grants when needed.",
   "terminal_outputs": {
-    "PrepareOutputCrossAccount": [],
-    "PrepareOutputCrossAccountWithWarning": [],
-    "PrepareOutputSameAccount": [],
+    "PrepareOutputCrossAccount": [
+      "EngineVersion",
+      "Mode",
+      "ModuleName",
+      "Shared",
+      "SharedWith",
+      "SnapshotArn",
+      "SnapshotIdentifier",
+      "Status"
+    ],
+    "PrepareOutputCrossAccountWithWarning": [
+      "EngineVersion",
+      "Mode",
+      "ModuleName",
+      "Shared",
+      "SharedWith",
+      "SnapshotArn",
+      "SnapshotIdentifier",
+      "Status",
+      "Warning"
+    ],
+    "PrepareOutputSameAccount": [
+      "EngineVersion",
+      "Mode",
+      "ModuleName",
+      "Shared",
+      "SnapshotArn",
+      "SnapshotCreateTime",
+      "SnapshotIdentifier",
+      "Status"
+    ],
     "PrepareSucceeded": []
   }
 }
