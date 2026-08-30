@@ -1,0 +1,177 @@
+{
+  "Comment": "Remove CloudFront aliases from distributions (fire-and-forget). Finds distributions containing the provided aliases and removes them. Supports cross-account via AssumeRole.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            { "Variable": "$.Aliases", "IsPresent": true },
+            { "Variable": "$.Aliases[0]", "IsPresent": true }
+          ],
+          "Next": "NormalizeInput"
+        }
+      ],
+      "Default": "ValidationFailed"
+    },
+
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "InvalidInput",
+      "Cause": "Missing required parameter: Aliases (non-empty array). Optional: CrossAccountRoleArn, DryRun."
+    },
+
+    "NormalizeInput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Aliases.$": "$.Aliases",
+        "CrossAccountRoleArn.$": "States.JsonMerge(States.StringToJson('{\"CrossAccountRoleArn\": null}'), $, false).CrossAccountRoleArn",
+        "DryRun.$": "States.JsonMerge(States.StringToJson('{\"DryRun\": false}'), $, false).DryRun",
+        "ExecutionId.$": "$$.Execution.Id",
+        "StartTime.$": "$$.Execution.StartTime"
+      },
+      "Next": "FindDistributions"
+    },
+
+    "FindDistributions": {
+      "Type": "Task",
+      "Comment": "List CloudFront distributions and return those containing any of the input aliases",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${CloudFrontAliasManagerLambdaArn}",
+        "Payload": {
+          "Action": "FIND_BY_ALIASES",
+          "Aliases.$": "$.Aliases",
+          "CrossAccountRoleArn.$": "$.CrossAccountRoleArn"
+        }
+      },
+      "ResultSelector": {
+        "Distributions.$": "$.Payload.distributions",
+        "Count.$": "$.Payload.count"
+      },
+      "ResultPath": "$.FindResult",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "CheckDistributionsFound"
+    },
+
+    "CheckDistributionsFound": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.FindResult.Count",
+          "NumericGreaterThan": 0,
+          "Next": "CheckDryRun"
+        }
+      ],
+      "Default": "NothingToRemove"
+    },
+
+    "NothingToRemove": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "NothingToRemove",
+        "Message": "No distributions contain the requested aliases",
+        "RequestedAliases.$": "$.Aliases"
+      },
+      "End": true
+    },
+
+    "CheckDryRun": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.DryRun",
+          "BooleanEquals": true,
+          "Next": "DryRunPlan"
+        }
+      ],
+      "Default": "RemoveAliasesMap"
+    },
+
+    "DryRunPlan": {
+      "Type": "Pass",
+      "Comment": "Return the plan without mutating anything",
+      "Parameters": {
+        "Status": "DryRun",
+        "Message": "Dry run - no changes applied",
+        "RequestedAliases.$": "$.Aliases",
+        "DistributionsMatched.$": "$.FindResult.Distributions"
+      },
+      "End": true
+    },
+
+    "RemoveAliasesMap": {
+      "Type": "Map",
+      "Comment": "Remove matched aliases from each distribution",
+      "ItemsPath": "$.FindResult.Distributions",
+      "ItemSelector": {
+        "Distribution.$": "$$.Map.Item.Value",
+        "CrossAccountRoleArn.$": "$.CrossAccountRoleArn"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "RemoveFromDistribution",
+        "States": {
+          "RemoveFromDistribution": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${CloudFrontAliasManagerLambdaArn}",
+              "Payload": {
+                "Action": "REMOVE_ALIASES",
+                "DistributionId.$": "$.Distribution.id",
+                "Aliases.$": "$.Distribution.matched_aliases",
+                "CrossAccountRoleArn.$": "$.CrossAccountRoleArn"
+              }
+            },
+            "ResultSelector": {
+              "distribution_id.$": "$.Payload.distribution_id",
+              "modified.$": "$.Payload.modified",
+              "removed_aliases.$": "$.Payload.removed_aliases",
+              "remaining_aliases.$": "$.Payload.remaining_aliases"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException", "Lambda.SdkClientException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              },
+              {
+                "ErrorEquals": ["CloudFront.PreconditionFailedException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 2,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.RemovalResults",
+      "Next": "Summarize"
+    },
+
+    "Summarize": {
+      "Type": "Pass",
+      "Comment": "Aggregate removal results for the execution output",
+      "Parameters": {
+        "Status": "Completed",
+        "RequestedAliases.$": "$.Aliases",
+        "DistributionsMatched.$": "$.FindResult.Count",
+        "Results.$": "$.RemovalResults",
+        "ExecutionId.$": "$.ExecutionId",
+        "StartTime.$": "$.StartTime"
+      },
+      "End": true
+    }
+  }
+}
