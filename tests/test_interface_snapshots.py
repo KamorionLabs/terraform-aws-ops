@@ -26,6 +26,85 @@ REFACTORED_FILES = {
 }
 
 
+def _clean_param_keys(d: dict) -> list:
+    """Sorted output keys of a Parameters/Output object, stripping the JSONPath '.$' suffix."""
+    return sorted(set(
+        k.rstrip(".$") if k.endswith(".$") else k
+        for k in d.keys()
+    ))
+
+
+def _jsonata_output_keys(output: str) -> list:
+    """Top-level keys of a JSONata Output object literal, e.g.
+    "{% { 'Status': 'Completed', 'Mode': (cond ? 'a' : 'b') } %}" -> ['Mode', 'Status'].
+
+    Depth-aware so values (nested objects, arrays, function calls, and top-level
+    ternaries with string branches) are skipped -- only quoted keys at object
+    depth 1 immediately preceding a ':' are captured. Returns [] when the Output
+    is not an object literal (e.g. "$merge(...)").
+    """
+    if not isinstance(output, str):
+        return []
+    s = output.strip()
+    if s.startswith("{%"):
+        s = s[2:]
+    if s.endswith("%}"):
+        s = s[:-2]
+    s = s.strip()
+    if not s.startswith("{"):
+        return []
+    keys, i, n, depth, expect_key = [], 1, len(s), 1, True
+    while i < n:
+        c = s[i]
+        if c in " \t\n\r":
+            i += 1
+            continue
+        if depth == 1 and expect_key and c in "'\"":
+            q, j, buf = c, i + 1, []
+            while j < n:
+                if s[j] == "\\" and j + 1 < n:
+                    buf.append(s[j + 1]); j += 2; continue
+                if s[j] == q:
+                    break
+                buf.append(s[j]); j += 1
+            keys.append("".join(buf)); i = j + 1; expect_key = False
+            continue
+        if c in "{[(":
+            depth += 1; i += 1; continue
+        if c in "}])":
+            depth -= 1; i += 1
+            if depth == 0:
+                break
+            continue
+        if c in "'\"":
+            q, j = c, i + 1
+            while j < n:
+                if s[j] == "\\" and j + 1 < n:
+                    j += 2; continue
+                if s[j] == q:
+                    break
+                j += 1
+            i = j + 1; continue
+        if depth == 1 and c == ",":
+            expect_key = True
+        i += 1
+    return sorted(set(keys))
+
+
+def _terminal_output_keys(sdef: dict) -> list:
+    """Output field names of a terminal Pass state, whether it uses JSONPath
+    Parameters or JSONata Output (string expression or plain object)."""
+    params = sdef.get("Parameters")
+    if isinstance(params, dict):
+        return _clean_param_keys(params)
+    out = sdef.get("Output")
+    if isinstance(out, dict):
+        return _clean_param_keys(out)
+    if isinstance(out, str):
+        return _jsonata_output_keys(out)
+    return []
+
+
 def extract_output_schema(asl_data: dict) -> dict:
     """Extract the output schema from an ASL definition.
 
@@ -68,15 +147,8 @@ def extract_output_schema(asl_data: dict) -> dict:
             feeds_succeed = next_state in succeed_states
 
             if is_terminal or feeds_succeed:
-                # Extract output keys from Parameters
-                params = sdef.get("Parameters", {})
-                keys = sorted(params.keys())
-                # Strip .$ suffixes for comparison (e.g., "Status.$" -> "Status")
-                clean_keys = sorted(set(
-                    k.rstrip(".$") if k.endswith(".$") else k
-                    for k in keys
-                ))
-                terminal_outputs[name] = clean_keys
+                # Output keys from Parameters (JSONPath) or Output (JSONata / object)
+                terminal_outputs[name] = _terminal_output_keys(sdef)
 
     return {
         "comment": asl_data.get("Comment", ""),
