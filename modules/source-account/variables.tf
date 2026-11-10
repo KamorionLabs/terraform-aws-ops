@@ -9,13 +9,13 @@ variable "prefix" {
 }
 
 variable "resource_prefixes" {
-  description = "Custom prefixes per resource type. Falls back to var.prefix if not specified."
+  description = "Custom prefixes per resource type. Falls back to var.prefix if not specified. `log_group` is deprecated and ignored: Lambda log groups are always /aws/lambda/<function name>, derived from `lambda` (and dynamic_lambda_prefix for IAM)."
   type = object({
     iam_role       = optional(string)
     iam_policy     = optional(string)
     security_group = optional(string)
     lambda         = optional(string)
-    log_group      = optional(string)
+    log_group      = optional(string) # Deprecated, ignored (see description)
   })
   default = {}
 }

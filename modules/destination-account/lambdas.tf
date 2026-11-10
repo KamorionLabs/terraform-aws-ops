@@ -207,7 +207,7 @@ resource "aws_iam_role_policy" "lambda" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
+        Resource = local.lambda_log_group_arns
       },
       {
         Sid    = "VPCAccess"
@@ -325,7 +325,7 @@ resource "aws_security_group_rule" "lambda_nfs_egress" {
 resource "aws_cloudwatch_log_group" "lambda" {
   for_each = local.lambda_functions_filtered
 
-  name              = "/aws/lambda/${local.prefixes.log_group}-${each.key}"
+  name              = "/aws/lambda/${local.prefixes.lambda}-${each.key}"
   retention_in_days = var.log_retention_days
 
   tags = var.tags
@@ -348,7 +348,7 @@ data "archive_file" "k8s_proxy" {
 resource "aws_cloudwatch_log_group" "k8s_proxy" {
   count = var.enable_k8s_proxy ? 1 : 0
 
-  name              = "/aws/lambda/${local.prefixes.log_group}-k8s-proxy"
+  name              = "/aws/lambda/${local.prefixes.lambda}-k8s-proxy"
   retention_in_days = var.log_retention_days
 
   tags = var.tags
