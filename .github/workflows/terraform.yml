@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - '**.tf'
+      - '**.tftest.hcl'
       - '.github/workflows/terraform.yml'
   pull_request:
     branches: [main]
     paths:
       - '**.tf'
+      - '**.tftest.hcl'
       - '.github/workflows/terraform.yml'
 
 env:
@@ -62,6 +64,33 @@ jobs:
       - name: OpenTofu Validate (${{ matrix.module }})
         working-directory: ${{ matrix.module }}
         run: tofu validate
+
+  test-modules:
+    name: Test Modules
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - modules/destination-account
+          - modules/source-account
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+
+      - name: OpenTofu Init (${{ matrix.module }})
+        working-directory: ${{ matrix.module }}
+        run: tofu init -backend=false
+
+      # Plan-only tests against mocked providers: no AWS credentials needed.
+      - name: OpenTofu Test (${{ matrix.module }})
+        working-directory: ${{ matrix.module }}
+        run: tofu test
 
   lint:
     name: TFLint
