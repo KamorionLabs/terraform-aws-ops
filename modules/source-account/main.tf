@@ -16,7 +16,6 @@ locals {
     iam_policy     = coalesce(var.resource_prefixes.iam_policy, var.prefix)
     security_group = coalesce(var.resource_prefixes.security_group, var.prefix)
     lambda         = coalesce(var.resource_prefixes.lambda, var.prefix)
-    log_group      = coalesce(var.resource_prefixes.log_group, var.prefix)
   }
 
   # Dynamic lambda prefix for Step Function created Lambdas
@@ -26,6 +25,17 @@ locals {
     ["arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"],
     local.dynamic_lambda_prefix != local.prefixes.lambda ? ["arn:aws:lambda:*:${local.account_id}:function:${local.dynamic_lambda_prefix}-*"] : []
   ))
+
+  # CloudWatch Logs for the Lambdas. AWS writes a function's logs to
+  # /aws/lambda/<function name>, so the log group is derived from the function
+  # name prefixes, never from a separate setting (resource_prefixes.log_group is
+  # deprecated and ignored: a value that already held "/aws/lambda/..." produced
+  # "/aws/lambda//aws/lambda/..." groups and grants no Lambda could use).
+  # "<prefix>-*" covers the log group itself (CreateLogGroup) and its streams.
+  lambda_log_group_arns = [
+    for p in distinct([local.prefixes.lambda, local.dynamic_lambda_prefix]) :
+    "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${p}-*"
+  ]
 
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.source[0].arn : var.existing_role_arn
@@ -445,7 +455,7 @@ resource "aws_iam_role_policy" "lambda_execution" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
+        Resource = local.lambda_log_group_arns
       },
       {
         Sid    = "VPCAccess"
