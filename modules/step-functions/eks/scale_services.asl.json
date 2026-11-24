@@ -19,7 +19,7 @@
       "QueryLanguage": "JSONata",
       "Comment": "Inject stub EksCluster and optional EksRoleArn for private mode. EksRoleArn is set only when EKS.Account.RoleArn differs from DestinationAccount.RoleArn (legacy clusters with separate K8s access role via aws-auth).",
       "Output": "{% $merge([$states.input, {'EksCluster': {'Cluster': {'Name': 'unused', 'CertificateAuthority': {'Data': 'unused'}, 'Endpoint': 'unused'}}, 'EksRoleArn': ($exists($states.input.EKS.Account.RoleArn) and $states.input.EKS.Account.RoleArn != $states.input.DestinationAccount.RoleArn) ? $states.input.EKS.Account.RoleArn : null}]) %}",
-      "Next": "ScaleServicesMap"
+      "Next": "ResolveSecretRefresh"
     },
     "GetEksClusterInfo": {
       "Type": "Task",
@@ -45,8 +45,338 @@
       "Comment": "Set EksRoleArn to null for public mode (not needed with EKS Access Entries).",
       "Result": null,
       "ResultPath": "$.EksRoleArn",
+      "Next": "ResolveSecretRefresh"
+    },
+    "ResolveSecretRefresh": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Resolve secret refresh mode: 'annotate' (ESO ExternalSecret), 'delete' (Secret Provider Class), or 'none'. Falls back to CleanupSecret for backward compatibility. Also resolve the ExternalSecrets to force-sync and wait for BEFORE scaling up (PreScaleSync): EKS.SecretRefresh.ExternalSecrets [{Name, Namespace (default EKS.Namespace)}], plus SecretName in annotate mode. Optional: ApiVersion (default v1), WaitTimeoutSeconds (default 300, 0 = force-sync without waiting), PollIntervalSeconds (default 10). Empty list = step skipped.",
+      "Output": "{% $merge([$states.input, {'SecretRefreshResolved': ( $sr := $states.input.EKS.SecretRefresh; $ns := $states.input.EKS.Namespace; $mode := $exists($sr.Mode) ? $sr.Mode : ($states.input.CleanupSecret = true and $states.input.Replicas > 0 ? 'delete' : 'none'); $name := $exists($sr.SecretName) ? $sr.SecretName : 'shared-data-media-sub-path'; $timeout := ($exists($sr.WaitTimeoutSeconds) and $sr.WaitTimeoutSeconds >= 0) ? $sr.WaitTimeoutSeconds : 300; $interval := ($exists($sr.PollIntervalSeconds) and $sr.PollIntervalSeconds > 0) ? $sr.PollIntervalSeconds : 10; $configured := [$sr.ExternalSecrets[$type($) = 'object' and $exists(Name) and Name != ''].{'Name': Name, 'Namespace': ($exists(Namespace) and Namespace != '') ? Namespace : $ns}]; $legacy := $mode = 'annotate' ? [{'Name': $name, 'Namespace': $ns}] : []; $list := $distinct($append($configured, $legacy)); {'Mode': $mode, 'SecretName': $name, 'ApiVersion': ($exists($sr.ApiVersion) and $sr.ApiVersion != '') ? $sr.ApiVersion : 'v1', 'ExternalSecrets': $count($list) > 0 ? $list : [], 'WaitTimeoutSeconds': $timeout, 'PollIntervalSeconds': $interval, 'MaxPolls': $timeout > 0 ? $ceil($timeout / $interval) : 0, 'PreScaleSync': $states.input.Replicas > 0 and $count($list) > 0} )}]) %}",
+      "Next": "CheckPreScaleSecretSync"
+    },
+    "CheckPreScaleSecretSync": {
+      "Type": "Choice",
+      "Comment": "Scaling up with ExternalSecrets configured: force-sync them and wait for ESO before starting pods",
+      "Choices": [
+        {
+          "Variable": "$.SecretRefreshResolved.PreScaleSync",
+          "BooleanEquals": true,
+          "Next": "SyncExternalSecretsMap"
+        }
+      ],
+      "Default": "ScaleServicesMap"
+    },
+    "SyncExternalSecretsMap": {
+      "Type": "Map",
+      "QueryLanguage": "JSONata",
+      "Comment": "For each ExternalSecret: set a new force-sync annotation, then poll until status.refreshTime is at or after the force-sync and the Ready condition is True. A failed item (timeout, force-sync error) fails the execution before any pod is started.",
+      "Items": "{% $states.input.SecretRefreshResolved.ExternalSecrets %}",
+      "MaxConcurrency": 5,
+      "ItemSelector": "{% ( $r := $states.input.SecretRefreshResolved; $i := $states.context.Map.Item.Value; {'Name': $i.Name, 'Namespace': $i.Namespace, 'Path': '/apis/external-secrets.io/' & $r.ApiVersion & '/namespaces/' & $i.Namespace & '/externalsecrets/' & $i.Name, 'PollIntervalSeconds': $r.PollIntervalSeconds, 'MaxPolls': $r.MaxPolls, 'WaitTimeoutSeconds': $r.WaitTimeoutSeconds, 'AccessMode': $states.input.EKS.AccessMode, 'EksClusterName': $states.input.EKS.ClusterName, 'EksCluster': $states.input.EksCluster.Cluster, 'K8sProxyLambdaArn': $states.input.K8sProxyLambdaArn, 'EksRoleArn': $states.input.EksRoleArn, 'RoleArn': $states.input.DestinationAccount.RoleArn} ) %}",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "EsInit",
+        "States": {
+          "EsInit": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Assign": {
+              "forceSyncAt": "{% $now() %}",
+              "attempts": 0,
+              "polls": 0,
+              "es": null,
+              "esStatus": null
+            },
+            "Next": "EsCheckAccessMode"
+          },
+          "EsCheckAccessMode": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Choices": [
+              {
+                "Condition": "{% $states.input.AccessMode = 'public' %}",
+                "Next": "EsGet"
+              }
+            ],
+            "Default": "EsForceSyncPrivate"
+          },
+          "EsGet": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Comment": "Public mode: read the ExternalSecret, then PUT it back with a new force-sync annotation",
+            "Resource": "arn:aws:states:::eks:call",
+            "Arguments": {
+              "ClusterName": "{% $states.input.EksCluster.Name %}",
+              "CertificateAuthority": "{% $states.input.EksCluster.CertificateAuthority.Data %}",
+              "Endpoint": "{% $states.input.EksCluster.Endpoint %}",
+              "Method": "GET",
+              "Path": "{% $states.input.Path %}"
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.RoleArn %}"
+            },
+            "Assign": {
+              "es": "{% $states.result.ResponseBody %}",
+              "attempts": "{% $attempts + 1 %}"
+            },
+            "Output": "{% $states.input %}",
+            "Next": "EsForceSyncPublic",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsForceSyncError"
+              }
+            ]
+          },
+          "EsForceSyncPublic": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Resource": "arn:aws:states:::eks:call",
+            "Arguments": {
+              "ClusterName": "{% $states.input.EksCluster.Name %}",
+              "CertificateAuthority": "{% $states.input.EksCluster.CertificateAuthority.Data %}",
+              "Endpoint": "{% $states.input.EksCluster.Endpoint %}",
+              "Method": "PUT",
+              "Path": "{% $states.input.Path %}",
+              "RequestBody": "{% $merge([$sift($es, function($v, $k) { $k != 'status' }), {'metadata': $merge([$es.metadata, {'annotations': $merge([$exists($es.metadata.annotations) ? $es.metadata.annotations : {}, {'force-sync': $forceSyncAt}])}])}]) %}"
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.RoleArn %}"
+            },
+            "Output": "{% $states.input %}",
+            "Next": "EsCheckWaitEnabled",
+            "Catch": [
+              {
+                "ErrorEquals": ["EKS.409"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsCheckForceSyncRetry"
+              },
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsForceSyncError"
+              }
+            ]
+          },
+          "EsCheckForceSyncRetry": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Comment": "The ExternalSecret changed between GET and PUT (409 Conflict): read it again, up to 3 times",
+            "Choices": [
+              {
+                "Condition": "{% $attempts < 3 %}",
+                "Next": "EsGet"
+              }
+            ],
+            "Default": "EsForceSyncError"
+          },
+          "EsForceSyncPrivate": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Comment": "Private mode: merge-patch the force-sync annotation through the k8s-proxy Lambda",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Arguments": {
+              "FunctionName": "{% $states.input.K8sProxyLambdaArn %}",
+              "Payload": {
+                "Action": "call",
+                "ClusterName": "{% $states.input.EksClusterName %}",
+                "EksRoleArn": "{% $states.input.EksRoleArn %}",
+                "Method": "PATCH",
+                "Path": "{% $states.input.Path %}",
+                "RequestBody": {
+                  "metadata": {
+                    "annotations": {
+                      "force-sync": "{% $forceSyncAt %}"
+                    }
+                  }
+                },
+                "ContentType": "application/merge-patch+json"
+              }
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.RoleArn %}"
+            },
+            "Output": "{% $states.input %}",
+            "Next": "EsCheckWaitEnabled",
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsForceSyncError"
+              }
+            ]
+          },
+          "EsForceSyncError": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Comment": "Force-sync failed: fatal when the wait is enabled, best-effort when WaitTimeoutSeconds is 0",
+            "Choices": [
+              {
+                "Condition": "{% $states.input.MaxPolls > 0 %}",
+                "Next": "EsForceSyncFailed"
+              }
+            ],
+            "Default": "EsForceSyncSkipped"
+          },
+          "EsForceSyncSkipped": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Output": "{% {'Name': $states.input.Name, 'Namespace': $states.input.Namespace, 'Status': 'ForceSyncFailed'} %}",
+            "End": true
+          },
+          "EsCheckWaitEnabled": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Choices": [
+              {
+                "Condition": "{% $states.input.MaxPolls > 0 %}",
+                "Next": "EsWait"
+              }
+            ],
+            "Default": "EsForceSynced"
+          },
+          "EsForceSynced": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Output": "{% {'Name': $states.input.Name, 'Namespace': $states.input.Namespace, 'Status': 'ForceSynced'} %}",
+            "End": true
+          },
+          "EsWait": {
+            "Type": "Wait",
+            "QueryLanguage": "JSONPath",
+            "SecondsPath": "$.PollIntervalSeconds",
+            "Next": "EsCheckAccessModeForPoll"
+          },
+          "EsCheckAccessModeForPoll": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Choices": [
+              {
+                "Condition": "{% $states.input.AccessMode = 'public' %}",
+                "Next": "EsPollPublic"
+              }
+            ],
+            "Default": "EsPollPrivate"
+          },
+          "EsPollPublic": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Resource": "arn:aws:states:::eks:call",
+            "Arguments": {
+              "ClusterName": "{% $states.input.EksCluster.Name %}",
+              "CertificateAuthority": "{% $states.input.EksCluster.CertificateAuthority.Data %}",
+              "Endpoint": "{% $states.input.EksCluster.Endpoint %}",
+              "Method": "GET",
+              "Path": "{% $states.input.Path %}"
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.RoleArn %}"
+            },
+            "Assign": {
+              "polls": "{% $polls + 1 %}",
+              "esStatus": "{% $exists($states.result.ResponseBody.status) ? $states.result.ResponseBody.status : null %}"
+            },
+            "Output": "{% $states.input %}",
+            "Next": "EsEvaluate",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsPollFailed"
+              }
+            ]
+          },
+          "EsPollPrivate": {
+            "Type": "Task",
+            "QueryLanguage": "JSONata",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Arguments": {
+              "FunctionName": "{% $states.input.K8sProxyLambdaArn %}",
+              "Payload": {
+                "Action": "call",
+                "ClusterName": "{% $states.input.EksClusterName %}",
+                "EksRoleArn": "{% $states.input.EksRoleArn %}",
+                "Method": "GET",
+                "Path": "{% $states.input.Path %}"
+              }
+            },
+            "Credentials": {
+              "RoleArn": "{% $states.input.RoleArn %}"
+            },
+            "Assign": {
+              "polls": "{% $polls + 1 %}",
+              "esStatus": "{% $exists($states.result.Payload.ResponseBody.status) ? $states.result.Payload.ResponseBody.status : null %}"
+            },
+            "Output": "{% $states.input %}",
+            "Next": "EsEvaluate",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Output": "{% $merge([$states.input, {'LastError': $states.errorOutput}]) %}",
+                "Next": "EsPollFailed"
+              }
+            ]
+          },
+          "EsPollFailed": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Comment": "Transient API error: count the poll and keep waiting until the timeout",
+            "Assign": {
+              "polls": "{% $polls + 1 %}",
+              "esStatus": null
+            },
+            "Next": "EsEvaluate"
+          },
+          "EsEvaluate": {
+            "Type": "Choice",
+            "QueryLanguage": "JSONata",
+            "Choices": [
+              {
+                "Condition": "{% $exists($esStatus.refreshTime) and $toMillis($esStatus.refreshTime) >= $floor($toMillis($forceSyncAt) / 1000) * 1000 and $count($esStatus.conditions[type = 'Ready' and status = 'True']) > 0 %}",
+                "Next": "EsSynced"
+              },
+              {
+                "Condition": "{% $polls >= $states.input.MaxPolls %}",
+                "Next": "EsSyncTimeout"
+              }
+            ],
+            "Default": "EsWait"
+          },
+          "EsSynced": {
+            "Type": "Pass",
+            "QueryLanguage": "JSONata",
+            "Output": "{% {'Name': $states.input.Name, 'Namespace': $states.input.Namespace, 'Status': 'Synced', 'RefreshTime': $esStatus.refreshTime} %}",
+            "End": true
+          },
+          "EsSyncTimeout": {
+            "Type": "Fail",
+            "QueryLanguage": "JSONata",
+            "Error": "ExternalSecretSyncTimeout",
+            "Cause": "{% 'ExternalSecret ' & $states.input.Namespace & '/' & $states.input.Name & ' did not sync within ' & $string($states.input.WaitTimeoutSeconds) & 's after force-sync (status.refreshTime at or after ' & $forceSyncAt & ' with Ready=True); services were not scaled up. Last status: ' & $string($esStatus) & '. Last error: ' & $string($states.input.LastError) %}"
+          },
+          "EsForceSyncFailed": {
+            "Type": "Fail",
+            "QueryLanguage": "JSONata",
+            "Error": "ExternalSecretForceSyncFailed",
+            "Cause": "{% 'Could not force-sync ExternalSecret ' & $states.input.Namespace & '/' & $states.input.Name & ' at ' & $states.input.Path & ' (check EKS.SecretRefresh.ExternalSecrets, ApiVersion and RBAC on externalsecrets.external-secrets.io); services were not scaled up. Error: ' & $string($states.input.LastError) %}"
+          }
+        }
+      },
+      "Output": "{% $merge([$states.input, {'ExternalSecretSync': $states.result}]) %}",
       "Next": "ScaleServicesMap"
     },
+
     "ScaleServicesMap": {
       "Type": "Map",
       "ItemsPath": "$.EKS.Services",
@@ -189,22 +519,23 @@
     "WaitAfterScaling": {
       "Type": "Wait",
       "Seconds": 10,
-      "Next": "ResolveSecretRefresh"
-    },
-    "ResolveSecretRefresh": {
-      "Type": "Pass",
-      "QueryLanguage": "JSONata",
-      "Comment": "Resolve secret refresh mode: 'annotate' (ESO ExternalSecret), 'delete' (Secret Provider Class), or 'none'. Falls back to CleanupSecret for backward compatibility.",
-      "Output": "{% $merge([$states.input, {'SecretRefreshResolved': {'Mode': $exists($states.input.EKS.SecretRefresh.Mode) ? $states.input.EKS.SecretRefresh.Mode : ($states.input.CleanupSecret = true and $states.input.Replicas > 0 ? 'delete' : 'none'), 'SecretName': $exists($states.input.EKS.SecretRefresh.SecretName) ? $states.input.EKS.SecretRefresh.SecretName : 'shared-data-media-sub-path'}}]) %}",
       "Next": "CheckSecretRefreshMode"
     },
     "CheckSecretRefreshMode": {
       "Type": "Choice",
-      "Comment": "Route to annotate (ESO), delete (SPC/legacy), or skip secret refresh",
+      "Comment": "Route to annotate (ESO, only when the ExternalSecrets were not already synced before scaling), delete (SPC/legacy), or skip secret refresh",
       "Choices": [
         {
-          "Variable": "$.SecretRefreshResolved.Mode",
-          "StringEquals": "annotate",
+          "And": [
+            {
+              "Variable": "$.SecretRefreshResolved.Mode",
+              "StringEquals": "annotate"
+            },
+            {
+              "Variable": "$.SecretRefreshResolved.PreScaleSync",
+              "BooleanEquals": false
+            }
+          ],
           "Next": "CheckAccessModeForAnnotate"
         },
         {
@@ -236,11 +567,11 @@
         "CertificateAuthority.$": "$.EksCluster.Cluster.CertificateAuthority.Data",
         "Endpoint.$": "$.EksCluster.Cluster.Endpoint",
         "Method": "PATCH",
-        "Path.$": "States.Format('/apis/external-secrets.io/v1beta1/namespaces/{}/externalsecrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
+        "Path.$": "States.Format('/apis/external-secrets.io/{}/namespaces/{}/externalsecrets/{}', $.SecretRefreshResolved.ApiVersion, $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
         "RequestBody": {
           "metadata": {
             "annotations": {
-              "reconcile.eso.io/force-sync.$": "$$.State.EnteredTime"
+              "force-sync.$": "$$.State.EnteredTime"
             }
           }
         }
@@ -269,11 +600,11 @@
           "ClusterName.$": "$.EKS.ClusterName",
           "EksRoleArn.$": "$.EksRoleArn",
           "Method": "PATCH",
-          "Path.$": "States.Format('/apis/external-secrets.io/v1beta1/namespaces/{}/externalsecrets/{}', $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
+          "Path.$": "States.Format('/apis/external-secrets.io/{}/namespaces/{}/externalsecrets/{}', $.SecretRefreshResolved.ApiVersion, $.EKS.Namespace, $.SecretRefreshResolved.SecretName)",
           "RequestBody": {
             "metadata": {
               "annotations": {
-                "reconcile.eso.io/force-sync.$": "$$.State.EnteredTime"
+                "force-sync.$": "$$.State.EnteredTime"
               }
             }
           }
