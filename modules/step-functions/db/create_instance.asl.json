@@ -46,13 +46,24 @@
             "Next": "WaitInstance",
             "Retry": [
               {
-                "ErrorEquals": ["States.TaskFailed"],
+                "ErrorEquals": ["Rds.DbInstanceAlreadyExistsException", "Rds.DBInstanceAlreadyExistsFault"],
+                "MaxAttempts": 0
+              },
+              {
+                "ErrorEquals": ["States.TaskFailed", "States.Timeout"],
                 "IntervalSeconds": 5,
                 "MaxAttempts": 3,
                 "BackoffRate": 2
               }
             ],
-            "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "InstanceFailed" }]
+            "Catch": [
+              {
+                "ErrorEquals": ["Rds.DbInstanceAlreadyExistsException", "Rds.DBInstanceAlreadyExistsFault"],
+                "ResultPath": "$.CreateError",
+                "Next": "WaitInstance"
+              },
+              { "ErrorEquals": ["States.ALL"], "ResultPath": "$.Error", "Next": "InstanceFailed" }
+            ]
           },
           "WaitInstance": {
             "Type": "Wait",
@@ -70,7 +81,29 @@
             },
             "ResultPath": "$.Status",
             "Next": "IsInstanceAvailable",
-            "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "WaitInstance" }]
+            "Retry": [
+              {
+                "ErrorEquals": ["Rds.SdkClientException", "Rds.ThrottlingException", "Rds.Throttling", "States.Timeout"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 5,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": [
+                  "Rds.DbInstanceNotFoundException",
+                  "Rds.DBInstanceNotFoundFault",
+                  "Rds.SdkClientException",
+                  "Rds.ThrottlingException",
+                  "Rds.Throttling",
+                  "States.Timeout"
+                ],
+                "ResultPath": "$.CheckError",
+                "Next": "WaitInstance"
+              },
+              { "ErrorEquals": ["States.ALL"], "ResultPath": "$.Error", "Next": "InstanceFailed" }
+            ]
           },
           "IsInstanceAvailable": {
             "Type": "Choice",
@@ -95,6 +128,14 @@
               "Tags": "{% $each($states.input.Tags, function($v, $k) { {'Key': $k, 'Value': $v} }) %}"
             },
             "Output": "{% $states.input %}",
+            "Retry": [
+              {
+                "ErrorEquals": ["Rds.SdkClientException", "Rds.ThrottlingException", "Rds.Throttling", "States.Timeout"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 5,
+                "BackoffRate": 2
+              }
+            ],
             "Next": "InstanceCreated"
           },
           "InstanceCreated": {
@@ -108,7 +149,7 @@
         }
       },
       "Next": "PrepareOutput",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "CreationFailed" }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.Error", "Next": "CreationFailed" }],
       "ResultPath": "$.MapResult"
     },
     "PrepareOutput": {

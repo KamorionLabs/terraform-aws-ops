@@ -41,7 +41,7 @@
         "RoleArn.$": "$.RoleArn"
       },
       "Next": "ModifyDbClusterParameterGroup",
-      "Catch": [{ "ErrorEquals": ["Rds.DBClusterRoleAlreadyExistsFault"], "Next": "ModifyDbClusterParameterGroup" }]
+      "Catch": [{ "ErrorEquals": ["Rds.DBClusterRoleAlreadyExistsFault"], "ResultPath": null, "Next": "ModifyDbClusterParameterGroup" }]
     },
     "ModifyDbClusterParameterGroup": {
       "Type": "Task",
