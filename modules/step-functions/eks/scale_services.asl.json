@@ -79,8 +79,7 @@
         "syncMode": null,
         "syncTargetSecret": null,
         "syncExpected": null,
-        "syncObserved": null,
-        "syncLastError": null
+        "syncObserved": null
       },
       "Next": "SecretSyncCheckExpectedSource"
     },
@@ -122,10 +121,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
           "Next": "SecretSyncCheckAccessMode"
         }
       ]
@@ -165,10 +161,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
           "Next": "SecretSyncForceSyncError"
         }
       ]
@@ -196,18 +189,12 @@
       "Catch": [
         {
           "ErrorEquals": ["EKS.409"],
-          "Assign": {
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
           "Next": "SecretSyncCheckForceSyncRetry"
         },
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
           "Next": "SecretSyncForceSyncError"
         }
       ]
@@ -266,10 +253,7 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
           "Next": "SecretSyncForceSyncError"
         }
       ]
@@ -309,8 +293,7 @@
     },
     "SecretSyncWait": {
       "Type": "Wait",
-      "QueryLanguage": "JSONata",
-      "Seconds": "{% $syncCfg.PollIntervalSeconds %}",
+      "SecondsPath": "$.SecretRefreshResolved.PollIntervalSeconds",
       "Next": "SecretSyncCheckAccessModeForPoll"
     },
     "SecretSyncCheckAccessModeForPoll": {
@@ -348,13 +331,8 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncPolls": "{% $syncPolls + 1 %}",
-            "syncObserved": null,
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
-          "Next": "SecretSyncEvaluate"
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
+          "Next": "SecretSyncPollFailed"
         }
       ]
     },
@@ -379,15 +357,20 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Assign": {
-            "syncPolls": "{% $syncPolls + 1 %}",
-            "syncObserved": null,
-            "syncLastError": "{% $states.errorOutput %}"
-          },
-          "Output": "{% $states.input %}",
-          "Next": "SecretSyncEvaluate"
+          "Output": "{% $merge([$states.input, {'SecretSyncLastError': $states.errorOutput}]) %}",
+          "Next": "SecretSyncPollFailed"
         }
       ]
+    },
+    "SecretSyncPollFailed": {
+      "Type": "Pass",
+      "QueryLanguage": "JSONata",
+      "Comment": "Poll failed (Secret not created yet, transient API error): count it and keep waiting until the timeout",
+      "Assign": {
+        "syncPolls": "{% $syncPolls + 1 %}",
+        "syncObserved": null
+      },
+      "Next": "SecretSyncEvaluate"
     },
     "SecretSyncEvaluate": {
       "Type": "Choice",
@@ -412,13 +395,13 @@
       "Type": "Fail",
       "QueryLanguage": "JSONata",
       "Error": "ExternalSecretSyncTimeout",
-      "Cause": "{% 'ExternalSecret ' & $syncCfg.Namespace & '/' & $syncCfg.ExternalSecretName & ' did not sync within ' & $string($syncCfg.WaitTimeoutSeconds) & 's after force-sync (wait mode ' & $syncMode & '); services were not scaled up. Last poll error: ' & $string($syncLastError) %}"
+      "Cause": "{% 'ExternalSecret ' & $syncCfg.Namespace & '/' & $syncCfg.ExternalSecretName & ' did not sync within ' & $string($syncCfg.WaitTimeoutSeconds) & 's after force-sync (wait mode ' & $syncMode & '); services were not scaled up. Last poll error: ' & $string($states.input.SecretSyncLastError) %}"
     },
     "SecretSyncForceSyncFailed": {
       "Type": "Fail",
       "QueryLanguage": "JSONata",
       "Error": "ExternalSecretForceSyncFailed",
-      "Cause": "{% 'Could not force-sync ExternalSecret ' & $syncCfg.Namespace & '/' & $syncCfg.ExternalSecretName & ' at ' & $syncEsPath & ' (check EKS.SecretRefresh ExternalSecretName, Namespace, ApiVersion and RBAC on externalsecrets.external-secrets.io); services were not scaled up. Error: ' & $string($syncLastError) %}"
+      "Cause": "{% 'Could not force-sync ExternalSecret ' & $syncCfg.Namespace & '/' & $syncCfg.ExternalSecretName & ' at ' & $syncEsPath & ' (check EKS.SecretRefresh ExternalSecretName, Namespace, ApiVersion and RBAC on externalsecrets.external-secrets.io); services were not scaled up. Error: ' & $string($states.input.SecretSyncLastError) %}"
     },
     "ScaleServicesMap": {
       "Type": "Map",
