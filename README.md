@@ -115,7 +115,7 @@ terraform-aws-ops/
 |--------------|-------------|
 | `manage_storage` | Manage EFS PV/PVC for EKS (public API) |
 | `manage_storage_private` | Same via Lambda proxy (private endpoint) |
-| `scale_services` | Scale deployments/statefulsets (public API) |
+| `scale_services` | Scale deployments/statefulsets (public API); with `EKS.SecretRefresh.Mode = annotate`, force-syncs the ExternalSecret and waits for it before scaling up |
 | `scale_services_private` | Same via Lambda proxy |
 | `scale_nodegroup_asg` | Scale EKS nodegroup ASG min/max/desired |
 | `verify_and_restart_services` | Verify pod health and restart if needed (public) |

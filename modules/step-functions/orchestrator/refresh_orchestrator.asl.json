@@ -1946,27 +1946,22 @@
     },
     "ScaleUpServices": {
       "Type": "Task",
-      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup",
+      "QueryLanguage": "JSONata",
+      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup. With EKS.SecretRefresh.Mode=annotate, ScaleServices force-syncs the ExternalSecret and waits for it (compared with the EFS sub-path SSM parameter when EKS.SecretRefresh.SecretKey is set) before starting pods.",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
-      "Parameters": {
-        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
-        "Input": {
-          "EKS.$": "$.EKS",
-          "Replicas": 1,
-          "CleanupSecret": true,
-          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
-          "DestinationAccount.$": "$.DestinationAccount"
-        },
-        "Name.$": "States.Format('{}-ScaleUpServices', $$.Execution.Name)"
+      "Arguments": {
+        "StateMachineArn": "{% $states.input.StepFunctions.EKS.ScaleServices %}",
+        "Input": "{% $merge([{'EKS': $states.input.EKS, 'Replicas': 1, 'CleanupSecret': true, 'K8sProxyLambdaArn': $states.input.K8sProxyLambdaArn, 'DestinationAccount': $states.input.DestinationAccount}, ($exists($states.input.EFS.SSMParameters.EfsSubPath) and $states.input.EFS.SSMParameters.EfsSubPath != '') ? {'ExpectedSecretValueSSMParameter': $states.input.EFS.SSMParameters.EfsSubPath} : {}]) %}",
+        "Name": "{% $states.context.Execution.Name & '-ScaleUpServices' %}"
       },
-      "ResultPath": "$.ScaleUpResult",
+      "Output": "{% $merge([$states.input, {'ScaleUpResult': $states.result}]) %}",
       "Next": "VerifyAndRestartServices",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "ResultPath": "$.ScaleUpError",
+          "Output": "{% $merge([$states.input, {'ScaleUpError': $states.errorOutput}]) %}",
           "Next": "Phase5Cleanup"
         }
       ]
@@ -2344,7 +2339,7 @@
       "Type": "Pass",
       "QueryLanguage": "JSONata",
       "Comment": "Collapse the accumulated orchestration state into a compact execution output: resource names/ids + per-step success flags. Detailed per-step timings come from the execution history (see scripts/refresh_report.py), not from this state.",
-      "Output": "{% ( $aj := $states.input.EKS.ArchiveJob; { 'Instance': ($exists($aj.Oci.ImageTag) ? $aj.Oci.ImageTag : null), 'Resources': { 'SourceCluster': $states.input.Database.Source.ClusterIdentifier, 'TargetCluster': $states.input.Database.Target.ClusterIdentifier, 'SourceEFS': ($exists($states.input.EFS.Source.FileSystemId) ? $states.input.EFS.Source.FileSystemId : null), 'Namespace': $states.input.EKS.Namespace, 'OciImage': ($exists($aj.Oci) ? $aj.Oci.EcrRepo & ':' & $aj.Oci.ImageTag : null), 'OciMediaImage': ($exists($aj.Oci.MediaRepo) ? $aj.Oci.MediaRepo & ':' & $aj.Oci.ImageTag : null) }, 'Steps': { 'Restore': $exists($states.input.RestoreResult), 'ClusterSwitch': $not($exists($states.input.ClusterSwitchError)), 'Minify': $exists($states.input.MysqlImportResult), 'CreateStorage': $not($exists($states.input.CreateStorageError)), 'Archive': $not($exists($states.input.ArchiveError)), 'DeleteTarget': ($exists($states.input.DeleteTargetResult) ? $states.input.DeleteTargetResult : $not($exists($states.input.DeleteTargetError))) } } ) %}",
+      "Output": "{% ( $aj := $states.input.EKS.ArchiveJob; { 'Instance': ($exists($aj.Oci.ImageTag) ? $aj.Oci.ImageTag : null), 'Resources': { 'SourceCluster': $states.input.Database.Source.ClusterIdentifier, 'TargetCluster': $states.input.Database.Target.ClusterIdentifier, 'SourceEFS': ($exists($states.input.EFS.Source.FileSystemId) ? $states.input.EFS.Source.FileSystemId : null), 'Namespace': $states.input.EKS.Namespace, 'OciImage': ($exists($aj.Oci) ? $aj.Oci.EcrRepo & ':' & $aj.Oci.ImageTag : null), 'OciMediaImage': ($exists($aj.Oci.MediaRepo) ? $aj.Oci.MediaRepo & ':' & $aj.Oci.ImageTag : null) }, 'Steps': { 'Restore': $exists($states.input.RestoreResult), 'ClusterSwitch': $not($exists($states.input.ClusterSwitchError)), 'Minify': $exists($states.input.MysqlImportResult), 'CreateStorage': $not($exists($states.input.CreateStorageError)), 'ScaleUp': $not($exists($states.input.ScaleUpError)), 'Archive': $not($exists($states.input.ArchiveError)), 'DeleteTarget': ($exists($states.input.DeleteTargetResult) ? $states.input.DeleteTargetResult : $not($exists($states.input.DeleteTargetError))) } } ) %}",
       "Next": "RefreshComplete"
     },
     "RefreshComplete": {
