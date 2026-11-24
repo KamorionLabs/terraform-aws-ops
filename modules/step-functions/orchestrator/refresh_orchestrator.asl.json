@@ -1946,22 +1946,27 @@
     },
     "ScaleUpServices": {
       "Type": "Task",
-      "QueryLanguage": "JSONata",
-      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup. With EKS.SecretRefresh.Mode=annotate, ScaleServices force-syncs the ExternalSecret and waits for it (compared with the EFS sub-path SSM parameter when EKS.SecretRefresh.SecretKey is set) before starting pods.",
+      "Comment": "Scale up EKS services to 1 replica with optional secret cleanup. ScaleServices first force-syncs the ExternalSecrets listed in EKS.SecretRefresh (EFS sub-path from SSM, database credentials from Secrets Manager, both updated earlier in this run) and waits for ESO before starting pods.",
       "Resource": "arn:aws:states:::states:startExecution.sync:2",
-      "Arguments": {
-        "StateMachineArn": "{% $states.input.StepFunctions.EKS.ScaleServices %}",
-        "Input": "{% $merge([{'EKS': $states.input.EKS, 'Replicas': 1, 'CleanupSecret': true, 'K8sProxyLambdaArn': $states.input.K8sProxyLambdaArn, 'DestinationAccount': $states.input.DestinationAccount}, ($exists($states.input.EFS.SSMParameters.EfsSubPath) and $states.input.EFS.SSMParameters.EfsSubPath != '') ? {'ExpectedSecretValueSSMParameter': $states.input.EFS.SSMParameters.EfsSubPath} : {}]) %}",
-        "Name": "{% $states.context.Execution.Name & '-ScaleUpServices' %}"
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.EKS.ScaleServices",
+        "Input": {
+          "EKS.$": "$.EKS",
+          "Replicas": 1,
+          "CleanupSecret": true,
+          "K8sProxyLambdaArn.$": "$.K8sProxyLambdaArn",
+          "DestinationAccount.$": "$.DestinationAccount"
+        },
+        "Name.$": "States.Format('{}-ScaleUpServices', $$.Execution.Name)"
       },
-      "Output": "{% $merge([$states.input, {'ScaleUpResult': $states.result}]) %}",
+      "ResultPath": "$.ScaleUpResult",
       "Next": "VerifyAndRestartServices",
       "Catch": [
         {
           "ErrorEquals": [
             "States.ALL"
           ],
-          "Output": "{% $merge([$states.input, {'ScaleUpError': $states.errorOutput}]) %}",
+          "ResultPath": "$.ScaleUpError",
           "Next": "Phase5Cleanup"
         }
       ]

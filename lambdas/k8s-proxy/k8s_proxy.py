@@ -10,8 +10,6 @@ Supported actions:
   - createJob:    Create a K8s Job (first part of eks:runJob.sync)
   - getJobStatus: Poll Job completion status
   - deleteJob:    Delete a K8s Job (cleanup)
-  - getSecretValue: Read and decode a single key of a Secret (the rest of the
-                    Secret is never returned, so it stays out of execution history)
 
 Used by Step Functions: ManageStorage, ScaleServices, RunMysqldumpOnEks, RunMysqlimportOnEks
 """
@@ -400,54 +398,6 @@ def handle_delete_job(event: dict, region: str) -> dict:
     }
 
 
-def handle_get_secret_value(event: dict, region: str) -> dict:
-    """
-    Handle the 'getSecretValue' action - read one key of a Secret.
-
-    Only the requested key is decoded and returned; other keys and metadata
-    are dropped so they never reach the Step Functions execution history.
-    A missing Secret or key is not an error: callers poll until it appears.
-
-    Args:
-        event: Lambda event with ClusterName, Namespace, SecretName, Key
-        region: AWS region
-
-    Returns:
-        Dict with SecretName, Namespace, Found, HasKey, Value (decoded or None)
-    """
-    cluster_name = event["ClusterName"]
-    namespace = event["Namespace"]
-    secret_name = event["SecretName"]
-    key = event["Key"]
-    eks_role_arn = event.get("EksRoleArn")
-
-    path = f"/api/v1/namespaces/{namespace}/secrets/{secret_name}"
-    result = {
-        "SecretName": secret_name,
-        "Namespace": namespace,
-        "Found": False,
-        "HasKey": False,
-        "Value": None,
-    }
-
-    try:
-        response = k8s_api_call(cluster_name, region, "GET", path, eks_role_arn=eks_role_arn)
-    except K8sApiError as e:
-        if e.status_code == 404:
-            logger.info(f"Secret {namespace}/{secret_name} not found yet")
-            return result
-        raise
-
-    result["Found"] = True
-    data = response["ResponseBody"].get("data") or {}
-    if key in data:
-        result["HasKey"] = True
-        result["Value"] = base64.b64decode(data[key]).decode("utf-8", errors="replace")
-
-    logger.info(f"Secret {namespace}/{secret_name} key {key} present: {result['HasKey']}")
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Lambda handler
 # ---------------------------------------------------------------------------
@@ -458,7 +408,6 @@ _ACTION_HANDLERS = {
     "createJob": handle_create_job,
     "getJobStatus": handle_get_job_status,
     "deleteJob": handle_delete_job,
-    "getSecretValue": handle_get_secret_value,
 }
 
 
@@ -468,7 +417,7 @@ def lambda_handler(event, context):
 
     Expected event structure:
     {
-        "Action": "call|createJob|getJobStatus|deleteJob|getSecretValue",
+        "Action": "call|createJob|getJobStatus|deleteJob",
         "ClusterName": "k8s-dig-stg-webshop",
         ...action-specific fields...
     }
