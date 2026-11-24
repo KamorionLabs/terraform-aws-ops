@@ -49,7 +49,7 @@
       },
       "ResultPath": "$.AccessPoints",
       "Next": "CheckIfAccessPointsExist",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DescribeMountTargets" }]
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.AccessPointsError", "Next": "DescribeMountTargets" }]
     },
     "CheckIfAccessPointsExist": {
       "Type": "Choice",
@@ -93,7 +93,7 @@
       },
       "ResultPath": null,
       "Next": "WaitAccessPointsDeleted",
-      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DescribeMountTargets" }]
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.AccessPointsError", "Next": "DescribeMountTargets" }]
     },
     "WaitAccessPointsDeleted": {
       "Type": "Wait",
